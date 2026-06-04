@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+"""
+@file   arm_slider_controller.py
+@brief  eMeetArm_models 6轴机械臂关节滑块控制 GUI
+@version 1.0
+@date   2026-06-04
+
+基于 PyQt5 + ROS2 实现以下功能：
+         - 6个关节独立滑块控制，滑块与数值框双向同步
+         - 实时发布轨迹指令至 /arm_controller/joint_trajectory
+         - 订阅 /joint_states 实时显示各关节位置与速度
+         - 通过 TF2 查询并显示末端 tool0 在 base_link 下的坐标
+         - 支持可调运动时间与一键回零位功能
+
+用法：
+  ros2 run robot_arm_node arm_slider_controller
+  ros2 launch robot_arm_bringup gazebo.launch.py controller:=slider
+  ros2 launch robot_arm_bringup mujoco.launch.py controller:=slider
+  ros2 launch robot_arm_bringup real.launch.py   controller:=slider
+
+@copyright Copyright (c) 2026 eMeet
+"""
+
+import math
+import sys
+import threading
+import rclpy
+from rclpy.node import Node
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from sensor_msgs.msg import JointState
+from builtin_interfaces.msg import Duration
+from tf2_ros import TransformListener, Buffer
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QGridLayout, QLabel, QSlider, QDoubleSpinBox, QPushButton,
+    QGroupBox, QStatusBar,
+)
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer
+from PyQt5.QtGui import QFont
+
+JOINT_NAMES = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
+JOINT_LIMITS = [
+    (-3.1,    3.1),
+    (-0.8,    3.14),
+    (-3.14,   0.0),
+    (-3.1,    3.1),
+    (-0.7854, 0.7854),
+    (-1.5,    0.5),
+]
+SLIDER_SCALE = 1000
+
+
+class RosSignals(QObject):
+    joint_state_received = pyqtSignal(list, list)
+    end_effector_received = pyqtSignal(float, float, float, float, float, float)
+
+
+class ArmSliderNode(Node):
+    def __init__(self, signals: RosSignals):
+        super().__init__('arm_slider_controller')
+        self.signals = signals
+        self.publisher = self.create_publisher(
+            JointTrajectory, '/arm_controller/joint_trajectory', 10)
+        self.create_subscription(JointState, '/joint_states', self._on_joint_state, 10)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.create_timer(0.1, self._publish_end_effector)
+
+    def _on_joint_state(self, msg: JointState):
+        name_to_idx = {n: i for i, n in enumerate(msg.name)}
+        positions, velocities = [], []
+        for name in JOINT_NAMES:
+            idx = name_to_idx.get(name)
+            positions.append(msg.position[idx] if idx is not None and idx < len(msg.position) else 0.0)
+            velocities.append(msg.velocity[idx] if idx is not None and idx < len(msg.velocity) else 0.0)
+        self.signals.joint_state_received.emit(positions, velocities)
+
+    def _publish_end_effector(self):
+        try:
+            t = self.tf_buffer.lookup_transform('base_link', 'tool0', rclpy.time.Time())
+            tr = t.transform.translation
+            q = t.transform.rotation
+            # quaternion → RPY (rad)
+            sinr = 2.0 * (q.w * q.x + q.y * q.z)
+            cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+            roll = math.atan2(sinr, cosr)
+            sinp = 2.0 * (q.w * q.y - q.z * q.x)
+            pitch = math.asin(max(-1.0, min(1.0, sinp)))
+            siny = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            yaw = math.atan2(siny, cosy)
+            self.signals.end_effector_received.emit(
+                tr.x, tr.y, tr.z,
+                math.degrees(roll), math.degrees(pitch), math.degrees(yaw),
+            )
+        except Exception:
+            pass
+
+    def publish_trajectory(self, positions: list[float], duration_sec: float):
+        msg = JointTrajectory()
+        msg.joint_names = JOINT_NAMES
+        pt = JointTrajectoryPoint()
+        pt.positions = positions
+        secs = int(duration_sec)
+        pt.time_from_start = Duration(sec=secs, nanosec=int((duration_sec - secs) * 1e9))
+        msg.points = [pt]
+        self.publisher.publish(msg)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, node: ArmSliderNode):
+        super().__init__()
+        self.node = node
+        self.setWindowTitle('eMeet 6轴机械臂关节控制器')
+        self.setMinimumWidth(720)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        root_layout = QVBoxLayout(central)
+        root_layout.setSpacing(8)
+        root_layout.setContentsMargins(12, 12, 12, 8)
+
+        root_layout.addWidget(self._build_joint_group())
+        root_layout.addWidget(self._build_end_effector_group())
+        root_layout.addWidget(self._build_duration_group())
+        root_layout.addWidget(self._build_button_row())
+
+        self._send_timer = QTimer(self)
+        self._send_timer.setInterval(200)
+        self._send_timer.timeout.connect(self._send)
+
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage(
+            '发布: /arm_controller/joint_trajectory  |  订阅: /joint_states')
+
+        node.signals.joint_state_received.connect(self._on_joint_state)
+        node.signals.end_effector_received.connect(self._on_end_effector)
+
+    def _build_joint_group(self) -> QGroupBox:
+        box = QGroupBox('关节控制')
+        grid = QGridLayout(box)
+        grid.setSpacing(6)
+
+        bold = QFont()
+        bold.setBold(True)
+        for col, text in enumerate(['关节', '滑块', '目标位置 (rad)', '当前位置 (rad)', '当前速度 (rad/s)']):
+            lbl = QLabel(text)
+            lbl.setFont(bold)
+            lbl.setAlignment(Qt.AlignCenter)
+            grid.addWidget(lbl, 0, col)
+
+        self.sliders: list[QSlider] = []
+        self.spinboxes: list[QDoubleSpinBox] = []
+        self.cur_pos_labels: list[QLabel] = []
+        self.cur_vel_labels: list[QLabel] = []
+
+        for i, (name, (lo, hi)) in enumerate(zip(JOINT_NAMES, JOINT_LIMITS)):
+            row = i + 1
+
+            grid.addWidget(QLabel(name, alignment=Qt.AlignCenter), row, 0)
+
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, SLIDER_SCALE)
+            slider.setValue(self._rad_to_tick(0.0, lo, hi))
+            slider.setTickInterval(SLIDER_SCALE // 10)
+            slider.setTickPosition(QSlider.TicksBelow)
+            self.sliders.append(slider)
+            grid.addWidget(slider, row, 1)
+
+            spin = QDoubleSpinBox()
+            spin.setRange(lo, hi)
+            spin.setDecimals(3)
+            spin.setSingleStep(0.01)
+            spin.setValue(0.0)
+            spin.setFixedWidth(90)
+            self.spinboxes.append(spin)
+            grid.addWidget(spin, row, 2)
+
+            cur_pos = QLabel('--', alignment=Qt.AlignCenter)
+            cur_vel = QLabel('--', alignment=Qt.AlignCenter)
+            cur_pos.setStyleSheet('background:#f0f0f0; border:1px solid #ccc; padding:2px;')
+            cur_vel.setStyleSheet('background:#f0f0f0; border:1px solid #ccc; padding:2px;')
+            self.cur_pos_labels.append(cur_pos)
+            self.cur_vel_labels.append(cur_vel)
+            grid.addWidget(cur_pos, row, 3)
+            grid.addWidget(cur_vel, row, 4)
+
+            lo_, hi_ = lo, hi
+            slider.valueChanged.connect(
+                lambda val, s=spin, l=lo_, h=hi_: (
+                    s.blockSignals(True),
+                    s.setValue(self._tick_to_rad(val, l, h)),
+                    s.blockSignals(False),
+                    self._send_realtime(),
+                )
+            )
+            spin.valueChanged.connect(
+                lambda val, sl=slider, l=lo_, h=hi_: (
+                    sl.blockSignals(True),
+                    sl.setValue(self._rad_to_tick(val, l, h)),
+                    sl.blockSignals(False),
+                    self._send_realtime(),
+                )
+            )
+
+        grid.setColumnStretch(1, 1)
+        return box
+
+    def _build_end_effector_group(self) -> QGroupBox:
+        box = QGroupBox('末端位姿 (base_link → tool0)')
+        grid = QGridLayout(box)
+        grid.setSpacing(6)
+        style = 'background:#f0f0f0; border:1px solid #ccc; padding:2px;'
+        self.ee_labels: dict[str, QLabel] = {}
+        for col, (key, unit) in enumerate([('X', 'm'), ('Y', 'm'), ('Z', 'm')]):
+            grid.addWidget(QLabel(f'{key} ({unit}):'), 0, col * 2, Qt.AlignRight)
+            lbl = QLabel('--')
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setFixedWidth(90)
+            lbl.setStyleSheet(style)
+            self.ee_labels[key] = lbl
+            grid.addWidget(lbl, 0, col * 2 + 1)
+        for col, (key, label, unit) in enumerate([('Roll', 'R', '°'), ('Pitch', 'P', '°'), ('Yaw', 'Y', '°')]):
+            grid.addWidget(QLabel(f'{label} ({unit}):'), 1, col * 2, Qt.AlignRight)
+            lbl = QLabel('--')
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setFixedWidth(90)
+            lbl.setStyleSheet(style)
+            self.ee_labels[key] = lbl
+            grid.addWidget(lbl, 1, col * 2 + 1)
+        return box
+
+    def _build_duration_group(self) -> QGroupBox:
+        box = QGroupBox('运动时间（启动发送时每条指令的运动时长，拖动滑块固定 0.05 s）')
+        layout = QHBoxLayout(box)
+        layout.addWidget(QLabel('运动时间 (s):'))
+
+        self.dur_slider = QSlider(Qt.Horizontal)
+        self.dur_slider.setRange(1, 50)
+        self.dur_slider.setValue(10)
+        layout.addWidget(self.dur_slider, 1)
+
+        self.dur_spin = QDoubleSpinBox()
+        self.dur_spin.setRange(0.1, 5.0)
+        self.dur_spin.setDecimals(1)
+        self.dur_spin.setSingleStep(0.1)
+        self.dur_spin.setValue(1.0)
+        self.dur_spin.setFixedWidth(72)
+        layout.addWidget(self.dur_spin)
+
+        layout.addWidget(QLabel('← 快    慢 →'))
+
+        self.dur_slider.valueChanged.connect(
+            lambda v: (self.dur_spin.blockSignals(True),
+                       self.dur_spin.setValue(v * 0.1),
+                       self.dur_spin.blockSignals(False))
+        )
+        self.dur_spin.valueChanged.connect(
+            lambda v: (self.dur_slider.blockSignals(True),
+                       self.dur_slider.setValue(round(v / 0.1)),
+                       self.dur_slider.blockSignals(False))
+        )
+        return box
+
+    def _build_button_row(self) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.send_btn = QPushButton('启 动 发 送')
+        self.send_btn.setCheckable(True)
+        self.send_btn.setFixedHeight(40)
+        self.send_btn.setStyleSheet('background:#27AE60; color:white; font-size:13px; font-weight:bold;')
+        self.send_btn.clicked.connect(self._toggle_send)
+        layout.addWidget(self.send_btn)
+
+        reset_btn = QPushButton('回 零 位')
+        reset_btn.setFixedHeight(40)
+        reset_btn.setStyleSheet('background:#E74C3C; color:white; font-size:13px; font-weight:bold;')
+        reset_btn.clicked.connect(self._reset)
+        layout.addWidget(reset_btn)
+
+        return row
+
+    def _rad_to_tick(self, rad: float, lo: float, hi: float) -> int:
+        return round((rad - lo) / (hi - lo) * SLIDER_SCALE)
+
+    def _tick_to_rad(self, tick: int, lo: float, hi: float) -> float:
+        return lo + tick / SLIDER_SCALE * (hi - lo)
+
+    def _toggle_send(self, checked: bool):
+        if checked:
+            self._send_timer.start()
+            self.send_btn.setText('关 闭 发 送')
+            self.send_btn.setStyleSheet(
+                'background:#E67E22; color:white; font-size:13px; font-weight:bold;')
+            self.status_bar.showMessage('● 持续发送中  |  /arm_controller/joint_trajectory')
+        else:
+            self._send_timer.stop()
+            self.send_btn.setText('启 动 发 送')
+            self.send_btn.setStyleSheet(
+                'background:#27AE60; color:white; font-size:13px; font-weight:bold;')
+            self.status_bar.showMessage(
+                '发布: /arm_controller/joint_trajectory  |  订阅: /joint_states')
+
+    def _send(self, duration: float | None = None):
+        positions = [spin.value() for spin in self.spinboxes]
+        self.node.publish_trajectory(
+            positions,
+            duration if duration is not None else self.dur_spin.value(),
+        )
+
+    def _send_realtime(self):
+        if not self._send_timer.isActive():
+            return
+        self._send(duration=0.05)
+
+    def _reset(self):
+        for spin in self.spinboxes:
+            spin.blockSignals(True)
+            spin.setValue(0.0)
+            spin.blockSignals(False)
+        for i, (lo, hi) in enumerate(JOINT_LIMITS):
+            self.sliders[i].blockSignals(True)
+            self.sliders[i].setValue(self._rad_to_tick(0.0, lo, hi))
+            self.sliders[i].blockSignals(False)
+        self._send()
+        if self._send_timer.isActive():
+            self._send_timer.stop()
+            self.send_btn.setChecked(False)
+            self.send_btn.setText('启 动 发 送')
+            self.send_btn.setStyleSheet(
+                'background:#27AE60; color:white; font-size:13px; font-weight:bold;')
+
+    def _on_joint_state(self, positions: list, velocities: list):
+        for i in range(len(JOINT_NAMES)):
+            self.cur_pos_labels[i].setText(f'{positions[i]:.4f}')
+            self.cur_vel_labels[i].setText(f'{velocities[i]:.4f}')
+
+    def _on_end_effector(self, x: float, y: float, z: float, roll: float, pitch: float, yaw: float):
+        self.ee_labels['X'].setText(f'{x:.4f}')
+        self.ee_labels['Y'].setText(f'{y:.4f}')
+        self.ee_labels['Z'].setText(f'{z:.4f}')
+        self.ee_labels['Roll'].setText(f'{roll:.2f}')
+        self.ee_labels['Pitch'].setText(f'{pitch:.2f}')
+        self.ee_labels['Yaw'].setText(f'{yaw:.2f}')
+
+
+def main():
+    rclpy.init()
+    signals = RosSignals()
+    node = ArmSliderNode(signals)
+
+    threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
+
+    app = QApplication(sys.argv)
+    win = MainWindow(node)
+    win.show()
+    app.exec_()
+
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

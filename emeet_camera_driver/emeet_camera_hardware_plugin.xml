@@ -1,0 +1,14 @@
+<library path="emeet_camera_hardware_interface">
+  <class
+    name="emeet_camera_driver/CameraHardwareInterface"
+    type="emeet_camera::CameraHardwareInterface"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>
+      EMEET PTZ camera ros2_control hardware interface (USB HID protocol).
+      Manages Joint4 (pan/yaw) and Joint6 (tilt/pitch) as position-controlled
+      joints. Joint5 is treated as passive (state = 0, commands ignored).
+      Set sim_mode=true in the URDF hardware parameters to run without
+      physical hardware (e.g. in Gazebo).
+    </description>
+  </class>
+</library>

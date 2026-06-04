@@ -6,6 +6,9 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ArmCommand.msg"
+  "msg/ArmFollowCommand.msg"
+  "msg/ArmMotionCommand.msg"
+  "msg/ArmPoseCommand.msg"
   "msg/ArmStatus.msg"
 )
 

@@ -1,0 +1,33 @@
+# MoveIt 控制器配置 —— 实物模式
+# Joint1-3 → arm_node 的 /arm_controller/follow_joint_trajectory action
+# Joint4-6 → ros2_control 的 /camera_controller/follow_joint_trajectory action
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+
+trajectory_execution:
+  allowed_execution_duration_scaling: 3.0
+  allowed_goal_duration_margin: 10.0
+  allowed_start_tolerance: 0.1
+  moveit_manage_controllers: false
+
+moveit_simple_controller_manager:
+  controller_names:
+    - arm_controller
+    - camera_controller
+
+arm_controller:
+  type: FollowJointTrajectory
+  action_ns: follow_joint_trajectory
+  default: true
+  joints:
+    - Joint1
+    - Joint2
+    - Joint3
+
+camera_controller:
+  type: FollowJointTrajectory
+  action_ns: follow_joint_trajectory
+  default: false
+  joints:
+    - Joint4
+    - Joint5
+    - Joint6

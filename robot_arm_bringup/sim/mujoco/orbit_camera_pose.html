@@ -1,0 +1,280 @@
+
+<style>
+  body { margin: 0; }
+  canvas { display: block; margin: 0 auto; }
+  .ctrl { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-size: 13px; color: var(--color-text-secondary); }
+  .ctrl label { min-width: 64px; }
+  .ctrl input[type=range] { flex: 1; }
+  .ctrl span { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
+  .matrix-box { font-family: var(--font-mono); font-size: 12px; background: var(--color-background-secondary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 10px 14px; line-height: 1.7; white-space: pre; overflow-x: auto; }
+  .section-label { font-size: 13px; font-weight: 500; color: var(--color-text-secondary); margin: 14px 0 6px; }
+  .tab-bar { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tab-btn { font-size: 12px; padding: 4px 12px; border-radius: var(--border-radius-md); border: 0.5px solid var(--color-border-secondary); background: transparent; cursor: pointer; color: var(--color-text-secondary); }
+  .tab-btn.active { background: var(--color-background-info); color: var(--color-text-info); border-color: transparent; }
+  .info-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
+  .info-card { flex: 1; min-width: 120px; background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 8px 12px; }
+  .info-card .lbl { font-size: 11px; color: var(--color-text-tertiary); margin-bottom: 2px; }
+  .info-card .val { font-size: 13px; font-weight: 500; font-family: var(--font-mono); color: var(--color-text-primary); }
+</style>
+
+<canvas id="c" width="680" height="320"></canvas>
+
+<div style="padding: 0 4px 16px;">
+  <div class="ctrl"><label>方位角 θ</label><input type="range" id="theta" min="0" max="360" value="45"><span id="t-val">45°</span></div>
+  <div class="ctrl"><label>仰角 φ</label><input type="range" id="phi" min="-80" max="80" value="30"><span id="p-val">30°</span></div>
+  <div class="ctrl"><label>半径 r</label><input type="range" id="radius" min="1" max="6" step="0.1" value="3"><span id="r-val">3.0</span></div>
+
+  <div class="info-row" id="pos-cards"></div>
+
+  <div class="section-label">相机位姿表示</div>
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="setTab('extrinsic')">外参矩阵 [R|t]</button>
+    <button class="tab-btn" onclick="setTab('pose')">位姿矩阵 T (4×4)</button>
+    <button class="tab-btn" onclick="setTab('lookat')">LookAt 参数</button>
+  </div>
+  <div class="matrix-box" id="matrix-out"></div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 680, H = 320;
+let theta = 45, phi = 30, radius = 3;
+let activeTab = 'extrinsic';
+
+// 3D -> 2D projection (isometric-ish perspective)
+function project(x, y, z) {
+  const scale = 60;
+  const ox = W / 2, oy = H / 2;
+  // simple perspective
+  const fov = 400;
+  const zz = z + 6;
+  return [ox + (x * fov / zz) * scale / 60, oy - (y * fov / zz) * scale / 60];
+}
+
+function drawScene() {
+  ctx.clearRect(0, 0, W, H);
+
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const gridColor = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)';
+  const axisColor = isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.2)';
+  const textColor = isDark ? '#9c9a92' : '#73726c';
+  const orbitColor = isDark ? 'rgba(99,120,220,0.35)' : 'rgba(99,120,220,0.25)';
+  const camColor = isDark ? '#6480e0' : '#4060c8';
+  const objColor = isDark ? '#E8593C' : '#C04828';
+
+  const tr = theta * Math.PI / 180;
+  const pr = phi * Math.PI / 180;
+
+  // camera position in world
+  const cx = radius * Math.cos(pr) * Math.sin(tr);
+  const cy = radius * Math.sin(pr);
+  const cz = radius * Math.cos(pr) * Math.cos(tr);
+
+  // Draw ground grid
+  for (let i = -3; i <= 3; i++) {
+    const a = project(i, -1.5, -3), b = project(i, -1.5, 3);
+    const c = project(-3, -1.5, i), d = project(3, -1.5, i);
+    ctx.strokeStyle = gridColor; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(c[0],c[1]); ctx.lineTo(d[0],d[1]); ctx.stroke();
+  }
+
+  // Draw world axes
+  const axes = [[2,0,0,'X','#e04040'],[0,2,0,'Y','#40a040'],[0,0,2,'Z','#4070e0']];
+  const orig = project(0,0,0);
+  axes.forEach(([x,y,z,lbl,col]) => {
+    const p = project(x,y,z);
+    ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(orig[0],orig[1]); ctx.lineTo(p[0],p[1]); ctx.stroke();
+    ctx.fillStyle = col; ctx.font = '11px var(--font-sans, sans-serif)';
+    ctx.fillText(lbl, p[0]+4, p[1]-2);
+  });
+
+  // Draw orbit circle (horizontal)
+  const r_xz = radius * Math.cos(pr);
+  const pts = [];
+  for (let a = 0; a <= 360; a += 5) {
+    const ar = a * Math.PI / 180;
+    pts.push(project(r_xz*Math.sin(ar), cy, r_xz*Math.cos(ar)));
+  }
+  ctx.strokeStyle = orbitColor; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+  ctx.beginPath();
+  pts.forEach((p,i) => i===0 ? ctx.moveTo(p[0],p[1]) : ctx.lineTo(p[0],p[1]));
+  ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+
+  // Draw vertical arc for phi
+  const pts2 = [];
+  for (let a = -80; a <= 80; a += 5) {
+    const ar = a * Math.PI / 180;
+    pts2.push(project(radius*Math.cos(ar)*Math.sin(tr), radius*Math.sin(ar), radius*Math.cos(ar)*Math.cos(tr)));
+  }
+  ctx.strokeStyle = isDark ? 'rgba(220,160,60,0.25)' : 'rgba(180,120,20,0.2)';
+  ctx.lineWidth = 1; ctx.setLineDash([3,3]);
+  ctx.beginPath();
+  pts2.forEach((p,i) => i===0 ? ctx.moveTo(p[0],p[1]) : ctx.lineTo(p[0],p[1]));
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // Line from object to camera (radius line)
+  const cp = project(cx, cy, cz);
+  ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)';
+  ctx.lineWidth = 1; ctx.setLineDash([2,4]);
+  ctx.beginPath(); ctx.moveTo(orig[0],orig[1]); ctx.lineTo(cp[0],cp[1]); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Draw camera frustum (pointing at origin)
+  // Forward vector: -normalize(camera pos)
+  const len = Math.sqrt(cx*cx+cy*cy+cz*cz);
+  const fwd = [-cx/len, -cy/len, -cz/len];
+  // up: approximate world up projected
+  let up = [0,1,0];
+  const right = [
+    fwd[1]*up[2]-fwd[2]*up[1],
+    fwd[2]*up[0]-fwd[0]*up[2],
+    fwd[0]*up[1]-fwd[1]*up[0]
+  ];
+  const rlen = Math.sqrt(right.reduce((s,v)=>s+v*v,0));
+  const rv = right.map(v=>v/rlen);
+  up = [fwd[1]*rv[2]-fwd[2]*rv[1], fwd[2]*rv[0]-fwd[0]*rv[2], fwd[0]*rv[1]-fwd[1]*rv[0]];
+
+  const frustumSize = 0.35;
+  const frustumDist = 0.6;
+  const corners = [[-1,-1],[1,-1],[1,1],[-1,1]].map(([u,v]) => {
+    return project(
+      cx + fwd[0]*frustumDist + rv[0]*u*frustumSize + up[0]*v*frustumSize,
+      cy + fwd[1]*frustumDist + rv[1]*u*frustumSize + up[1]*v*frustumSize,
+      cz + fwd[2]*frustumDist + rv[2]*u*frustumSize + up[2]*v*frustumSize
+    );
+  });
+
+  // frustum lines from camera to corners
+  ctx.strokeStyle = camColor; ctx.lineWidth = 1;
+  corners.forEach(corner => {
+    ctx.beginPath(); ctx.moveTo(cp[0],cp[1]); ctx.lineTo(corner[0],corner[1]); ctx.stroke();
+  });
+  // frustum rectangle
+  ctx.beginPath();
+  corners.forEach((p,i) => i===0 ? ctx.moveTo(p[0],p[1]) : ctx.lineTo(p[0],p[1]));
+  ctx.closePath();
+  ctx.strokeStyle = camColor; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = isDark ? 'rgba(99,128,220,0.08)' : 'rgba(64,96,200,0.07)';
+  ctx.fill();
+
+  // Camera body
+  ctx.beginPath(); ctx.arc(cp[0],cp[1],7,0,Math.PI*2);
+  ctx.fillStyle = camColor; ctx.fill();
+
+  // Object (sphere-ish)
+  ctx.beginPath(); ctx.arc(orig[0],orig[1],10,0,Math.PI*2);
+  ctx.fillStyle = objColor; ctx.fill();
+  ctx.strokeStyle = isDark ? '#ff8060' : '#901808'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = textColor; ctx.font = '12px var(--font-sans, sans-serif)';
+  ctx.fillText('物体 (0,0,0)', orig[0]+14, orig[1]+4);
+  ctx.fillStyle = camColor;
+  ctx.fillText('相机', cp[0]+10, cp[1]-6);
+
+  // Camera axes at camera position
+  const axLen = 0.45;
+  [
+    [rv[0],rv[1],rv[2],'Xc','#ff6060'],
+    [up[0],up[1],up[2],'Yc','#60c060'],
+    [-fwd[0],-fwd[1],-fwd[2],'Zc','#6090ff'],
+  ].forEach(([ax,ay,az,lbl,col]) => {
+    const ep = project(cx+ax*axLen, cy+ay*axLen, cz+az*axLen);
+    ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(cp[0],cp[1]); ctx.lineTo(ep[0],ep[1]); ctx.stroke();
+    ctx.fillStyle = col; ctx.font = '10px var(--font-sans, sans-serif)';
+    ctx.fillText(lbl, ep[0]+2, ep[1]-2);
+  });
+
+  updateMatrix(cx, cy, cz, fwd, rv, up);
+  updateCards(cx, cy, cz);
+}
+
+function fmt(n) { return n.toFixed(3).padStart(7); }
+
+function updateCards(cx,cy,cz) {
+  const container = document.getElementById('pos-cards');
+  const pairs = [
+    ['相机位置 x', cx.toFixed(3)],
+    ['相机位置 y', cy.toFixed(3)],
+    ['相机位置 z', cz.toFixed(3)],
+  ];
+  container.innerHTML = pairs.map(([l,v]) => `<div class="info-card"><div class="lbl">${l}</div><div class="val">${v}</div></div>`).join('');
+}
+
+function updateMatrix(cx,cy,cz,fwd,rv,up) {
+  const out = document.getElementById('matrix-out');
+
+  if (activeTab === 'lookat') {
+    out.textContent = `eye    = (${cx.toFixed(3)}, ${cy.toFixed(3)}, ${cz.toFixed(3)})
+target = (0.000, 0.000, 0.000)
+up     = (0.000, 1.000, 0.000)
+
+  → forward = target - eye (归一化)
+  → right   = forward × up
+  → up'     = right × forward`;
+    return;
+  }
+
+  // Rotation matrix: rows are camera axes in world frame
+  // R rotates world -> camera, so rows = [right, up, -fwd] (camera axes)
+  const R = [
+    [rv[0], rv[1], rv[2]],
+    [up[0], up[1], up[2]],
+    [-fwd[0], -fwd[1], -fwd[2]]
+  ];
+  // translation in camera space
+  const tx = -(R[0][0]*cx + R[0][1]*cy + R[0][2]*cz);
+  const ty = -(R[1][0]*cx + R[1][1]*cy + R[1][2]*cz);
+  const tz = -(R[2][0]*cx + R[2][1]*cy + R[2][2]*cz);
+
+  if (activeTab === 'extrinsic') {
+    out.textContent =
+`       Xw       Yw       Zw       t
+Xc [${fmt(R[0][0])} ${fmt(R[0][1])} ${fmt(R[0][2])} | ${fmt(tx)} ]
+Yc [${fmt(R[1][0])} ${fmt(R[1][1])} ${fmt(R[1][2])} | ${fmt(ty)} ]
+Zc [${fmt(R[2][0])} ${fmt(R[2][1])} ${fmt(R[2][2])} | ${fmt(tz)} ]
+
+每行 = 相机坐标轴在世界坐标系中的方向
+t  = 世界原点在相机坐标系中的位置`;
+  } else {
+    out.textContent =
+`T_cam_world (4×4):
+⎡${fmt(R[0][0])} ${fmt(R[0][1])} ${fmt(R[0][2])} ${fmt(tx)} ⎤
+⎢${fmt(R[1][0])} ${fmt(R[1][1])} ${fmt(R[1][2])} ${fmt(ty)} ⎥
+⎢${fmt(R[2][0])} ${fmt(R[2][1])} ${fmt(R[2][2])} ${fmt(tz)} ⎥
+⎣  0.000   0.000   0.000   1.000 ⎦
+
+P_cam = T_cam_world × P_world`;
+  }
+}
+
+function setTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach((b,i) => {
+    b.classList.toggle('active', ['extrinsic','pose','lookat'][i] === tab);
+  });
+  drawScene();
+}
+
+document.getElementById('theta').oninput = e => {
+  theta = +e.target.value;
+  document.getElementById('t-val').textContent = theta + '°';
+  drawScene();
+};
+document.getElementById('phi').oninput = e => {
+  phi = +e.target.value;
+  document.getElementById('p-val').textContent = phi + '°';
+  drawScene();
+};
+document.getElementById('radius').oninput = e => {
+  radius = +e.target.value;
+  document.getElementById('r-val').textContent = (+e.target.value).toFixed(1);
+  drawScene();
+};
+
+drawScene();
+</script>

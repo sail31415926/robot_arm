@@ -2,12 +2,19 @@
 <package format="3">
   <name>robot_arm_node</name>
   <version>0.1.0</version>
-  <description>Robot arm ROS2 node</description>
+  <description>Application-level control nodes for eMeet robotic arm</description>
   <maintainer email="ruichao.liu@emeet.com">ruichao.liu</maintainer>
   <license>Apache-2.0</license>
+
   <buildtool_depend>ament_cmake</buildtool_depend>
+
   <depend>rclcpp</depend>
   <depend>robot_arm_interfaces</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

@@ -1,0 +1,10 @@
+arm:
+  kinematics_solver: pick_ik/PickIkPlugin
+  kinematics_solver_search_resolution: 0.005
+  kinematics_solver_timeout: 0.05
+  kinematics_solver_attempts: 3
+  mode: global
+  stop_optimization_on_valid_solution: true
+  position_threshold: 0.001
+  orientation_threshold: 0.01
+  cost_threshold: 0.001
