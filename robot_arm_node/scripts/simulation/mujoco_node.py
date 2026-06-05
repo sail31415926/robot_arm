@@ -44,8 +44,12 @@ from control_msgs.action import FollowJointTrajectory
 import mujoco
 import mujoco.viewer
 
+from ament_index_python.packages import get_package_share_directory
+
 JOINT_NAMES = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
-MJCF_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eMeetArm.xml')
+MJCF_PATH   = os.path.join(
+    get_package_share_directory('robot_arm_bringup'),
+    'sim', 'mujoco', 'eMeetArm.xml')
 
 # ── Actuator PD gains (from eMeetArm.xml) for velocity feedforward ──────────
 #     ctrl = target_pos + (kv/kp) * target_vel
