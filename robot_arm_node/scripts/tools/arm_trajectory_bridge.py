@@ -7,7 +7,7 @@
 
 将 /arm_controller/joint_trajectory 分流到实物硬件：
   Joint1-3 → /joint{N}/arm_motor_node/cmd_pos  (std_msgs/Float64, rad)
-  Joint4-6 → /camera_controller/joint_trajectory (JointTrajectory)
+  Joint4-6 → /gimbal_controller/joint_trajectory (JointTrajectory)
 
 使得所有 Gazebo GUI 控制脚本（arm_slider_controller、sphere_orbit_streamer 等）
 无需修改即可直接用于实物模式。
@@ -41,7 +41,7 @@ class ArmTrajectoryBridge(Node):
             for name, topic in _ARM_JOINT_TOPICS.items()
         }
         self._cam_pub = self.create_publisher(
-            JointTrajectory, '/camera_controller/joint_trajectory', 10)
+            JointTrajectory, '/gimbal_controller/joint_trajectory', 10)
 
         self.create_subscription(
             JointTrajectory, '/arm_controller/joint_trajectory',
@@ -56,7 +56,7 @@ class ArmTrajectoryBridge(Node):
 
         self.get_logger().info(
             'arm_trajectory_bridge ready\n'
-            '  /arm_controller/joint_trajectory → Joint1-3: cmd_pos | Joint4-6: camera_controller')
+            '  /arm_controller/joint_trajectory → Joint1-3: cmd_pos | Joint4-6: gimbal_controller')
 
     # ── incoming trajectory ──────────────────────────────────────────────────
 
@@ -64,7 +64,7 @@ class ArmTrajectoryBridge(Node):
         if not msg.points or not msg.joint_names:
             return
 
-        # ── Camera joints → forward as-is to camera_controller ──────────────
+        # ── Camera joints → forward as-is to gimbal_controller ──────────────
         cam_names, cam_idx = [], []
         for i, name in enumerate(msg.joint_names):
             if name in _CAM_JOINTS:

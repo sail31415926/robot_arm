@@ -37,7 +37,7 @@ def load_yaml(path: str) -> dict:
 def generate_launch_description():
     desc_share    = get_package_share_directory('robot_arm_description')
     bringup_share = get_package_share_directory('robot_arm_bringup')
-    cfg           = os.path.join(bringup_share, 'config', 'software')
+    cfg           = os.path.join(bringup_share, 'config', 'moveit')
 
     # ── Launch arguments ──────────────────────────────────────────────────────
     use_sim_time_arg = DeclareLaunchArgument(
@@ -54,13 +54,13 @@ def generate_launch_description():
     # ── Robot description ──────────────────────────────────────────────────────
     with open(os.path.join(desc_share, 'urdf', 'eMeetArm_models.urdf'), 'r') as f:
         urdf_content = f.read()
-    with open(os.path.join(cfg, 'srdf', 'eMeetArm_models.srdf'), 'r') as f:
+    with open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf'), 'r') as f:
         srdf_content = f.read()
 
     robot_description          = {'robot_description':          urdf_content}
     robot_description_semantic = {'robot_description_semantic': srdf_content}
-    robot_description_kin      = {'robot_description_kinematics': load_yaml(os.path.join(cfg, 'kinematics.yaml'))}
-    robot_description_plan     = {'robot_description_planning':   load_yaml(os.path.join(cfg, 'joint_limits.yaml'))}
+    robot_description_kin      = {'robot_description_kinematics': load_yaml(os.path.join(desc_share, 'config', 'kinematics.yaml'))}
+    robot_description_plan     = {'robot_description_planning':   load_yaml(os.path.join(desc_share, 'config', 'joint_limits.yaml'))}
 
     planning_pipeline  = load_yaml(os.path.join(cfg, 'planning_pipeline.yaml'))
     moveit_controllers = load_yaml(os.path.join(cfg, 'moveit_controllers.yaml'))

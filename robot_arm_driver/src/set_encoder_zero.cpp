@@ -17,11 +17,11 @@
  *   3. 操作完成后请重启驱动器（或 Reset Node）使零点生效
  *
  * 用法：
- *   ./set_encoder_zero <can_interface> <node_id> [master_node_id] [sdo_timeout_ms]
- *   例：./set_encoder_zero can0 1
- *       ./set_encoder_zero can0 1 127 500
+ *   ros2 run robot_arm_driver set_encoder_zero <can_interface> <node_id> [master_node_id] [sdo_timeout_ms]
+ *   例：ros2 run robot_arm_driver set_encoder_zero can0 1
+ *       ros2 run robot_arm_driver set_encoder_zero can0 1 127 500
  *
- * 所属模块：hardware_driver/src/
+ * 所属模块：robot_arm_driver/src/
  *
  * @version 1.0
  * @date 2026-05-27

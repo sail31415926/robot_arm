@@ -2,17 +2,14 @@
 @file   motor.launch.py
 @brief  三关节电机节点一键启动（multi-joint arm_motor_node）
 
-同时启动 joint1 / joint2 / joint3 三个 arm_motor_node 实例，
-各节点参数从 config/hardware/motors.yaml 中对应命名空间段读取：
+同时启动 joint1 / joint2 / joint3 三个 arm_motor_node 实例 + motor_test_gui 调试界面，
+各节点参数从 config/motors.yaml 中对应命名空间段读取：
   /joint1/arm_motor_node — node_id=1，负责发送主站心跳
   /joint2/arm_motor_node — node_id=2
   /joint3/arm_motor_node — node_id=3
 
 用法：
   ros2 launch robot_arm_bringup motor.launch.py
-
-启动后配合调试 GUI：
-  ros2 run robot_arm_driver motor_test_gui
 
 所属模块：launch/  (🔴 real only)
 
@@ -28,7 +25,7 @@ import os
 
 def generate_launch_description():
     cfg = os.path.join(
-        get_package_share_directory('robot_arm_bringup'), "config", "hardware", "motors.yaml")
+        get_package_share_directory('robot_arm_driver'), "config", "motors.yaml")
 
     def motor_node(ns):
         return Node(
@@ -44,4 +41,10 @@ def generate_launch_description():
         motor_node("joint1"),
         motor_node("joint2"),
         motor_node("joint3"),
+        Node(
+            package='robot_arm_driver',
+            executable='motor_test_gui',
+            name='motor_test_gui',
+            output='screen',
+        ),
     ])

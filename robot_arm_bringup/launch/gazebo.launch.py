@@ -63,7 +63,7 @@ def generate_launch_description():
     desc_share       = get_package_share_directory('robot_arm_description')
     bringup_share    = get_package_share_directory('robot_arm_bringup')
     arm_share_parent = os.path.dirname(desc_share)   # Gazebo 解析 package://robot_arm_description/... 需要
-    moveit_cfg       = os.path.join(bringup_share, 'config', 'software')
+    moveit_cfg       = os.path.join(bringup_share, 'config', 'moveit')
     urdf_path     = os.path.join(desc_share, 'urdf', 'eMeetArm_models.urdf')
     controllers_yaml_path = os.path.join(desc_share, 'config', 'controllers.yaml')
     world_file    = os.path.join(bringup_share, 'sim', 'gazebo', 'worlds', 'emeet_arm.world')
@@ -82,16 +82,16 @@ def generate_launch_description():
     robot_description = ' '.join(robot_description.split())
 
     # ── MoveIt Servo 用到的额外资源（仅 controller:=ruckig 时使用） ───────────
-    with open(os.path.join(moveit_cfg, 'srdf', 'eMeetArm_models.srdf'), 'r') as f:
+    with open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf'), 'r') as f:
         srdf_content = f.read()
     servo_params = {
         'moveit_servo': _load_yaml(os.path.join(moveit_cfg, 'servo_config.yaml')),
     }
     robot_description_kinematics = {
-        'robot_description_kinematics': _load_yaml(os.path.join(moveit_cfg, 'kinematics.yaml')),
+        'robot_description_kinematics': _load_yaml(os.path.join(desc_share, 'config', 'kinematics.yaml')),
     }
     robot_description_planning = {
-        'robot_description_planning': _load_yaml(os.path.join(moveit_cfg, 'joint_limits.yaml')),
+        'robot_description_planning': _load_yaml(os.path.join(desc_share, 'config', 'joint_limits.yaml')),
     }
 
     # ── 控制方式参数 ──────────────────────────────────────────────────────────

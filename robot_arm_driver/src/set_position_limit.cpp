@@ -17,14 +17,14 @@
  *   4. 用 VCSDSoft_L「参数管理 → 保存到 EEPROM」固化（驱动器不支持 SDO 标准保存）
  *
  * 用法：
- *   ./set_position_limit <can_interface> <node_id> <set|pos|neg|show|clear> [neg_counts pos_counts]
- *   例：./set_position_limit can0 1 set -66780 247736  # 一次写入两端限位
- *       ./set_position_limit can0 1 pos      # 当前位置为正限位（单侧）
- *       ./set_position_limit can0 1 neg      # 当前位置为负限位（单侧）
- *       ./set_position_limit can0 1 show     # 显示当前限位
- *       ./set_position_limit can0 1 clear    # 重置到默认（关闭限位）
+ *   ros2 run robot_arm_driver set_position_limit <can_interface> <node_id> <set|pos|neg|show|clear> [neg_counts pos_counts]
+ *   例：ros2 run robot_arm_driver set_position_limit can0 1 set -66780 247736  # 一次写入两端限位
+ *       ros2 run robot_arm_driver set_position_limit can0 1 pos      # 当前位置为正限位（单侧）
+ *       ros2 run robot_arm_driver set_position_limit can0 1 neg      # 当前位置为负限位（单侧）
+ *       ros2 run robot_arm_driver set_position_limit can0 1 show     # 显示当前限位
+ *       ros2 run robot_arm_driver set_position_limit can0 1 clear    # 重置到默认（关闭限位）
  *
- * 所属模块：hardware_driver/src/
+ * 所属模块：robot_arm_driver/src/
  *
  * @version 1.1
  * @date 2026-05-27
