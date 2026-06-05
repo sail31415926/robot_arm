@@ -35,9 +35,8 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
-import cv2
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from sensor_msgs.msg import JointState, CompressedImage
+from sensor_msgs.msg import JointState
+from sensor_msgs.msg import Image as ImageMsg
 from geometry_msgs.msg import TwistStamped
 from trajectory_msgs.msg import JointTrajectory
 from control_msgs.action import FollowJointTrajectory
@@ -120,12 +119,8 @@ class MuJoCoNode(Node):
         self._js_pub = self.create_publisher(JointState, '/joint_states', 10)
         self.create_timer(0.02, self._publish_js)        # 50 Hz
 
-        # Camera image publisher — 直接发 JPEG，省去 republish 节点开销
-        _img_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST, depth=1)
-        self._cam_pub = self.create_publisher(
-            CompressedImage, '/camera/camera_sensor/image_raw/compressed', _img_qos)
+        # Camera image publisher (matches Gazebo /camera namespace)
+        self._cam_pub = self.create_publisher(ImageMsg, '/camera/camera_sensor/image_raw', 10)
         self.create_timer(0.033, self._publish_cam)      # ~30 Hz
         self._cam_lock = threading.Lock()
         self._cam_image = None  # latest rendered frame (numpy RGB)
@@ -232,16 +227,15 @@ class MuJoCoNode(Node):
                 return
             img = self._cam_image.copy()
 
-        bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        ok, buf = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not ok:
-            return
-
-        msg = CompressedImage()
+        msg = ImageMsg()
         msg.header.stamp    = self.get_clock().now().to_msg()
         msg.header.frame_id = 'camera_optical_frame'
-        msg.format          = 'jpeg'
-        msg.data            = buf.tobytes()
+        msg.height          = img.shape[0]
+        msg.width           = img.shape[1]
+        msg.encoding        = 'rgb8'
+        msg.is_bigendian    = False
+        msg.step            = msg.width * 3
+        msg.data            = img.tobytes()
         self._cam_pub.publish(msg)
 
     # ------------------------------------------------------------------ #
@@ -366,9 +360,9 @@ class MuJoCoNode(Node):
                         self._joint_pos[i] = self.data.qpos[qadr]
                         self._joint_vel[i] = self.data.qvel[vadr]
 
-                # Render camera at 15 Hz — 同步 viewer 交互相机，rqt 与 viewer 视角一致
+                # Render camera at ~30 Hz — 使用末端执行器相机 ee_cam
                 if step % cam_interval == 0:
-                    renderer.update_scene(self.data, camera=viewer.cam)
+                    renderer.update_scene(self.data, camera='ee_cam')
                     pixels = renderer.render()
                     with self._cam_lock:
                         self._cam_image = pixels.copy()
