@@ -1,0 +1,110 @@
+<mujoco model="eMeetArm">
+  <!-- eulerseq XYZ = intrinsic roll-pitch-yaw, matches URDF rpy convention -->
+  <compiler meshdir="../eMeetArm_models/meshes" eulerseq="XYZ" angle="radian"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <visual>
+    <headlight diffuse="0.8 0.8 0.8" ambient="0.3 0.3 0.3" specular="0.0 0.0 0.0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+  </visual>
+
+  <asset>
+    <mesh name="base_link" file="base_link.STL"/>
+    <mesh name="Link1"     file="Link1.STL"/>
+    <mesh name="Link2"     file="Link2.STL"/>
+    <mesh name="Link3"     file="Link3.STL"/>
+    <mesh name="Link4"     file="Link4.STL"/>
+    <mesh name="Link5"     file="Link5.STL"/>
+    <mesh name="Link6"     file="Link6.STL"/>
+    <material name="arm_grey"   rgba="0.898 0.918 0.929 1"/>
+    <material name="joint_grey" rgba="0.698 0.698 0.698 1"/>
+  </asset>
+
+  <default>
+    <!-- Robot geoms: visual only, no collision with floor or each other -->
+    <geom contype="0" conaffinity="0"/>
+    <joint limited="true"/>
+  </default>
+
+  <worldbody>
+    <light name="top"  pos="0 0 2.5" dir="0 0 -1" diffuse="0.8 0.8 0.8" specular="0.2 0.2 0.2"/>
+    <light name="side" pos="1 1 1.5" dir="-1 -1 -1" diffuse="0.4 0.4 0.4"/>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.8 0.85 0.9 1" contype="1" conaffinity="1"/>
+
+    <!-- base_link: fixed to world (no joint) -->
+    <body name="base_link" pos="0 0 0">
+      <inertial pos="-1.265e-05 -1.574e-05 0.04528" mass="2.9887"
+                fullinertia="0.013686 0.011278 0.022318 6.69e-07 -3.086e-07 -2.269e-07"/>
+      <geom type="mesh" mesh="base_link" material="arm_grey"/>
+
+      <!-- Link1: Joint1 — Z-axis rotation, base rotation -->
+      <body name="Link1" pos="0 0 0.1078" euler="0 0 0">
+        <inertial pos="-7.439e-05 -0.00743 0.12877" mass="2.3582"
+                  fullinertia="0.003838 0.004658 0.002214 7.014e-07 -3.092e-06 -5.300e-04"/>
+        <joint name="Joint1" type="hinge" axis="0 0 1" range="-3.1 3.1" damping="1.0"/>
+        <geom type="mesh" mesh="Link1" material="arm_grey"/>
+
+        <!-- Link2: Joint2 — shoulder pitch -->
+        <body name="Link2" pos="0 -0.0625 0.1502" euler="1.5708 -0.30769 -3.1416">
+          <inertial pos="0.26233 -2.301e-05 0.02928" mass="1.2359"
+                    fullinertia="5.211e-04 0.008365 0.008513 1.665e-07 1.289e-05 -2.828e-07"/>
+          <joint name="Joint2" type="hinge" axis="0 0 1" range="-0.8 3.14" damping="5.0"/>
+          <geom type="mesh" mesh="Link2" material="arm_grey"/>
+
+          <!-- Link3: Joint3 — elbow -->
+          <body name="Link3" pos="0.35 0 0.089" euler="0 0 2.8339">
+            <inertial pos="0.25099 0.00809 -0.02224" mass="0.7526"
+                      fullinertia="4.253e-04 0.003230 0.003197 -5.617e-05 -1.500e-06 -5.251e-07"/>
+            <joint name="Joint3" type="hinge" axis="0 0 1" range="-3.14 0.05" damping="3.0"/>
+            <geom type="mesh" mesh="Link3" material="arm_grey"/>
+
+            <!-- Link4: Joint4 — wrist roll -->
+            <body name="Link4" pos="0.339 -0.024975 -0.04" euler="1.5708 0 0">
+              <inertial pos="-0.01013 -9.437e-06 0.01831" mass="0.09684"
+                        fullinertia="3.907e-05 4.727e-05 5.037e-05 -7.031e-09 1.317e-05 -4.242e-09"/>
+              <joint name="Joint4" type="hinge" axis="0 0 -1" range="-3.1 3.1" damping="0.5"/>
+              <geom type="mesh" mesh="Link4" material="joint_grey"/>
+
+              <!-- Link5: Joint5 — wrist pitch -->
+              <body name="Link5" pos="-0.022739 0 0.048353" euler="-1.5708 0 -1.5708">
+                <inertial pos="0.001264 1.062e-04 0.02105" mass="0.04532"
+                          fullinertia="9.660e-06 1.308e-05 8.920e-06 4.202e-08 1.664e-06 -8.577e-08"/>
+                <joint name="Joint5" type="hinge" axis="0 0 1" range="-0.7854 0.7854" damping="0.5"/>
+                <geom type="mesh" mesh="Link5" material="joint_grey"/>
+
+                <!-- Link6: Joint6 — wrist yaw -->
+                <body name="Link6" pos="0 0 0.03484" euler="3.1416 -1.5708 0">
+                  <inertial pos="-3.918e-04 -5.109e-05 8.727e-05" mass="0.05505"
+                            fullinertia="1.975e-05 1.676e-05 1.076e-05 2.973e-08 -3.399e-08 -1.342e-07"/>
+                  <joint name="Joint6" type="hinge" axis="0 0 -1" range="-1.5 0.5" damping="0.5"/>
+                  <geom type="mesh" mesh="Link6" material="joint_grey"/>
+
+                  <!-- tool0: end-effector frame (fixed, no joint) -->
+                  <body name="tool0" pos="0 0 0">
+                    <site name="ee_site" pos="0 0 0" size="0.01" rgba="1 0 0 0.5"/>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <!--
+    Position actuators: force = kp*(ctrl - qpos).
+    kp tuned proportional to URDF effort limits.
+    Joint damping provides velocity feedback.
+  -->
+  <actuator>
+    <position name="act_Joint1" joint="Joint1" kp="500"/>
+    <position name="act_Joint2" joint="Joint2" kp="800"/>
+    <position name="act_Joint3" joint="Joint3" kp="300"/>
+    <position name="act_Joint4" joint="Joint4" kp="80"/>
+    <position name="act_Joint5" joint="Joint5" kp="50"/>
+    <position name="act_Joint6" joint="Joint6" kp="50"/>
+  </actuator>
+
+</mujoco>
