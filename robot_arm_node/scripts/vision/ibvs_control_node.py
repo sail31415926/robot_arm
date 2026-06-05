@@ -48,10 +48,17 @@ from geometry_msgs.msg import PointStamped, TwistStamped
 from sensor_msgs.msg import Image as ImageMsg
 from tf2_ros import TransformListener, Buffer
 
+import importlib.util
 from ament_index_python.packages import get_package_share_directory
-sys.path.insert(0, os.path.join(
-    get_package_share_directory('robot_arm_node'), 'third_party', 'IBVS_Controller'))
-from ibvs_controller import IBVS_Controller  # noqa: E402
+
+# 按绝对路径加载第三方算法库，避免 sys.path 操纵和同名模块歧义
+_ibvs_path = os.path.join(
+    get_package_share_directory('robot_arm_node'),
+    'third_party', 'IBVS_Controller', 'ibvs_controller.py')
+_spec = importlib.util.spec_from_file_location('ibvs_lib', _ibvs_path)
+_mod  = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+IBVS_Controller = _mod.IBVS_Controller
 
 # ── 调试图像绘制用相机内参（反算像素坐标）────────────────────────────────────
 CAM_W    = 640
