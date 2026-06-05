@@ -366,9 +366,9 @@ class MuJoCoNode(Node):
                         self._joint_pos[i] = self.data.qpos[qadr]
                         self._joint_vel[i] = self.data.qvel[vadr]
 
-                # Render camera at 15 Hz (after step, before sync)
+                # Render camera at 15 Hz — 同步 viewer 交互相机，rqt 与 viewer 视角一致
                 if step % cam_interval == 0:
-                    renderer.update_scene(self.data, camera="ee_cam")
+                    renderer.update_scene(self.data, camera=viewer.cam)
                     pixels = renderer.render()
                     with self._cam_lock:
                         self._cam_image = pixels.copy()
