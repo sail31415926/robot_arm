@@ -1,6 +1,6 @@
 <mujoco model="eMeetArm">
   <!-- eulerseq XYZ = intrinsic roll-pitch-yaw, matches URDF rpy convention -->
-  <compiler meshdir="../eMeetArm_models/meshes" eulerseq="XYZ" angle="radian"/>
+  <compiler meshdir="../meshes" eulerseq="XYZ" angle="radian"/>
 
   <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
 
