@@ -15,7 +15,7 @@ ament_target_dependencies(robot_arm_node rclcpp robot_arm_interfaces)
 install(TARGETS robot_arm_node DESTINATION lib/${PROJECT_NAME})
 
 # ── Python 共享工具模块（保留 .py 后缀，供其他脚本 import）─────────────────────
-install(PROGRAMS scripts/arm_utils.py
+install(PROGRAMS scripts/tools/arm_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
