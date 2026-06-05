@@ -8,7 +8,7 @@ controller_manager:
     arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
-    camera_controller:
+    gimbal_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
 arm_controller:
@@ -34,7 +34,7 @@ arm_controller:
 
 # 实物模式专用：仅控制摄像头云台 Joint4/5/6
 # arm_motor_node（CANopen）独立管理 Joint1-3，不经过此控制器
-camera_controller:
+gimbal_controller:
   ros__parameters:
     joints:
       - Joint4

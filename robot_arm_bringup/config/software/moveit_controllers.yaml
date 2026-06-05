@@ -1,7 +1,0 @@
-moveit_controller_manager: moveit_ros_control_interface/Ros2ControlManager
-
-trajectory_execution:
-  allowed_execution_duration_scaling: 1.0   # 允许实际执行时间为规划时间的 3 倍
-  allowed_goal_duration_margin: 3.0         # 额外容忍 10 秒，防止长轨迹超时
-  allowed_start_tolerance: 0.1
-  moveit_manage_controllers: false

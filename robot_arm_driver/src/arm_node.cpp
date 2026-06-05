@@ -7,7 +7,9 @@
  *   订阅  /arm_controller/joint_trajectory   trajectory_msgs/JointTrajectory
  *   发布  /joint_states                       sensor_msgs/JointState  (Joint1~3)
  *
- * 运动模式：插补位置模式（IP），轨迹 waypoints 间线性插补，每周期 PDO + SYNC 同步执行。
+ * 运动模式：由启动参数 motion_mode 选择
+ *   "ip"（默认）— 插补位置模式，waypoints 间线性插补，PDO + SYNC 同步执行
+ *   "pp"        — 轮廓位置模式，取最终 waypoint 为目标，驱动器内部生成速度轮廓
  *
  * 服务：
  *   /arm_node/enable       — 使能所有关节
@@ -20,9 +22,9 @@
  *   ros2 run arm arm_node \
  *     --ros-args --params-file install/arm/share/arm/config/arm.yaml
  *
- * 参数文件：config/hardware/arm.yaml
+ * 参数文件：robot_arm_driver/config/arm.yaml
  *
- * @version 2.0  (PP → IP mode)
+ * @version 3.0  (dual mode: IP / PP)
  * @date 2026-06-01
  * @copyright Copyright (c) 2026 EMEET
  */
@@ -69,6 +71,9 @@ public:
                                         declare_parameter<int>("master_node_id", 127));
         const int fb_fast_ms      = declare_parameter<int>("feedback_fast_ms", 20);
         ip_period_ms_             = declare_parameter<int>("ip_period_ms", 10);
+        pp_accel_                 = declare_parameter<double>("pp_accel", 5.0);
+        pp_decel_                 = declare_parameter<double>("pp_decel", 5.0);
+        motion_mode_              = declare_parameter<std::string>("motion_mode", "ip");
         const bool auto_enable    = declare_parameter<bool>("auto_enable", true);
 
         // ── 各关节参数（等长数组） ────────────────────────────────────────────
@@ -102,10 +107,9 @@ public:
         }
         RCLCPP_INFO(get_logger(), "CAN 驱动初始化完成，%zu 个关节", n_);
 
-        // ── 自动使能 & 切换 IP 模式 ───────────────────────────────────────────
-        // 注意：setInterpolatedPositionMode() 内含完整 DS402 状态机，
-        // 因此不调 enable()（避免 PP 模式下使能后又切 IP 导致驱动器拒绝）。
-        // 只需 NMT Start 让从站进入 Operational，其余由 IP 初始化一步完成。
+        // ── 自动使能 & 切换运动模式 ───────────────────────────────────────────
+        // IP 模式：setInterpolatedPositionMode() 内含完整 DS402 状态机，不单独调 enable()
+        // PP 模式：需先调 enable() 再调 setProfilePositionMode()
         if (auto_enable) {
             for (size_t i = 0; i < n_; ++i) {
                 if (!drivers_[i]->nmtCommand(0x01)) {
@@ -124,17 +128,21 @@ public:
                 }
             }
 
-            if (!setAllIPMode()) {
-                RCLCPP_WARN(get_logger(), "部分关节 IP 模式切换失败");
+            if (motion_mode_ == "pp") {
+                if (!setAllPPMode())
+                    RCLCPP_WARN(get_logger(), "部分关节 PP 模式切换失败");
+            } else {
+                if (!setAllIPMode())
+                    RCLCPP_WARN(get_logger(), "部分关节 IP 模式切换失败");
             }
         }
 
         // ── 发布 / 订阅 ───────────────────────────────────────────────────────
         js_pub_ = create_publisher<JointState>("/joint_states", 10);
 
-        // 云台轨迹转发：Joint4/5/6 → /camera_controller/joint_trajectory
+        // 云台轨迹转发：Joint4/5/6 → /gimbal_controller/joint_trajectory
         camera_traj_pub_ = create_publisher<JointTrajectory>(
-            "/camera_controller/joint_trajectory", 10);
+            "/gimbal_controller/joint_trajectory", 10);
 
         traj_sub_ = create_subscription<JointTrajectory>(
             "/arm_controller/joint_trajectory", 10,
@@ -159,9 +167,9 @@ public:
                 bool ok = true;
                 for (auto& d : drivers_) ok = d->nmtCommand(0x01) && ok;
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                if (ok) ok = setAllIPMode();
+                if (ok) ok = (motion_mode_ == "pp") ? setAllPPMode() : setAllIPMode();
                 res->success = ok;
-                res->message = ok ? "所有关节已使能并切换 IP 模式" : "部分关节使能失败";
+                res->message = ok ? "所有关节已使能" : "部分关节使能失败";
             });
 
         srv_disable_ = create_service<Trigger>("~/disable",
@@ -185,7 +193,7 @@ public:
                     ok = d->nmtCommand(0x01) && ok;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                if (ok) ok = setAllIPMode();
+                if (ok) ok = (motion_mode_ == "pp") ? setAllPPMode() : setAllIPMode();
                 res->success = ok;
                 res->message = ok ? "故障复位并重新使能成功" : "复位后使能失败";
             });
@@ -211,12 +219,12 @@ public:
         }
 
         RCLCPP_INFO(get_logger(),
-            "arm_node 启动完成  (IP 模式, %dms 插补周期)\n"
+            "arm_node 启动完成  (mode=%s)\n"
             "  Action  /arm_controller/follow_joint_trajectory\n"
             "  Topic   /arm_controller/joint_trajectory\n"
             "  Publish /joint_states\n"
             "  Service ~/enable  ~/disable  ~/recover  ~/set_home",
-            ip_period_ms_);
+            motion_mode_.c_str());
     }
 
 private:
@@ -233,9 +241,25 @@ private:
         return ok;
     }
 
+    bool setAllPPMode()
+    {
+        bool ok = true;
+        for (size_t i = 0; i < n_; ++i)
+            ok = drivers_[i]->enable() && ok;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        for (size_t i = 0; i < n_; ++i) {
+            uint32_t v = converters_[i].radToVelPP(max_vel_[i]);
+            uint32_t a = converters_[i].radToAccPP(pp_accel_);
+            uint32_t d = converters_[i].radToAccPP(pp_decel_);
+            ok = drivers_[i]->setProfilePositionMode(v, a, d) && ok;
+        }
+        return ok;
+    }
+
     void stopExecution()
     {
-        if (ip_timer_) { ip_timer_->cancel(); ip_timer_.reset(); }
+        if (ip_timer_)   { ip_timer_->cancel();   ip_timer_.reset(); }
+        if (done_timer_) { done_timer_->cancel(); done_timer_.reset(); }
         pending_ = JointTrajectory{};
         ip_elapsed_ = 0.0;
         ip_total_dur_ = 0.0;
@@ -300,7 +324,7 @@ private:
         abortActiveGoal("preempted by new trajectory");
         stopExecution();
 
-        // ── 分流：提取 Joint4/5/6 → camera_controller ────────────────────────
+        // ── 分流：提取 Joint4/5/6 → gimbal_controller ────────────────────────
         static const std::set<std::string> CAM_JOINTS{"Joint4","Joint5","Joint6"};
         std::vector<size_t> cam_idx;
         std::vector<std::string> cam_names;
@@ -327,7 +351,7 @@ private:
             camera_traj_pub_->publish(cam_traj);
         }
 
-        // ── Joint1-3：存储 waypoints，启动 IP 插补定时器 ────────────────────
+        // ── Joint1-3：按 motion_mode_ 选择执行方式 ──────────────────────────
         stopExecution();
         pending_ = *msg;
 
@@ -342,21 +366,49 @@ private:
             }
         }
 
-        // 总时长 = 最后 waypoint 的 time_from_start
-        const auto& last_pt = pending_.points.back();
-        ip_total_dur_ = last_pt.time_from_start.sec +
-                        last_pt.time_from_start.nanosec * 1e-9;
-        ip_elapsed_ = 0.0;
-        ip_seg_idx_ = 0;
+        if (motion_mode_ == "pp") {
+            // PP 模式：取最终 waypoint，按距离/时间动态设轮廓速度，非阻塞触发
+            const auto& last_pt = pending_.points.back();
+            double total_dur = last_pt.time_from_start.sec +
+                               last_pt.time_from_start.nanosec * 1e-9;
 
-        // 首点立即执行（不等到第一个定时器触发）
-        interpolateAndSend();
+            for (size_t j = 0; j < n_; ++j) {
+                auto it = arm_joint_map_.find(j);
+                if (it == arm_joint_map_.end()) continue;
+                size_t k = it->second;
+                if (k >= last_pt.positions.size()) continue;
 
-        // 启动 IP 周期定时器
-        if (ip_total_dur_ > 0.0) {
-            ip_timer_ = create_wall_timer(
-                std::chrono::milliseconds(ip_period_ms_),
-                [this]() { interpolateAndSend(); });
+                int32_t target_pp = converters_[j].radToPP(last_pt.positions[k])
+                                   + home_offsets_[j];
+
+                if (total_dur > 0.01) {
+                    int32_t cur_pp  = drivers_[j]->getPosition();
+                    double dist_rad = std::abs(converters_[j].ppToRad(target_pp - cur_pp));
+                    double vel_rad  = std::clamp(dist_rad / total_dur, 0.001, max_vel_[j]);
+                    uint32_t vel_pp = converters_[j].radToVelPP(vel_rad);
+                    if (vel_pp > 0) drivers_[j]->setProfileVelocity(vel_pp);
+                }
+
+                drivers_[j]->moveToPosition(target_pp, false, false);
+            }
+
+            // 每 20ms 轮询状态字 bit10（Target Reached），到位后通知 action goal
+            done_timer_ = create_wall_timer(20ms, [this]() { checkDone(); });
+        } else {
+            // IP 模式：线性插补 + PDO + SYNC 周期定时器
+            const auto& last_pt = pending_.points.back();
+            ip_total_dur_ = last_pt.time_from_start.sec +
+                            last_pt.time_from_start.nanosec * 1e-9;
+            ip_elapsed_ = 0.0;
+            ip_seg_idx_ = 0;
+
+            interpolateAndSend();
+
+            if (ip_total_dur_ > 0.0) {
+                ip_timer_ = create_wall_timer(
+                    std::chrono::milliseconds(ip_period_ms_),
+                    [this]() { interpolateAndSend(); });
+            }
         }
     }
 
@@ -431,6 +483,17 @@ private:
         }
     }
 
+    /** @brief PP 模式完成监测：轮询 arm_joint_map_ 内各关节状态字 bit10（Target Reached） */
+    void checkDone()
+    {
+        for (const auto& [j, k] : arm_joint_map_) {
+            if (!(drivers_[j]->getStatusWord() & 0x0400u)) return;
+        }
+        done_timer_->cancel();
+        done_timer_.reset();
+        finishActiveGoal();
+    }
+
     /** @brief 通过任一已打开的驱动器发送 SYNC 广播帧 */
     void sendSYNC() {
         if (!drivers_.empty()) drivers_[0]->sendSYNC();
@@ -459,6 +522,9 @@ private:
 
     size_t n_{3};
     int    ip_period_ms_{10};
+    double pp_accel_{5.0};
+    double pp_decel_{5.0};
+    std::string motion_mode_{"ip"};
     std::vector<std::string> joint_names_;
     std::vector<std::unique_ptr<arm::CanopenMotorDriver>> drivers_;
     std::vector<arm::MotorUnitConverter> converters_;
@@ -473,9 +539,9 @@ private:
                                          srv_recover_, srv_set_home_;
     rclcpp_action::Server<FollowJointTraj>::SharedPtr action_server_;
     std::shared_ptr<GoalHandleFTJ> active_goal_;
-    rclcpp::TimerBase::SharedPtr  fb_fast_timer_, hb_timer_, ip_timer_;
+    rclcpp::TimerBase::SharedPtr  fb_fast_timer_, hb_timer_, ip_timer_, done_timer_;
 
-    // IP 插补状态
+    // 执行状态（IP 插补 / PP 目标发送共用）
     JointTrajectory pending_;
     std::map<size_t, size_t> arm_joint_map_;  ///< 驱动索引 → trajectory.joint_names 索引
     double ip_elapsed_{0.0};

@@ -49,4 +49,9 @@ install(PROGRAMS scripts/motor_test_gui.py
   RENAME motor_test_gui
 )
 
+# ── 配置文件 ──────────────────────────────────────────────────────────────────
+install(DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 ament_package()
