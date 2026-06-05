@@ -273,7 +273,7 @@ def generate_launch_description():
                  output='screen', condition=is_ibvs_control),
             Node(package='robot_arm_node', executable='red_box_detector',
                  output='screen', condition=is_ibvs_control),
-            Node(package='robot_arm_node', executable='ibvs_controller',
+            Node(package='robot_arm_node', executable='ibvs_control_node',
                  output='screen', condition=is_ibvs_control),
         ],
         condition=is_ibvs_control,

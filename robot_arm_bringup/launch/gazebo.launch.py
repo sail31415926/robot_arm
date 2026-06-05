@@ -19,7 +19,7 @@
            sphere_orbit       → spherical_orbit_streamer         (球面坐标环绕运镜)
            velocity           → cartesian_velocity_controller    (笛卡尔速度接口，手动点动)
            ibvs_control       → velocity + red_box_detector
-                                + ibvs_controller                (红色方块 IBVS 闭环)
+                                + ibvs_control_node             (红色方块 IBVS 闭环)
            pose_command_debug → pose_command_debug               (PoseCommand 接口调试)
          MoveIt 由本文件自动 include，无需额外启动 moveit.launch.py。
 
@@ -212,7 +212,7 @@ def generate_launch_description():
                  output='screen',
                  parameters=[{'use_sim_time': True}],
                  condition=is_ibvs_control),
-            Node(package='robot_arm_node', executable='ibvs_controller',
+            Node(package='robot_arm_node', executable='ibvs_control_node',
                  output='screen', condition=is_ibvs_control),
         ],
         condition=is_ibvs_control,

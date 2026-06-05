@@ -48,7 +48,7 @@ endforeach()
 
 # ── vision/：视觉感知 ─────────────────────────────────────────────────────────
 foreach(script
-  ibvs_controller
+  ibvs_control_node
   red_box_detector
 )
   install(PROGRAMS scripts/vision/${script}.py

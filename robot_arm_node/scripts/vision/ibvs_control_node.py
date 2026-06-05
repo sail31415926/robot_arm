@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-@file   ibvs_controller.py
+@file   ibvs_control_node.py
 @brief  eMeetArm IBVS 视觉伺服 — 红色方块居中控制
 @version 3.0
 @date   2026-06-04
