@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# 不参与 git（恢复时删除下面这行即可）
+robot_arm_rl/
