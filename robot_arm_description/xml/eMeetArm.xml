@@ -83,6 +83,8 @@
                   <!-- tool0: end-effector frame (fixed, no joint) -->
                   <body name="tool0" pos="0 0 0">
                     <site name="ee_site" pos="0 0 0" size="0.01" rgba="1 0 0 0.5"/>
+                    <!-- ee_cam: matches URDF camera_optical_joint rpy="0 -π/2 π" from tool0 -->
+                    <camera name="ee_cam" pos="0 0 0" euler="0 -1.5708 3.1416"/>
                   </body>
                 </body>
               </body>
