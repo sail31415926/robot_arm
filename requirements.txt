@@ -7,31 +7,31 @@
 #   message_filters / launch / launch_ros / ament_index_python ...
 # tkinter 也走 apt（python3-tk），不在此处。
 #
-# 约束（见项目记忆）：numpy 必须 <2；pinocchio(pin) 锁定 4.0.0。
+# 约束（见项目记忆）：numpy 必须 <2。
 # 版本与当前已验证的 .venv 实测一致，便于复现。
+#
+# 注：requirements 已按实际 import 精简——scipy / matplotlib / pinocchio
+#     在 robot_arm 中无任何引用，已剔除（它们存在于共享 venv 仅因别的项目）。
 
-# --- 数值 / 科学计算 ---
-numpy==1.26.4            # 全部子包；必须 <2，否则 pin/cv2 ABI 冲突
-scipy==1.8.0             # robot_arm_description: 动力学辨识
-matplotlib==3.5.1        # robot_arm_description: 辨识结果绘图
+# ===========================================================================
+# 核心运行依赖（机械臂控制/视觉/GUI 必需）
+# ===========================================================================
+numpy==1.26.4            # 全部子包；必须 <2，否则 cv2 等 ABI 冲突
 PyYAML==5.4.1            # robot_arm_node: 配置读取
+ruckig==0.17.3           # robot_arm_node: 在线轨迹生成（cartesian_ruckig_* 等）
+opencv-python-headless==4.13.0.92  # cv2；robot_arm_node 视觉 / IBVS / 红盒检测
+PyQt5==5.15.11           # robot_arm_driver: motor_test_gui.py / robot_arm_node: 滑块控制
+                         # （tkinter GUI 由 apt python3-tk 提供，无需 pip）
 
-# --- 运动学 / 动力学 ---
-pin==4.0.0               # pinocchio；robot_arm_description 动力学辨识；锁定 4.0.0
-ruckig==0.17.3           # robot_arm_node: 在线轨迹生成（jerk-limited OTG）
+# ===========================================================================
+# 可选依赖（按需安装；不跑对应功能可不装）
+# ===========================================================================
 
-# --- 仿真 ---
-mujoco==3.8.1            # robot_arm_node / robot_arm_rl: MuJoCo 物理仿真
-pymeshlab==2025.7.post1  # robot_arm_description: 网格简化 simplify_meshes.py
+# --- 仿真：MuJoCo（mujoco_node + robot_arm_rl；只跑实物/Gazebo 可不装）---
+mujoco==3.8.1
 
-# --- 强化学习（robot_arm_rl）---
+# --- 强化学习：仅 robot_arm_rl 训练/部署用 ---
 gymnasium==1.0.0
 stable-baselines3==2.4.1
 tensorboard==2.20.0
 torch==2.12.0            # 默认 CPU 版（见 setup_venv.sh）；如需 GPU 改装对应 CUDA 版
-
-# --- 视觉 ---
-opencv-python-headless==4.13.0.92  # cv2；robot_arm_node 视觉/IBVS
-
-# --- GUI ---
-PyQt5==5.15.11           # robot_arm_driver: motor_test_gui.py / robot_arm_node: 滑块控制

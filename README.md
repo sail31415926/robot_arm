@@ -292,22 +292,28 @@ ROS 包由 `source /opt/ros/humble/setup.bash` 提供；Python 第三方库装�
 
 ### Python 依赖（pip，见 [`requirements.txt`](requirements.txt)）
 
+已按实际 `import` 精简：`scipy` / `matplotlib` / `pinocchio` 在 robot_arm 中
+无任何引用，**不需要**（它们存在于共享 venv 仅因别的项目）。
+
+**核心运行依赖**（机械臂控制 / 视觉 / GUI 必需）：
+
 | 依赖 | 版本 | 用途 | 子包 |
 | :--- | :--- | :--- | :--- |
 | `numpy` | 1.26.4（**必须 <2**） | 数值计算 | 全部 |
-| `scipy` | 1.8.0 | 动力学辨识 | description |
-| `matplotlib` | 3.5.1 | 辨识结果绘图 | description |
 | `PyYAML` | 5.4.1 | 配置读取 | node |
-| `pin`（pinocchio） | 4.0.0（**锁定**） | 运动学/动力学 | description |
 | `ruckig` | 0.17.3 | 在线轨迹生成（jerk-limited OTG） | node |
-| `mujoco` | 3.8.1 | 物理仿真 | node / rl |
-| `pymeshlab` | 2025.7.post1 | 网格简化 | description |
+| `opencv-python-headless` | 4.13.0.92 | `cv2` 视觉 / IBVS / 红盒检测 | node |
+| `PyQt5` | 5.15.11 | 电机测试 / 滑块控制 GUI | driver / node |
+
+**可选依赖**（按需安装；不跑对应功能可不装）：
+
+| 依赖 | 版本 | 用途 | 子包 |
+| :--- | :--- | :--- | :--- |
+| `mujoco` | 3.8.1 | MuJoCo 仿真（只跑实物/Gazebo 可不装） | node / rl |
 | `gymnasium` | 1.0.0 | RL 环境 | rl |
 | `stable-baselines3` | 2.4.1 | SAC 训练 | rl |
 | `tensorboard` | 2.20.0 | 训练日志 | rl |
 | `torch` | 2.12.0（默认 CPU 版） | RL 后端 | rl |
-| `opencv-python-headless` | 4.13.0.92 | `cv2` 视觉 / IBVS | node |
-| `PyQt5` | 5.15.11 | 电机测试 / 滑块控制 GUI | driver / node |
 
 ---
 
