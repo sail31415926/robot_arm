@@ -75,6 +75,8 @@ install(PROGRAMS tests/pose_command_publisher.py
 )
 
 # ── 资源安装 ──────────────────────────────────────────────────────────────────
-install(DIRECTORY third_party DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY scripts/vision/IBVS_Controller
+  DESTINATION share/${PROJECT_NAME}
+)
 
 ament_package()
