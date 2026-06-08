@@ -42,9 +42,8 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction,
+    DeclareLaunchArgument, ExecuteProcess, TimerAction,
 )
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
@@ -252,12 +251,13 @@ def generate_launch_description():
             PythonExpression(["'", ctrl, "' == 'velocity'"])),
     )
 
-    # ── 摄像头画面显示（复用 camera_view.launch.py，与 Gazebo 一致）──────────
-    camera_view = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(bringup_share, 'launch', 'camera_view.launch.py')
-        ),
-        launch_arguments={'use_sim_time': 'false'}.items(),
+    # ── 摄像头画面显示（MuJoCo 直接发 compressed，不需要 republish）─────────
+    camera_view = Node(
+        package='rqt_image_view',
+        executable='rqt_image_view',
+        name='camera_view',
+        arguments=['/camera/camera_sensor/image_raw/compressed'],
+        output='screen',
     )
 
     return LaunchDescription([
