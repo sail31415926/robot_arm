@@ -5,7 +5,7 @@
 @date   2026-06-04
 
 提供 rpy_to_quat / quat_to_rpy / quat_normalize / quat_dot / quat_slerp，
-供同目录各控制脚本通过 `from arm_utils import ...` 引入。
+安装到 lib/robot_arm_node/arm_utils.py，供各控制脚本通过 `from arm_utils import ...` 引入。
 
 若系统已安装 ros-humble-tf-transformations，可将 rpy_to_quat / quat_to_rpy
 替换为：
