@@ -1,0 +1,37 @@
+# robot_arm 包族 Python 依赖（纯 pip 第三方库）
+# ---------------------------------------------------------------------------
+# 这些库叠加在 ROS 2 Humble 的系统 site-packages 之上（venv 用
+# --system-site-packages 创建）。ROS 相关包不在此处，由 apt + source ROS 提供：
+#   rclpy / sensor_msgs / geometry_msgs / trajectory_msgs / control_msgs /
+#   diagnostic_msgs / moveit_msgs / cv_bridge / tf2_ros / tf_transformations /
+#   message_filters / launch / launch_ros / ament_index_python ...
+# tkinter 也走 apt（python3-tk），不在此处。
+#
+# 约束（见项目记忆）：numpy 必须 <2；pinocchio(pin) 锁定 4.0.0。
+# 版本与当前已验证的 .venv 实测一致，便于复现。
+
+# --- 数值 / 科学计算 ---
+numpy==1.26.4            # 全部子包；必须 <2，否则 pin/cv2 ABI 冲突
+scipy==1.8.0             # robot_arm_description: 动力学辨识
+matplotlib==3.5.1        # robot_arm_description: 辨识结果绘图
+PyYAML==5.4.1            # robot_arm_node: 配置读取
+
+# --- 运动学 / 动力学 ---
+pin==4.0.0               # pinocchio；robot_arm_description 动力学辨识；锁定 4.0.0
+ruckig==0.17.3           # robot_arm_node: 在线轨迹生成（jerk-limited OTG）
+
+# --- 仿真 ---
+mujoco==3.8.1            # robot_arm_node / robot_arm_rl: MuJoCo 物理仿真
+pymeshlab==2025.7.post1  # robot_arm_description: 网格简化 simplify_meshes.py
+
+# --- 强化学习（robot_arm_rl）---
+gymnasium==1.0.0
+stable-baselines3==2.4.1
+tensorboard==2.20.0
+torch==2.12.0            # 默认 CPU 版（见 setup_venv.sh）；如需 GPU 改装对应 CUDA 版
+
+# --- 视觉 ---
+opencv-python-headless==4.13.0.92  # cv2；robot_arm_node 视觉/IBVS
+
+# --- GUI ---
+PyQt5==5.15.11           # robot_arm_driver: motor_test_gui.py / robot_arm_node: 滑块控制

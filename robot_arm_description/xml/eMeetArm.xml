@@ -133,6 +133,25 @@
       <freejoint/>
     </body>
 
+    <!-- ── Apple（摄影主体示例）──────────────────────────────────────────────── -->
+    <!-- 桌面 z=0.45，苹果半径 0.040，球心 z=0.490 -->
+    <body name="obj_apple" pos="0.85 0.00 0.490">
+      <inertial pos="0 0 0" mass="0.18" diaginertia="1.15e-4 1.15e-4 1.15e-4"/>
+      <!-- 苹果主体（红色球） -->
+      <geom class="world_col" type="sphere" size="0.040" rgba="0.88 0.12 0.06 1"/>
+      <!-- 底部视觉层次（纯视觉，不参与碰撞） -->
+      <geom type="sphere" size="0.036" pos="0 0 -0.006"
+            rgba="0.82 0.10 0.05 1" contype="0" conaffinity="0"/>
+      <!-- 茎（棕色细圆柱） -->
+      <geom class="world_col" type="cylinder" size="0.004 0.012"
+            pos="0 0 0.051" rgba="0.38 0.22 0.06 1"/>
+      <!-- 叶子（绿色小盒，纯视觉） -->
+      <geom type="box" size="0.012 0.004 0.001" pos="0.010 0 0.058"
+            euler="0 0.5 0.4" rgba="0.18 0.58 0.12 1"
+            contype="0" conaffinity="0"/>
+      <freejoint/>
+    </body>
+
     <!-- base_link: fixed to world (no joint) -->
     <body name="base_link" pos="0 0 0">
       <inertial pos="-1.265e-05 -1.574e-05 0.04528" mass="2.9887"

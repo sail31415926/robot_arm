@@ -259,18 +259,85 @@ ros2 run robot_arm_node pose_command_publisher
 
 ## 主要依赖
 
+依赖分三层：**系统基础** → **ROS 2（apt）** → **Python（pip / venv）**。
+ROS 包由 `source /opt/ros/humble/setup.bash` 提供；Python 第三方库装在
+`--system-site-packages` 的 venv 中，叠加在系统 ROS 之上。
+
+### 系统基础
+
+| 项目 | 要求 |
+| :--- | :--- |
+| OS | Ubuntu 22.04 LTS |
+| ROS 2 | Humble |
+| Python | 3.10 |
+| 编译 | `colcon` + `ament_cmake`；接口包用 `rosidl` |
+| C++ 驱动底层 | SocketCAN（内核自带）+ 随包编译的 `robot_arm_driver/src/CANopenLinux/` 协议栈 |
+
+### ROS 2 依赖（apt，不进 venv）
+
 | 依赖 | 用途 |
 | :--- | :--- |
-| `rclcpp` / `rclpy` | ROS 2 客户端库 |
-| `moveit_core` / `moveit_ros_planning` | 运动规划与 MoveIt 集成 |
+| `rclcpp` / `rclpy` / `rclcpp_action` | ROS 2 客户端库 |
+| 消息：`sensor_msgs` `std_msgs` `std_srvs` `geometry_msgs` `trajectory_msgs` `control_msgs` `diagnostic_msgs` `moveit_msgs` | 接口/通信 |
+| `ros-humble-moveit`（`moveit_core` / `moveit_ros_planning`） | 运动规划与 MoveIt 集成 |
 | `pick_ik` | IK 求解器 |
-| `ruckig` | 在线轨迹生成（jerk-limited OTG，pip 安装） |
-| `ros2_control` | 控制器管理（Gazebo / 实物） |
-| `gazebo_ros` | Gazebo ↔ ROS 2 桥接 |
-| `mujoco` | 物理仿真（pip 安装） |
+| `ros2_control` / `ros2_controllers` | 控制器管理（Gazebo / 实物） |
+| `gazebo_ros` / `gazebo_ros2_control` | Gazebo ↔ ROS 2 桥接 |
+| `cv_bridge` / `image_transport` | 图像采集与处理 |
+| `tf2_ros` / `ros-humble-tf-transformations` / `message_filters` | TF 变换与消息同步 |
+| `robot_state_publisher` / `xacro` | 模型发布 |
+| `launch` / `launch_ros` / `ament_index_python` | 启动系统 |
 | `robot_gimbal_driver` | 相机云台 ros2_control 插件（Joint4-6） |
-| OpenCV（`cv_bridge`、`image_transport`） | 图像采集与处理 |
-| Qt5 / tkinter | GUI 框架 |
+| `python3-tk`（apt） | tkinter GUI 框架 |
+
+### Python 依赖（pip，见 [`requirements.txt`](requirements.txt)）
+
+| 依赖 | 版本 | 用途 | 子包 |
+| :--- | :--- | :--- | :--- |
+| `numpy` | 1.26.4（**必须 <2**） | 数值计算 | 全部 |
+| `scipy` | 1.8.0 | 动力学辨识 | description |
+| `matplotlib` | 3.5.1 | 辨识结果绘图 | description |
+| `PyYAML` | 5.4.1 | 配置读取 | node |
+| `pin`（pinocchio） | 4.0.0（**锁定**） | 运动学/动力学 | description |
+| `ruckig` | 0.17.3 | 在线轨迹生成（jerk-limited OTG） | node |
+| `mujoco` | 3.8.1 | 物理仿真 | node / rl |
+| `pymeshlab` | 2025.7.post1 | 网格简化 | description |
+| `gymnasium` | 1.0.0 | RL 环境 | rl |
+| `stable-baselines3` | 2.4.1 | SAC 训练 | rl |
+| `tensorboard` | 2.20.0 | 训练日志 | rl |
+| `torch` | 2.12.0（默认 CPU 版） | RL 后端 | rl |
+| `opencv-python-headless` | 4.13.0.92 | `cv2` 视觉 / IBVS | node |
+| `PyQt5` | 5.15.11 | 电机测试 / 滑块控制 GUI | driver / node |
+
+---
+
+## 环境配置
+
+提供一键脚本，自动创建 `--system-site-packages` 的 venv 并安装上表的 pip 依赖：
+
+```bash
+# 默认在工作区根目录使用 .venv（复用现有共享 venv）
+bash src/E7009/robot_arm/setup_venv.sh
+
+# 可选：指定 venv 路径 / ROS setup
+VENV_DIR=/path/to/venv ROS_SETUP=/opt/ros/humble/setup.bash \
+  bash src/E7009/robot_arm/setup_venv.sh
+```
+
+脚本会：source ROS Humble → 创建/复用 venv（带 `--system-site-packages`，
+保证 `rclpy` 等可用）→ 安装 CPU 版 `torch` + `requirements.txt` → 校验关键库
+可 import 并强制检查 `numpy<2`。apt 前置依赖（moveit / tf-transformations /
+ros2-control / gazebo 等）需提前装好，脚本只检查不自动安装。
+
+> 注：`torch` 默认装 CPU 版以复现已验证环境；如需 GPU，改用对应 CUDA 轮子。
+
+使用环境时（每个新终端）：
+
+```bash
+source /opt/ros/humble/setup.bash
+source .venv/bin/activate
+source install/setup.bash   # 编译后才能用本工作区的包
+```
 
 ---
 
