@@ -254,6 +254,13 @@ def generate_launch_description():
         output='screen', condition=is_pose_cmd_debug,
     )
 
+    # 电机状态控制 GUI：一键 使能/失能/故障复位（作用于整体 arm_node 的 Joint1-3）
+    motor_state_gui = Node(
+        package='robot_arm_driver', executable='motor_state_control_gui',
+        name='motor_state_control_gui', output='screen',
+        parameters=[{'namespaces': ['/arm_node'], 'labels': ['ARM']}],
+    )
+
     # Servo 模式：t=3s 安全姿态预移动（3s 运动），t=7s 启动 servo_node + 控制器
     ruckig_start = TimerAction(
         period=7.0,
@@ -292,6 +299,7 @@ def generate_launch_description():
             slider_ctrl, cartesian_ctrl, realtime_ctrl,
             ruckig_ik_ctrl, sphere_orbit_ctrl,
             pose_command_debug_ctrl, pose_command_publisher_node,
+            motor_state_gui,     # 电机状态控制 GUI（所有控制方式通用）
             move_to_safe_pose,   # Servo 模式专用（condition=needs_servo）
         ],
     )

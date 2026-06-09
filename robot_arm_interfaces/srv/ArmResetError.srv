@@ -1,0 +1,7 @@
+# ArmResetError.srv
+# 清除故障：使机械臂从 error 状态恢复到可控状态
+# 请求方：上层（Director）   应答方：机械臂驱动层
+---
+bool    success             # 是否成功清除
+uint8   cleared_error_code  # 清除前的错误码（对应 ArmStatus.ERR_*）
+string  message             # 失败原因或附加信息

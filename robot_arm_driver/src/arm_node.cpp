@@ -18,9 +18,9 @@
  *   /arm_node/set_home     — 将当前位置记为零点
  *
  * 启动方式：
- *   ros2 launch arm real.launch.py          # 随实物 launch 一键启动
- *   ros2 run arm arm_node \
- *     --ros-args --params-file install/arm/share/arm/config/arm.yaml
+ *   ros2 launch robot_arm_bringup real.launch.py          # 随实物 launch 一键启动
+ *   ros2 run robot_arm_driver arm_node \
+ *     --ros-args --params-file install/robot_arm_driver/share/robot_arm_driver/config/arm.yaml
  *
  * 参数文件：robot_arm_driver/config/arm.yaml
  *
@@ -74,6 +74,9 @@ public:
         pp_accel_                 = declare_parameter<double>("pp_accel", 5.0);
         pp_decel_                 = declare_parameter<double>("pp_decel", 5.0);
         motion_mode_              = declare_parameter<std::string>("motion_mode", "ip");
+        // 逐个关节使能之间的延时（ms）：错峰上电，降低三电机同时通电的瞬时涌流，
+        // 避免共用供电/USB 的摄像头因电压跌落而掉线。设为 0 即恢复同时使能。
+        enable_stagger_ms_        = declare_parameter<int>("enable_stagger_ms", 150);
         const bool auto_enable    = declare_parameter<bool>("auto_enable", true);
 
         // ── 各关节参数（等长数组） ────────────────────────────────────────────
@@ -235,6 +238,10 @@ private:
         bool ok = true;
         for (size_t i = 0; i < n_; ++i) {
             uint32_t max_vel_pp = converters_[i].radToVelPP(max_vel_[i]);
+            // setInterpolatedPositionMode 内部会接通功率级（controlword 0x000F），
+            // 逐个上电之间错峰，避免三电机同时通电的瞬时涌流
+            if (i > 0 && enable_stagger_ms_ > 0)
+                std::this_thread::sleep_for(std::chrono::milliseconds(enable_stagger_ms_));
             ok = drivers_[i]->setInterpolatedPositionMode(
                      static_cast<uint8_t>(ip_period_ms_), max_vel_pp) && ok;
         }
@@ -244,8 +251,13 @@ private:
     bool setAllPPMode()
     {
         bool ok = true;
-        for (size_t i = 0; i < n_; ++i)
+        for (size_t i = 0; i < n_; ++i) {
+            // enable() 接通功率级（controlword 0x000F）；逐个上电之间错峰，
+            // 避免三电机同时通电的瞬时涌流（见 enable_stagger_ms 参数）
+            if (i > 0 && enable_stagger_ms_ > 0)
+                std::this_thread::sleep_for(std::chrono::milliseconds(enable_stagger_ms_));
             ok = drivers_[i]->enable() && ok;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         for (size_t i = 0; i < n_; ++i) {
             uint32_t v = converters_[i].radToVelPP(max_vel_[i]);
@@ -522,6 +534,7 @@ private:
 
     size_t n_{3};
     int    ip_period_ms_{10};
+    int    enable_stagger_ms_{150};
     double pp_accel_{5.0};
     double pp_decel_{5.0};
     std::string motion_mode_{"ip"};

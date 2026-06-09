@@ -22,23 +22,23 @@
  *   发布  ~/mode（std_msgs/String）              — 当前运动模式名称
  *   发布  ~/status（diagnostic_msgs/DiagnosticStatus）— 就绪状态，100ms 周期
  *
- * 所有运动参数、零点策略、回零配置均通过 hardware_driver/config/motors.yaml 配置，更换电机无需改代码。
+ * 所有运动参数、零点策略、回零配置均通过 robot_arm_driver/config/motors.yaml 配置，更换电机无需改代码。
  * 多关节部署时，joint1 节点负责发送主站心跳（heartbeat_ms > 0），其余节点设为 0。
  *
  * 启动方式：
  *   单关节调试（无命名空间）：
- *     ros2 run arm arm_motor_node \
- *       --ros-args --params-file install/arm/share/arm/config/motors.yaml
+ *     ros2 run robot_arm_driver arm_motor_node \
+ *       --ros-args --params-file install/robot_arm_driver/share/robot_arm_driver/config/motors.yaml
  *     服务路径：/arm_motor_node/enable  /arm_motor_node/position_mode ...
  *
  *   多关节（加命名空间，推荐用 launch 文件）：
- *     ros2 launch arm motor.launch.py
+ *     ros2 launch robot_arm_bringup motor.launch.py
  *     服务路径：/joint1/arm_motor_node/enable  /joint2/arm_motor_node/enable ...
  *
  *   调试 GUI：
- *     ros2 run arm motor_test_gui
+ *     ros2 run robot_arm_driver motor_test_gui
  *
- * 所属模块：hardware_driver/src/
+ * 所属模块：robot_arm_driver/src/
  *
  * @version 1.3
  * @date 2026-05-27

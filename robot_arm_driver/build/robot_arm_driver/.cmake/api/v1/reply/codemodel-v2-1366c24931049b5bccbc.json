@@ -1,0 +1,115 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-5f7c07e5bd74f61d45ec.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.12"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6
+					]
+				}
+			],
+			"name" : "",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "robot_arm_driver",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "arm_motor_node::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-arm_motor_node-f081ec6cedfb9628e66b.json",
+					"name" : "arm_motor_node",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "arm_node::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-arm_node-2ceeaaaae1fd80e98a67.json",
+					"name" : "arm_node",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "canopen_motor_driver::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-canopen_motor_driver-9d6feff635f89ecb140b.json",
+					"name" : "canopen_motor_driver",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "robot_arm_driver_uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-robot_arm_driver_uninstall-58eb850bc7c9d752e873.json",
+					"name" : "robot_arm_driver_uninstall",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "set_encoder_zero::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-set_encoder_zero-1ce9fd253b99df63f200.json",
+					"name" : "set_encoder_zero",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "set_position_limit::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-set_position_limit-540c30e8525d2b4ce0a2.json",
+					"name" : "set_position_limit",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-uninstall-e9b90ebaf91fdd6e3a2f.json",
+					"name" : "uninstall",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "/home/qwe/E7009_ws/src/E7009/robot_arm/robot_arm_driver/build/robot_arm_driver",
+		"source" : "/home/qwe/E7009_ws/src/E7009/robot_arm/robot_arm_driver"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 3
+	}
+}

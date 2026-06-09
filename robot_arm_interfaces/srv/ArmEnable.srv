@@ -1,0 +1,7 @@
+# ArmEnable.srv
+# 伺服使能：上电 / 下电
+# 请求方：上层（Director）   应答方：机械臂驱动层
+bool    enable          # true=上电使能，false=下电
+---
+bool    success         # 是否执行成功
+string  message         # 失败原因或附加信息
