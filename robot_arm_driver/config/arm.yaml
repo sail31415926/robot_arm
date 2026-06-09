@@ -25,6 +25,8 @@ arm_node:
     pp_decel:         1.0         # PP 模式减速度（rad/s²），写入驱动器 0x6084
     feedback_fast_ms: 20          # 位置反馈周期（ms），50 Hz
     auto_enable:      true        # 启动时自动使能并切换对应模式
+    enable_stagger_ms: 150        # 逐个关节使能之间的延时（ms）：错峰上电降低瞬时涌流，
+                                  # 避免共用供电/USB 的摄像头掉线；设为 0 恢复同时使能
 
     # ── 各关节参数（等长数组，顺序对应 Joint1 / Joint2 / Joint3）─────────────
     joint_names:

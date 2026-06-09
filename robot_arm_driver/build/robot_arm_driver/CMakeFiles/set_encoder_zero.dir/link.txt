@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/set_encoder_zero.dir/src/set_encoder_zero.cpp.o -o set_encoder_zero  libcanopen_motor_driver.a 

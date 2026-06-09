@@ -15,7 +15,7 @@
  *   velocity_rad_s = velocity_pp_s × 2π / counts_per_rev
  *   accel_rad_s2  = accel_pp_s2  × 2π / counts_per_rev
  *
- * 所属模块：hardware_driver/include/canopen_motor_driver/
+ * 所属模块：robot_arm_driver/include/canopen_motor_driver/
  *
  * @version 1.1
  * @date 2026-05-27

@@ -1,0 +1,169 @@
+# RB200-CA 机器人关节模组参数配置（VEICHI 伟创）
+# 更新日期：2026-05-28
+#
+# ─── 通用参数 ──────────────────────────────────────────────────────────────────
+#   can_interface     SocketCAN 接口名，通常为 can0
+#   node_id           CANopen 从站节点 ID（1~127），需与驱动器 Pn080 一致
+#   joint_name        关节名称，发布到 ~/joint_states 的 name 字段
+#   sdo_timeout_ms    SDO 请求超时（ms），默认 500
+#
+# ─── 编码器 ────────────────────────────────────────────────────────────────────
+#   counts_per_rev    输出轴每圈编码器计数（pp/rev）
+#                     RB200-CA 型号 D-JM 实测校准：
+#                       电机端 17-bit（131072/rev），减速机端 19-bit（524288/rev）
+#                       0x6064 = 减速机端编码器，0x6091 = 1/1
+#                       → counts_per_rev = 2^19 = 524288
+#
+# ─── 位置 / 速度模式（PP / PV）────────────────────────────────────────────────
+#   profile_velocity  轮廓速度上限（rad/s）
+#   profile_accel     加速度（rad/s²）—— 关键：直接决定峰值扭矩需求
+#                       重载关节须调低，否则跟随误差过大报 ER.D00
+#   profile_decel     减速度（rad/s²）
+#
+# ─── 力矩模式（PT，4-PT）──────────────────────────────────────────────────────
+#   rated_torque      额定力矩（Nm），查规格书；用于 0x6077 反馈换算和 PT 模式指令换算
+#   max_torque        PP/PV/PT 模式力矩上限，额定力矩的倍数（0.0~3.0）
+#                       1.0 = 额定力矩，3.0 = 峰值力矩（0x6072）
+#                       重载关节建议 2.0~3.0；轻载可用 1.0
+#   torque_slope_ms   PT 模式力矩斜坡时间（ms），0 = 立即到达（0x6087）
+#
+# ─── 插补位置模式（IP，7-IP）──────────────────────────────────────────────────
+#   ip_period_ms      插补周期（ms），驱动器在每个周期接收一个位置点并做平滑插补
+#                       主站须以相同频率持续发布 ~/cmd_pos，停止发布则保持最后位置
+#                       典型值：10ms（100Hz）（0x60C2:01/02）
+#
+# ─── 零点 ──────────────────────────────────────────────────────────────────────
+#   zero_on_start     true = 上电时自动将当前位置记为零点（软件偏移，不写驱动器）
+#
+# ─── 回零模式（HM，6-HM）──────────────────────────────────────────────────────
+#   homing_method     回零方式（0x6098），1~35，见手册 3.4 节
+#                       常用：1 = 负向找限位，2 = 正向找限位，35 = 当前位置清零
+#   homing_fast_vel   高速搜索段速度（rad/s），用于粗定位限位开关（0x6099:01）
+#   homing_slow_vel   低速找原点段速度（rad/s），用于精确定位（0x6099:02）
+#   homing_accel      回零加减速（rad/s²），（0x609A）
+#   homing_offset     原点偏置（rad），机械原点相对机械零点的偏移（0x607C）
+#   homing_timeout_ms 回零超时（ms），超时视为失败
+#
+# ─── 多关节心跳（CAN 总线主站管理）─────────────────────────────────────────────
+#   heartbeat_ms      主站心跳发送周期（ms）
+#                       多关节部署时，仅 joint1 设非零值（建议 100ms）
+#                       joint2/joint3 设 0，避免多节点重复发送心跳帧 0x7FF
+#   master_node_id    主站 CANopen 节点 ID，默认 127（0x7F）
+#                       驱动器心跳消费者（0x1016）监视此 ID
+#
+# ─── 反馈周期 ──────────────────────────────────────────────────────────────────
+#   feedback_fast_ms  快反馈周期（ms），仅读位置（1次SDO），默认 10ms
+#                       与 IP 插补周期对齐；慢反馈（速度/力矩/状态字）固定 200ms
+#
+# ─── 驱动器增益调试要点（VCSDSoft_L Pn1xx 组）──────────────────────────────────
+#   Pn100 转动惯量比  负载/电机惯量比值（%），默认 100
+#                       重载关节建议 200~400；过大（>500）会引起振动
+#   Pn101 速度环Kv    速度响应增益（Hz），默认 40
+#   Pn103 位置环Kp    位置响应增益（1/s），默认 40；与 Pn100 配合调整
+#   注意：Pn030/Pn033（驱动器内部软限位）若被设置非零值，会阻止运动，需清零
+#
+# ─── 启动方式 ──────────────────────────────────────────────────────────────────
+#   多关节一键启动（推荐）：
+#     ros2 launch arm motor.launch.py
+#
+#   单关节调试（无命名空间）：
+#     ros2 run arm arm_motor_node \
+#       --ros-args --params-file install/arm/share/arm/config/motors.yaml
+#
+#   调试 GUI：
+#     ros2 run arm motor_test_gui
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 无命名空间默认配置（单关节调试用）
+# ──────────────────────────────────────────────────────────────────────────────
+arm_motor_node:
+  ros__parameters:
+    can_interface:     "can0"
+    node_id:           1
+    joint_name:        "joint_1"
+    sdo_timeout_ms:    500
+    counts_per_rev:    524288
+    profile_velocity:  0.3            # rad/s（带载调低）
+    profile_accel:     0.1            # rad/s²（关键：加速度直接决定所需扭矩）
+    profile_decel:     0.1            # rad/s²
+    rated_torque:      5.0            # Nm
+    max_torque:        2.0            # 额定倍数（带载用 2.0 ~ 3.0 倍峰值扭矩）
+    torque_slope_ms:   0              # ms，0=立即到达
+    ip_period_ms:      10             # IP 插补周期 ms，需与发布频率匹配
+    zero_on_start:     false
+    homing_method:     1              # 1=负向找限位，35=当前位置清零
+    homing_fast_vel:   0.3            # rad/s
+    homing_slow_vel:   0.05           # rad/s
+    homing_accel:      0.2            # rad/s²
+    homing_offset:     0.0            # rad
+    homing_timeout_ms: 30000          # ms
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 多关节配置
+# ──────────────────────────────────────────────────────────────────────────────
+/joint1/arm_motor_node:
+  ros__parameters:
+    can_interface:     "can0"
+    node_id:           1
+    joint_name:        "joint_1"
+    sdo_timeout_ms:    500
+    counts_per_rev:    524288
+    profile_velocity:  0.5            # rad/s（重载调低）
+    profile_accel:     0.2           # rad/s²（重载低加速度）
+    profile_decel:     0.2           # rad/s²
+    rated_torque:      5.0            # Nm
+    max_torque:        2.0            # 额定倍数（重载提高峰值扭矩上限）
+    torque_slope_ms:   0              # ms
+    zero_on_start:     false
+    homing_method:     1
+    homing_fast_vel:   0.3            # rad/s
+    homing_slow_vel:   0.05           # rad/s
+    homing_accel:      0.2            # rad/s²
+    homing_offset:     0.0            # rad
+    homing_timeout_ms: 30000          # ms
+    master_node_id:    127
+    heartbeat_ms:      100            # joint1 作为主站，负责发心跳
+
+/joint2/arm_motor_node:
+  ros__parameters:
+    can_interface:     "can0"
+    node_id:           2
+    joint_name:        "joint_2"
+    sdo_timeout_ms:    500
+    counts_per_rev:    524288
+    profile_velocity:  0.5            # rad/s
+    profile_accel:     0.2            # rad/s²
+    profile_decel:     0.2            # rad/s²
+    rated_torque:      20.0            # Nm
+    max_torque:        1.0            # 额定倍数（0~3.0）
+    torque_slope_ms:   0              # ms
+    zero_on_start:     false
+    homing_method:     1
+    homing_fast_vel:   0.3            # rad/s
+    homing_slow_vel:   0.05           # rad/s
+    homing_accel:      0.2            # rad/s²
+    homing_offset:     0.0            # rad
+    homing_timeout_ms: 30000          # ms
+    heartbeat_ms:      0              # 不发心跳，由 joint1 统一发送
+
+/joint3/arm_motor_node:
+  ros__parameters:
+    can_interface:     "can0"
+    node_id:           3
+    joint_name:        "joint_3"
+    sdo_timeout_ms:    500
+    counts_per_rev:    524288
+    profile_velocity:  0.5            # rad/s
+    profile_accel:     0.2            # rad/s²
+    profile_decel:     0.2            # rad/s²
+    rated_torque:      5.0            # Nm
+    max_torque:        1.0            # 额定倍数（0~3.0）
+    torque_slope_ms:   0              # ms
+    zero_on_start:     false
+    homing_method:     1
+    homing_fast_vel:   0.3            # rad/s
+    homing_slow_vel:   0.05           # rad/s
+    homing_accel:      0.2            # rad/s²
+    homing_offset:     0.0            # rad
+    homing_timeout_ms: 30000          # ms
+    heartbeat_ms:      0              # 不发心跳，由 joint1 统一发送

@@ -16,7 +16,7 @@
  *   - 回零模式 HM（6），支持等待期间心跳回调
  *   - 位置 / 速度 / 力矩 / 状态字反馈读取
  *
- * 所属模块：hardware_driver/src/
+ * 所属模块：robot_arm_driver/src/
  *
  * @version 1.1
  * @date 2026-05-27

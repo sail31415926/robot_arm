@@ -30,7 +30,7 @@
  *   进程需要 CAP_NET_RAW，编译后执行一次：
  *   sudo setcap cap_net_raw+ep <可执行文件路径>
  *
- * 所属模块：hardware_driver/include/canopen_motor_driver/
+ * 所属模块：robot_arm_driver/include/canopen_motor_driver/
  *
  * @version 1.1
  * @date 2026-05-27
