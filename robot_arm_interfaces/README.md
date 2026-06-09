@@ -1,6 +1,6 @@
 # robot_arm_interfaces
 
-机械臂**上层（Director）↔ 中间层（Motion Executor）** 的语义级接口定义。
+机械臂**上层（Director）↔ 中间层（Arm Commander）** 的语义级接口定义。
 不面向硬件驱动层 —— 驱动层使用标准消息（`JointState` / `JointTrajectory` /
 `Float64` / `DiagnosticStatus`），与本包解耦。
 
@@ -9,7 +9,7 @@
 三个角色：
 
 - **Director（上层）** —— 决策、语义意图（"去拍摄位""做个环绕"）
-- **Motion Executor（中间层，`robot_arm_node`）** —— 笛卡尔规划 / IK / 轨迹生成
+- **Arm Commander（中间层，`arm_commander` 节点 / `robot_arm_node` 包）** —— 笛卡尔规划 / IK / 轨迹生成
 - **Driver（下层，`robot_arm_driver`）** —— CANopen 硬件控制
 
 ```text
@@ -20,7 +20,7 @@
                  │        │                    │ (运维直达驱动)
                  ↓        │                    │
        ┌──────────────────────────┐            │
-       │ Motion Executor (中间层)  │            │
+       │ Arm Commander (中间层)    │            │
        └──────────────────────────┘            │
    JointTrajectory ↓   ↑ JointState            ↓
                  │     │              ┌──────────────────┐
@@ -31,9 +31,9 @@
 
 数据流向规律：
 
-- **运动类（topic / action）** 走 Director ↔ Motion Executor（需要 IK / 规划）。
+- **运动类（topic / action）** 走 Director ↔ Arm Commander（需要 IK / 规划）。
 - **运维类（service）** 由 Director 直达 Driver（上电 / 回零 / 清错是硬件操作）。
-- Motion Executor 向下用关节级标准消息（`JointTrajectory` / `Float64`），
+- Arm Commander 向下用关节级标准消息（`JointTrajectory` / `Float64`），
   向上把驱动反馈（`JointState` / `DiagnosticStatus`）合成为语义级 `ArmStatus`。
 
 ## 通信模式选择原则
@@ -56,9 +56,9 @@
 ### Topic（持续流）
 
 - `ArmFollowCommand`（msg）—— 末端速度跟随（`ArmTwist`），持续速度流（如视觉伺服 / 跟随）
-  - 方向：**Director → Motion Executor**
+  - 方向：**Director → Arm Commander**
 - `ArmStatus`（msg）—— 位姿（`ArmPose`）、速度（`ArmTwist`）、运动中、到位、错误码、命令执行结果（周期广播）
-  - 方向：**Motion Executor → Director**
+  - 方向：**Arm Commander → Director**
 
 ### Service（请求-应答）
 
@@ -72,7 +72,7 @@
 
 - `ArmMoveToPose`（action）—— 姿态切换（收纳/观察/拍摄），等待到位
 - `ArmExecuteMotion`（action）—— 运镜（抬升/推拉/横移/环绕），等待完成
-- 方向：**goal：Director(client) → Motion Executor(server)；feedback·result：Motion Executor → Director**
+- 方向：**goal：Director(client) → Arm Commander(server)；feedback·result：Arm Commander → Director**
 
 `ArmStatus.executing_command_id` 回显命令的 `command_id`，配合
 `command_result`（EXECUTING/SUCCEEDED/FAILED/ABORTED）让上层确认某条离散命令的结果。
@@ -86,7 +86,7 @@
 
 ## 已知缺口 / 后续
 
-- **Motion Executor 消费节点尚未落地**：本包接口需要一个节点把语义命令翻译为
+- **Arm Commander 消费节点尚未落地**：本包接口需要一个节点把语义命令翻译为
   关节级命令、并把驱动反馈合成为 `ArmStatus`，否则链路未打通。
 - **服务端未实现**：service / 其余 action 的 server 端（`robot_arm_node` / `robot_arm_driver`）
   仍待实现，目前仅为接口定义。`ArmMoveToPose` 已有调试用 server/client

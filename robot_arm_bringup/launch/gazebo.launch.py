@@ -1,39 +1,35 @@
 """
 @file gazebo.launch.py
 @brief eMeetArm_models 机械臂 Gazebo 仿真启动文件
-@version 1.3
-@date 2026-06-03
+@version 1.4
+@date 2026-06-09
 
 @details 启动以下节点：
          - gzserver：物理仿真服务端（无 GPU 渲染，避免双窗口）
          - gzclient：渲染客户端（单独注入 NVIDIA PRIME 环境变量）
          - robot_state_publisher / spawn_entity / controllers / 控制 GUI
-         - move_group + rviz2（cartesian / realtime / ruckig_ik / sphere_orbit 时自动启动）
+         - move_group + rviz2（需要 IK 的控制方式时自动启动）
 
-         通过 controller 参数选择 9 种控制方式之一：
-           slider             → arm_slider_controller            (PyQt5 关节滑块，无需 MoveIt)
-           cartesian          → cartesian_controller             (MoveIt 笛卡尔直线规划)
-           realtime           → cartesian_realtime_controller    (滑块即时 IK)
-           ruckig             → cartesian_ruckig_streamer        (Ruckig 笛卡尔流式 + servo)
-           ruckig_ik          → cartesian_ruckig_ik_streamer     (Ruckig 点到点+平面环绕)
-           sphere_orbit       → spherical_orbit_streamer         (球面坐标环绕运镜)
-           velocity           → cartesian_velocity_controller    (笛卡尔速度接口，手动点动)
-           ibvs_control       → velocity + red_box_detector
-                                + ibvs_control_node             (红色方块 IBVS 闭环)
-           pose_command_debug → pose_command_debug               (PoseCommand 接口调试)
+         通过 controller 参数选择控制方式（参数名 = 对应 GUI 名去掉 _gui 后缀）：
+           joint_position        → joint_position_gui          (PyQt5 关节滑块，无需 MoveIt)
+           cartesian_moveit      → cartesian_moveit_gui        (MoveIt 笛卡尔直线规划)
+           cartesian_realtime_ik → cartesian_realtime_ik_gui   (滑块即时 IK)
+           cartesian_trajectory  → cartesian_trajectory_gui    (Ruckig 点到点 + 环绕，批量 IK)
+           spherical_orbit       → spherical_orbit_gui         (球面坐标环绕运镜)
+           cartesian_velocity    → cartesian_velocity_gui      (笛卡尔速度接口，手动点动，MoveIt Servo)
+           ibvs_control          → cartesian_velocity_gui + red_box_detector
+                                   + ibvs_control_node          (红色方块 IBVS 闭环)
          MoveIt 由本文件自动 include，无需额外启动 moveit.launch.py。
 
          示例：
-           ros2 launch robot_arm_bringup gazebo.launch.py                                         # 默认 slider
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=slider                      # 关节滑块
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian                   # MoveIt 笛卡尔直线
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=realtime                    # 滑块即时 IK
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ruckig                      # Ruckig 笛卡尔流
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ruckig_ik                   # Ruckig 点到点+环绕
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=sphere_orbit                # 球面轨道运镜
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=velocity                    # 笛卡尔速度（手动点动）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control                # 红色方块 IBVS
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=pose_command_debug          # PoseCommand 调试
+           ros2 launch robot_arm_bringup gazebo.launch.py                                              # 默认 joint_position
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=joint_position                   # 关节滑块
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_moveit                 # MoveIt 笛卡尔直线
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_realtime_ik            # 滑块即时 IK
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_trajectory             # Ruckig 点到点+环绕
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=spherical_orbit                  # 球面轨道运镜
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_velocity               # 笛卡尔速度（手动点动）
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control                     # 红色方块 IBVS
 
 @copyright Copyright (c) 2026 eMeet
 """
@@ -81,7 +77,7 @@ def generate_launch_description():
     robot_description = re.sub(r'<!--.*?-->', '', robot_description, flags=re.DOTALL)
     robot_description = ' '.join(robot_description.split())
 
-    # ── MoveIt Servo 用到的额外资源（仅 controller:=ruckig 时使用） ───────────
+    # ── MoveIt Servo 用到的额外资源（servo 模式：cartesian_velocity / ibvs_control）─
     with open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf'), 'r') as f:
         srdf_content = f.read()
     servo_params = {
@@ -94,11 +90,12 @@ def generate_launch_description():
         'robot_description_planning': _load_yaml(os.path.join(desc_share, 'config', 'joint_limits.yaml')),
     }
 
-    # ── 控制方式参数 ──────────────────────────────────────────────────────────
+    # ── 控制方式参数（参数名 = 对应 GUI 名去掉 _gui 后缀）──────────────────────
     controller_arg = DeclareLaunchArgument(
         'controller',
-        default_value='slider',
-        description='控制方式: slider | cartesian | realtime | ruckig | ruckig_ik | sphere_orbit | velocity | ibvs_control | pose_command_debug',
+        default_value='joint_position',
+        description=('控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
+                     'cartesian_trajectory | spherical_orbit | cartesian_velocity | ibvs_control'),
     )
     ctrl = LaunchConfiguration('controller')
 
@@ -112,28 +109,18 @@ def generate_launch_description():
                 PythonExpression(["'", ctrl, "' == '", mode_name, "'"])),
         )
 
-    slider_ctrl            = controller_node('slider',             'arm_slider_controller')
-    cartesian_ctrl         = controller_node('cartesian',         'cartesian_controller')
-    realtime_ctrl          = controller_node('realtime',          'cartesian_realtime_controller')
-    ruckig_ctrl            = controller_node('ruckig',            'cartesian_ruckig_streamer')
-    ruckig_ik_ctrl         = controller_node('ruckig_ik',         'cartesian_ruckig_ik_streamer')
-    sphere_orbit_ctrl      = controller_node('sphere_orbit',      'spherical_orbit_streamer')
-    velocity_ctrl          = controller_node('velocity',          'cartesian_velocity_controller')
-    pose_command_debug_ctrl = controller_node('pose_command_debug', 'pose_command_debug')
-    is_pose_cmd_debug = IfCondition(
-        PythonExpression(["'", ctrl, "' == 'pose_command_debug'"])
-    )
-    pose_command_publisher_node = Node(
-        package='robot_arm_node',
-        executable='pose_command_publisher',
-        output='screen',
-        condition=is_pose_cmd_debug,
-    )
+    joint_position_ctrl    = controller_node('joint_position',        'joint_position_gui')
+    cartesian_moveit_ctrl  = controller_node('cartesian_moveit',      'cartesian_moveit_gui')
+    realtime_ik_ctrl       = controller_node('cartesian_realtime_ik', 'cartesian_realtime_ik_gui')
+    trajectory_ctrl        = controller_node('cartesian_trajectory',  'cartesian_trajectory_gui')
+    spherical_orbit_ctrl   = controller_node('spherical_orbit',       'spherical_orbit_gui')
+    velocity_ctrl          = controller_node('cartesian_velocity',    'cartesian_velocity_gui')
 
-    # ── MoveIt（需要 IK 的控制方式：cartesian / realtime / ruckig_ik / sphere_orbit）
+    # ── MoveIt（需要 IK 的控制方式）────────────────────────────────────────────
     needs_moveit = IfCondition(
         PythonExpression([
-            "'", ctrl, "' in ['cartesian','realtime','ruckig_ik','sphere_orbit','pose_command_debug']"
+            "'", ctrl, "' in ['cartesian_moveit','cartesian_realtime_ik',"
+            "'cartesian_trajectory','spherical_orbit']"
         ])
     )
     moveit_launch_path = os.path.join(bringup_share, 'launch', 'moveit.launch.py')
@@ -143,13 +130,12 @@ def generate_launch_description():
         condition=needs_moveit,
     )
 
-    # ── MoveIt Servo 条件 ────────────────────────────────────────────────────
-    is_ruckig       = IfCondition(PythonExpression(["'", ctrl, "' == 'ruckig'"]))
-    is_velocity     = IfCondition(PythonExpression(["'", ctrl, "' == 'velocity'"]))
+    # ── MoveIt Servo 条件（cartesian_velocity / ibvs_control）─────────────────
+    is_velocity     = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
     is_ibvs_control = IfCondition(PythonExpression(["'", ctrl, "' == 'ibvs_control'"]))
     needs_servo = IfCondition(
         PythonExpression([
-            "'", ctrl, "' in ['ruckig','velocity','ibvs_control']"
+            "'", ctrl, "' in ['cartesian_velocity','ibvs_control']"
         ])
     )
 
@@ -188,12 +174,6 @@ def generate_launch_description():
         condition=needs_servo,
     )
 
-    ruckig_start_after_pose = TimerAction(
-        period=4.0,
-        actions=[make_servo_node(is_ruckig), ruckig_ctrl],
-        condition=is_ruckig,
-    )
-
     velocity_start_after_pose = TimerAction(
         period=4.0,
         actions=[make_servo_node(is_velocity, check_collisions=False),
@@ -206,7 +186,7 @@ def generate_launch_description():
         period=4.0,
         actions=[
             make_servo_node(is_ibvs_control, check_collisions=False),
-            Node(package='robot_arm_node', executable='cartesian_velocity_controller',
+            Node(package='robot_arm_node', executable='cartesian_velocity_gui',
                  output='screen', condition=is_ibvs_control),
             Node(package='robot_arm_node', executable='red_box_detector',
                  output='screen',
@@ -299,14 +279,11 @@ def generate_launch_description():
         RegisterEventHandler(
             OnProcessExit(
                 target_action=arm_controller_spawner,
-                on_exit=[slider_ctrl, cartesian_ctrl, realtime_ctrl,
+                on_exit=[joint_position_ctrl, cartesian_moveit_ctrl, realtime_ik_ctrl,
                          move_to_safe_pose,
-                         ruckig_start_after_pose,
                          velocity_start_after_pose,
                          ibvs_control_start_after_pose,
-                         ruckig_ik_ctrl, sphere_orbit_ctrl,
-                         pose_command_debug_ctrl,
-                         pose_command_publisher_node],
+                         trajectory_ctrl, spherical_orbit_ctrl],
             )
         ),
     ])

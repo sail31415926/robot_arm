@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-@file   arm_slider_controller.py
+@file   joint_position_gui.py
 @brief  eMeetArm_models 6轴机械臂关节滑块控制 GUI
 @version 1.0
 @date   2026-06-04
@@ -13,7 +13,7 @@
          - 支持可调运动时间与一键回零位功能
 
 用法：
-  ros2 run robot_arm_node arm_slider_controller
+  ros2 run robot_arm_node joint_position_gui
   ros2 launch robot_arm_bringup gazebo.launch.py controller:=slider
   ros2 launch robot_arm_bringup mujoco.launch.py controller:=slider
   ros2 launch robot_arm_bringup real.launch.py   controller:=slider
@@ -21,15 +21,9 @@
 @copyright Copyright (c) 2026 eMeet
 """
 
-import math
 import sys
 import threading
 import rclpy
-from rclpy.node import Node
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from sensor_msgs.msg import JointState
-from builtin_interfaces.msg import Duration
-from tf2_ros import TransformListener, Buffer
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QSlider, QDoubleSpinBox, QPushButton,
@@ -38,7 +32,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer
 from PyQt5.QtGui import QFont
 
-JOINT_NAMES = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
+from joint_position_controller_node import JointPositionControllerNode, JOINT_NAMES
+
 JOINT_LIMITS = [
     (-3.1,    3.1),
     (-0.8,    3.14),
@@ -55,60 +50,8 @@ class RosSignals(QObject):
     end_effector_received = pyqtSignal(float, float, float, float, float, float)
 
 
-class ArmSliderNode(Node):
-    def __init__(self, signals: RosSignals):
-        super().__init__('arm_slider_controller')
-        self.signals = signals
-        self.publisher = self.create_publisher(
-            JointTrajectory, '/arm_controller/joint_trajectory', 10)
-        self.create_subscription(JointState, '/joint_states', self._on_joint_state, 10)
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.create_timer(0.1, self._publish_end_effector)
-
-    def _on_joint_state(self, msg: JointState):
-        name_to_idx = {n: i for i, n in enumerate(msg.name)}
-        positions, velocities = [], []
-        for name in JOINT_NAMES:
-            idx = name_to_idx.get(name)
-            positions.append(msg.position[idx] if idx is not None and idx < len(msg.position) else 0.0)
-            velocities.append(msg.velocity[idx] if idx is not None and idx < len(msg.velocity) else 0.0)
-        self.signals.joint_state_received.emit(positions, velocities)
-
-    def _publish_end_effector(self):
-        try:
-            t = self.tf_buffer.lookup_transform('base_link', 'tool0', rclpy.time.Time())
-            tr = t.transform.translation
-            q = t.transform.rotation
-            # quaternion → RPY (rad)
-            sinr = 2.0 * (q.w * q.x + q.y * q.z)
-            cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
-            roll = math.atan2(sinr, cosr)
-            sinp = 2.0 * (q.w * q.y - q.z * q.x)
-            pitch = math.asin(max(-1.0, min(1.0, sinp)))
-            siny = 2.0 * (q.w * q.z + q.x * q.y)
-            cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-            yaw = math.atan2(siny, cosy)
-            self.signals.end_effector_received.emit(
-                tr.x, tr.y, tr.z,
-                math.degrees(roll), math.degrees(pitch), math.degrees(yaw),
-            )
-        except Exception:
-            pass
-
-    def publish_trajectory(self, positions: list[float], duration_sec: float):
-        msg = JointTrajectory()
-        msg.joint_names = JOINT_NAMES
-        pt = JointTrajectoryPoint()
-        pt.positions = positions
-        secs = int(duration_sec)
-        pt.time_from_start = Duration(sec=secs, nanosec=int((duration_sec - secs) * 1e9))
-        msg.points = [pt]
-        self.publisher.publish(msg)
-
-
 class MainWindow(QMainWindow):
-    def __init__(self, node: ArmSliderNode):
+    def __init__(self, node: JointPositionControllerNode, signals: RosSignals):
         super().__init__()
         self.node = node
         self.setWindowTitle('eMeet 6轴机械臂关节控制器')
@@ -134,8 +77,8 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(
             '发布: /arm_controller/joint_trajectory  |  订阅: /joint_states')
 
-        node.signals.joint_state_received.connect(self._on_joint_state)
-        node.signals.end_effector_received.connect(self._on_end_effector)
+        signals.joint_state_received.connect(self._on_joint_state)
+        signals.end_effector_received.connect(self._on_end_effector)
 
     def _build_joint_group(self) -> QGroupBox:
         box = QGroupBox('关节控制')
@@ -349,13 +292,17 @@ class MainWindow(QMainWindow):
 
 def main():
     rclpy.init()
+    app = QApplication(sys.argv)
     signals = RosSignals()
-    node = ArmSliderNode(signals)
+    node = JointPositionControllerNode(
+        on_joint_state=lambda pos, vel: signals.joint_state_received.emit(pos, vel),
+        on_end_effector=lambda x, y, z, ro, pi, ya:
+            signals.end_effector_received.emit(x, y, z, ro, pi, ya),
+    )
 
     threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
 
-    app = QApplication(sys.argv)
-    win = MainWindow(node)
+    win = MainWindow(node, signals)
     win.show()
     app.exec_()
 

@@ -93,13 +93,13 @@ src/E7009/robot_arm/
 │   ├── scripts/
 │   │   ├── arm_utils.py               # 通用四元数数学工具（rpy_to_quat / quat_slerp 等）
 │   │   ├── controllers/
-│   │   │   ├── arm_slider_controller.py          # 关节滑块控制 GUI（PyQt5）
-│   │   │   ├── cartesian_controller.py           # 笛卡尔精确路径控制 GUI（tkinter）
-│   │   │   ├── cartesian_realtime_controller.py  # 实时笛卡尔 IK 控制 GUI（tkinter）
-│   │   │   ├── cartesian_ruckig_streamer.py      # Ruckig OTG + MoveIt Servo（TwistStamped 流控）
-│   │   │   ├── cartesian_ruckig_ik_streamer.py   # Ruckig OTG + 批量 IK + JointTrajectory
-│   │   │   ├── cartesian_velocity_controller.py  # 笛卡尔速度控制器（IBVS 接口）
-│   │   │   └── spherical_orbit_streamer.py       # 球面轨道相机对中控制
+│   │   │   ├── joint_position_gui.py             # 关节滑块位置控制 GUI（PyQt5）
+│   │   │   ├── cartesian_moveit_gui.py           # MoveIt 笛卡尔精确路径 GUI（tkinter）
+│   │   │   ├── cartesian_realtime_ik_gui.py      # 实时笛卡尔 IK 控制 GUI（tkinter）
+│   │   │   ├── cartesian_servo_gui.py            # Ruckig OTG + MoveIt Servo（TwistStamped 流控）
+│   │   │   ├── cartesian_trajectory_gui.py       # Ruckig OTG + 批量 IK + JointTrajectory
+│   │   │   ├── cartesian_velocity_gui.py         # 笛卡尔速度控制器（IBVS 接口）
+│   │   │   └── spherical_orbit_gui.py            # 球面轨道相机对中控制
 │   │   ├── simulation/
 │   │   │   ├── mujoco_node.py                    # MuJoCo ↔ ROS 2 桥接节点
 │   │   │   └── mujoco_data_recorder.py           # MuJoCo 仿真数据采集（IRIS 训练格式）

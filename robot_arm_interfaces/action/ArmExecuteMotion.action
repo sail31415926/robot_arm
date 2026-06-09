@@ -1,7 +1,7 @@
 # ArmExecuteMotion.action
 # 机械臂运镜动作：执行一段运镜（抬升/推拉/横移/环绕）并等待完成
 # 客户端：上层（Director）
-# 服务端：Motion Executor（robot_arm_node 包）
+# 服务端：Arm Commander（arm_commander 节点，robot_arm_node 包）
 #
 # exit_reason: "reached" | "timeout" | "cancelled" | "error"
 #
