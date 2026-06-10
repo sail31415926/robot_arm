@@ -48,7 +48,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 from robot_arm_interfaces.action import ArmMoveToPose, ArmTrajectoryShot
 from robot_arm_interfaces.msg import ArmFollowCommand, ArmStatus
-from robot_arm_interfaces.srv import ArmStop
+from robot_arm_interfaces.srv import ArmStop, ArmEnable, ArmHoming, ArmResetError
 
 from commander.move_to_pose_server import MoveToPoseServer
 from commander.trajectory_shot_server import TrajectoryShotServer
@@ -92,7 +92,13 @@ TOPIC_FOLLOW_CMD   = '/robot_arm/follow_command'
 TOPIC_ARM_STATUS   = '/robot_arm/arm_status'
 ACTION_MOVE_TO_POSE   = '/robot_arm/move_to_pose'
 ACTION_TRAJECTORY_SHOT  = '/robot_arm/trajectory_shot'
-SERVICE_ARM_STOP      = '/robot_arm/stop'
+SERVICE_ARM_STOP        = '/robot_arm/stop'
+SERVICE_ARM_ENABLE      = '/robot_arm/enable'
+SERVICE_ARM_HOMING      = '/robot_arm/homing'
+SERVICE_ARM_RESET_ERROR = '/robot_arm/reset_error'
+
+HOMING_JOINTS    = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+HOMING_DURATION  = 4.0   # 秒
 
 
 class ArmCommanderNode(Node):
@@ -124,6 +130,7 @@ class ArmCommanderNode(Node):
         self._gui_q        = gui_q
         self._active_goal  = None              # 当前执行的 goal handle（用于 cancel）
         self._goal_lock    = threading.Lock()
+        self._cmd_counter  = 0                 # 自增命令 ID，供 ArmStatus 关联
 
         # ── 回调组（允许 action + topic 并行）──────────────────────────────────
         self._cb_group = ReentrantCallbackGroup()
@@ -160,12 +167,28 @@ class ArmCommanderNode(Node):
         self._status_pub  = self.create_publisher(ArmStatus, TOPIC_ARM_STATUS, 10)
         self._status_timer = self.create_timer(0.1, self._publish_status)   # 10Hz
 
-        # ── 服务：ArmStop（急停 + 从 ERROR/STOPPED 复位到 IDLE）───────────────
+        # ── 服务 ────────────────────────────────────────────────────────────────
         self._stop_srv = self.create_service(
             ArmStop, SERVICE_ARM_STOP,
             self._on_arm_stop,
             callback_group=self._cb_group,
         )
+        self._enable_srv = self.create_service(
+            ArmEnable, SERVICE_ARM_ENABLE,
+            self._on_arm_enable,
+            callback_group=self._cb_group,
+        )
+        self._homing_srv = self.create_service(
+            ArmHoming, SERVICE_ARM_HOMING,
+            self._on_arm_homing,
+            callback_group=self._cb_group,
+        )
+        self._reset_error_srv = self.create_service(
+            ArmResetError, SERVICE_ARM_RESET_ERROR,
+            self._on_arm_reset_error,
+            callback_group=self._cb_group,
+        )
+        self._enabled = False   # 伺服使能状态
 
         # ── 参数声明 ────────────────────────────────────────────────────────────
         self.declare_parameter('pose_observe_x',  DEFAULT_POSE_OBSERVE['x'])
@@ -191,6 +214,7 @@ class ArmCommanderNode(Node):
         with self._state_lock:
             old = self._state
             self._state = new_state
+        self.status.set_moving(new_state == CommanderState.MOVING)
         self.get_logger().info(f'状态: {STATE_NAME[old]} → {STATE_NAME[new_state]}')
         self._emit_gui('state', STATE_NAME[new_state])
 
@@ -218,32 +242,45 @@ class ArmCommanderNode(Node):
 
         self.get_logger().info('MoveToPose goal 已接受，开始执行')
         self._transition(CommanderState.MOVING)
+        self._cmd_counter += 1
+        cmd_id = self._cmd_counter
+        self.status.set_command_state(cmd_id, ArmStatus.RESULT_EXECUTING)
+        self.status.set_pose_state(goal.target_pose_state)   # 接受即更新，不等物理到位
 
         with self._goal_lock:
             self._active_goal = goal_handle
 
         try:
             result = self.move_to_pose_srv.execute(goal_handle)
-            self._transition(CommanderState.REACHED if result.success else CommanderState.ERROR)
             if result.success:
+                self._transition(CommanderState.REACHED)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_SUCCEEDED)
                 goal_handle.succeed()
+            elif result.exit_reason == 'cancelled':
+                self._transition(CommanderState.STOPPED)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
+                goal_handle.canceled()
             else:
+                self._transition(CommanderState.ERROR)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_FAILED)
+                self.status.set_error(result.error_code)
                 goal_handle.abort()
             return result
         except Exception as e:
             self.get_logger().error(f'MoveToPose 执行异常: {e}')
             goal_handle.abort()
             self._transition(CommanderState.ERROR)
+            self.status.set_command_state(cmd_id, ArmStatus.RESULT_FAILED)
+            self.status.set_error(ArmStatus.ERR_DRIVER)
             return ArmMoveToPose.Result()
         finally:
             with self._goal_lock:
                 self._active_goal = None
 
     def _on_mtp_cancel(self, cancel_request):
-        """取消请求回调。"""
+        """取消请求回调：仅停止运动，状态转换由 execute 回调统一处理。"""
         self.get_logger().info('收到 MoveToPose 取消请求')
         self.motion.stop()
-        self._transition(CommanderState.STOPPED)
         return CancelResponse.ACCEPT
 
     # ── ArmTrajectoryShot Action Server ──────────────────────────────────────────
@@ -258,53 +295,117 @@ class ArmCommanderNode(Node):
             return ArmTrajectoryShot.Result()
 
         self._transition(CommanderState.MOVING)
+        self._cmd_counter += 1
+        cmd_id = self._cmd_counter
+        self.status.set_command_state(cmd_id, ArmStatus.RESULT_EXECUTING)
+        # TrajectoryShot 不改变语义姿态状态，pose_state 保持上次 MTP 的值
+
         with self._goal_lock:
             self._active_goal = goal_handle
 
         try:
             result = self.trajectory_shot_srv.execute(goal_handle)
-            self._transition(CommanderState.REACHED if result.success else CommanderState.ERROR)
             if result.success:
+                self._transition(CommanderState.REACHED)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_SUCCEEDED)
                 goal_handle.succeed()
+            elif result.exit_reason == 'cancelled':
+                self._transition(CommanderState.STOPPED)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
+                goal_handle.canceled()
             else:
+                self._transition(CommanderState.ERROR)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_FAILED)
+                self.status.set_error(result.error_code)
                 goal_handle.abort()
             return result
         except Exception as e:
             self.get_logger().error(f'TrajectoryShot 执行异常: {e}')
             goal_handle.abort()
             self._transition(CommanderState.ERROR)
+            self.status.set_command_state(cmd_id, ArmStatus.RESULT_FAILED)
+            self.status.set_error(ArmStatus.ERR_DRIVER)
             return ArmTrajectoryShot.Result()
         finally:
             with self._goal_lock:
                 self._active_goal = None
 
     def _on_em_cancel(self, cancel_request):
+        """取消请求回调：仅停止运动，状态转换由 execute 回调统一处理。"""
         self.get_logger().info('收到 TrajectoryShot 取消请求')
         self.motion.stop()
-        self._transition(CommanderState.STOPPED)
         return CancelResponse.ACCEPT
 
-    # ── ArmStop 服务（急停 + 复位）────────────────────────────────────────────────
+    # ── ArmStop 服务（急停）──────────────────────────────────────────────────────
     def _on_arm_stop(self, _request, response):
-        """ArmStop service handler：
-        - MOVING → 急停 → STOPPED
-        - ERROR / STOPPED → 复位 → IDLE（不发额外停止指令）
-        """
+        """急停：MOVING → STOPPED。其他状态无需操作。"""
         current = self.state
         if current == CommanderState.MOVING:
             self.motion.stop()
             self._transition(CommanderState.STOPPED)
             response.success = True
-            response.message = f'已急停，状态 MOVING → STOPPED'
-        elif current in (CommanderState.ERROR, CommanderState.STOPPED):
+            response.message = '已急停，状态 MOVING → STOPPED'
+        else:
+            response.success = True
+            response.message = f'当前状态={STATE_NAME[current]}，无需急停'
+        self.get_logger().info(f'ArmStop: {response.message}')
+        return response
+
+    # ── ArmEnable 服务（伺服使能）────────────────────────────────────────────────
+    def _on_arm_enable(self, request, response):
+        """上电/下电。仿真层直接记录状态；实机由驱动层接管。"""
+        self._enabled = request.enable
+        state_str = '使能' if request.enable else '下电'
+        response.success = True
+        response.message = f'伺服已{state_str}'
+        self.get_logger().info(f'ArmEnable: {response.message}')
+        return response
+
+    # ── ArmHoming 服务（回零）────────────────────────────────────────────────────
+    def _on_arm_homing(self, _, response):
+        """执行回零：阻塞式走到全零关节位。仅 IDLE/REACHED 状态下允许执行。"""
+        current = self.state
+        if current not in (CommanderState.IDLE, CommanderState.REACHED):
+            response.success = False
+            response.message = f'拒绝回零：当前状态={STATE_NAME[current]}，非空闲'
+            self.get_logger().warn(f'ArmHoming: {response.message}')
+            return response
+
+        self._transition(CommanderState.MOVING)
+        self.motion.go_to_joints(HOMING_JOINTS, HOMING_DURATION)
+
+        import time
+        deadline = time.time() + HOMING_DURATION + 2.0
+        while time.time() < deadline:
+            joints = self.motion.get_current_joints()
+            if max(abs(j) for j in joints) < 0.05:
+                break
+            time.sleep(0.05)
+
+        self._transition(CommanderState.IDLE)
+        self.status.set_pose_state(ArmStatus.POSE_STATE_STOWED)
+        response.success = True
+        response.message = '回零完成'
+        self.get_logger().info(f'ArmHoming: {response.message}')
+        return response
+
+    # ── ArmResetError 服务（清除故障）────────────────────────────────────────────
+    def _on_arm_reset_error(self, _, response):
+        """从 ERROR/STOPPED 恢复到 IDLE，清除错误码。"""
+        current = self.state
+        if current in (CommanderState.ERROR, CommanderState.STOPPED):
+            cleared = self.status.get_error_code()
             self._transition(CommanderState.IDLE)
             self.status.clear_error()
+            self.status.set_command_state(0, ArmStatus.RESULT_NONE)
             response.success = True
+            response.cleared_error_code = cleared
             response.message = f'已复位，状态 {STATE_NAME[current]} → IDLE'
         else:
             response.success = True
-            response.message = f'当前状态={STATE_NAME[current]}，无需操作'
-        self.get_logger().info(f'ArmStop: {response.message}')
+            response.cleared_error_code = 0
+            response.message = f'当前状态={STATE_NAME[current]}，无故障需清除'
+        self.get_logger().info(f'ArmResetError: {response.message}')
         return response
 
     # ── ArmFollowCommand 订阅 ─────────────────────────────────────────────────────
