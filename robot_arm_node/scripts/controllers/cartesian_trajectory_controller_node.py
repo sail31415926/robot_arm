@@ -38,7 +38,8 @@ try:
 except ImportError as e:
     raise SystemExit('✗ 未找到 ruckig 库，请先安装：pip install ruckig') from e
 
-from arm_utils import rpy_to_quat, quat_to_rpy, quat_normalize, quat_dot, quat_slerp
+from arm_utils import (rpy_to_quat, quat_to_rpy, quat_normalize, quat_dot, quat_slerp,
+                        quat_mul, look_at_quat)
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 JOINT_NAMES    = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
@@ -68,78 +69,6 @@ PTP_PARAMS = [
     ('Pitch', '°',  -90.0,  90.0),
     ('Yaw',   '°', -180.0, 180.0),
 ]
-
-
-def quat_mul(q1, q2):
-    """四元数乘法 q1 * q2（body-frame 叠加旋转）"""
-    x1, y1, z1, w1 = q1;  x2, y2, z2, w2 = q2
-    return (w1*x2 + x1*w2 + y1*z2 - z1*y2,
-            w1*y2 - x1*z2 + y1*w2 + z1*x2,
-            w1*z2 + x1*y2 - y1*x2 + z1*w2,
-            w1*w2 - x1*x2 - y1*y2 - z1*z2)
-
-
-def look_at_quat(cam_x, cam_y, cam_z, tgt_x, tgt_y, tgt_z):
-    """
-    EEF z 轴从相机位置指向目标中心（look-at）。
-    使用世界 Z 作为 up hint；若 forward 接近竖直则退回世界 X。
-    返回 (qx, qy, qz, qw)。
-    """
-    dx, dy, dz = tgt_x - cam_x, tgt_y - cam_y, tgt_z - cam_z
-    n = math.sqrt(dx*dx + dy*dy + dz*dz)
-    if n < 1e-9:
-        return (0., 0., 0., 1.)
-    zx, zy, zz = dx/n, dy/n, dz/n          # z 列（forward）
-
-    # up hint：接近竖直时换 X 轴避免退化
-    if abs(zz) < 0.999:
-        ux, uy, uz = 0., 0., 1.
-    else:
-        ux, uy, uz = 1., 0., 0.
-
-    # x 列（right）= z × up
-    xx = zy*uz - zz*uy
-    xy = zz*ux - zx*uz
-    xz = zx*uy - zy*ux
-    xn = math.sqrt(xx*xx + xy*xy + xz*xz)
-    xx, xy, xz = xx/xn, xy/xn, xz/xn
-
-    # y 列（up corrected）= x × z  （右手系）
-    yx = xy*zz - xz*zy
-    yy = xz*zx - xx*zz
-    yz = xx*zy - xy*zx
-
-    # 旋转矩阵列向量 → 四元数（Shepperd's method）
-    # R 列优先：R[行][列]，列 0=x, 列 1=y, 列 2=z
-    R = [[xx, yx, zx],
-         [xy, yy, zy],
-         [xz, yz, zz]]
-    trace = R[0][0] + R[1][1] + R[2][2]
-    if trace > 0:
-        s  = 0.5 / math.sqrt(trace + 1.0)
-        qw = 0.25 / s
-        qx = (R[2][1] - R[1][2]) * s
-        qy = (R[0][2] - R[2][0]) * s
-        qz = (R[1][0] - R[0][1]) * s
-    elif R[0][0] > R[1][1] and R[0][0] > R[2][2]:
-        s  = 2.0 * math.sqrt(1.0 + R[0][0] - R[1][1] - R[2][2])
-        qw = (R[2][1] - R[1][2]) / s
-        qx = 0.25 * s
-        qy = (R[0][1] + R[1][0]) / s
-        qz = (R[0][2] + R[2][0]) / s
-    elif R[1][1] > R[2][2]:
-        s  = 2.0 * math.sqrt(1.0 + R[1][1] - R[0][0] - R[2][2])
-        qw = (R[0][2] - R[2][0]) / s
-        qx = (R[0][1] + R[1][0]) / s
-        qy = 0.25 * s
-        qz = (R[1][2] + R[2][1]) / s
-    else:
-        s  = 2.0 * math.sqrt(1.0 + R[2][2] - R[0][0] - R[1][1])
-        qw = (R[1][0] - R[0][1]) / s
-        qx = (R[0][2] + R[2][0]) / s
-        qy = (R[1][2] + R[2][1]) / s
-        qz = 0.25 * s
-    return quat_normalize((qx, qy, qz, qw))
 
 
 # ── ROS 节点 ──────────────────────────────────────────────────────────────────

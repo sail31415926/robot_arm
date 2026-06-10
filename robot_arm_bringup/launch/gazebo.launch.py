@@ -19,6 +19,8 @@
            cartesian_velocity    → cartesian_velocity_gui      (笛卡尔速度接口，手动点动，MoveIt Servo)
            ibvs_control          → cartesian_velocity_gui + red_box_detector
                                    + ibvs_control_node          (红色方块 IBVS 闭环)
+           commander             → arm_commander_node          (Arm Commander 中间层)
+                                   + commander_test_gui         (Director 视角测试 GUI，需要 MoveIt/IK)
          MoveIt 由本文件自动 include，无需额外启动 moveit.launch.py。
 
          示例：
@@ -30,6 +32,7 @@
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=spherical_orbit                  # 球面轨道运镜
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_velocity               # 笛卡尔速度（手动点动）
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control                     # 红色方块 IBVS
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander                        # Arm Commander 中间层测试
 
 @copyright Copyright (c) 2026 eMeet
 """
@@ -95,7 +98,7 @@ def generate_launch_description():
         'controller',
         default_value='joint_position',
         description=('控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
-                     'cartesian_trajectory | spherical_orbit | cartesian_velocity | ibvs_control'),
+                     'cartesian_trajectory | spherical_orbit | cartesian_velocity | ibvs_control | commander'),
     )
     ctrl = LaunchConfiguration('controller')
 
@@ -116,11 +119,35 @@ def generate_launch_description():
     spherical_orbit_ctrl   = controller_node('spherical_orbit',       'spherical_orbit_gui')
     velocity_ctrl          = controller_node('cartesian_velocity',    'cartesian_velocity_gui')
 
-    # ── MoveIt（需要 IK 的控制方式）────────────────────────────────────────────
+    # ── commander 模式 ─────────────────────────────────────────────────────────
+    is_commander = IfCondition(PythonExpression(["'", ctrl, "' == 'commander'"]))
+
+    # arm_commander_node + test_gui：延迟 5s 直接启动（无需等 arm_controller_spawner）
+    # 它们是纯 ROS 客户端/服务端，启动后会自动等待底层资源就绪
+    commander_start = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='robot_arm_node',
+                executable='arm_commander_node',
+                output='screen',
+                parameters=[{'use_sim_time': True}],
+            ),
+            Node(
+                package='robot_arm_node',
+                executable='commander_test_gui',
+                output='screen',
+            ),
+        ],
+        condition=is_commander,
+    )
+    # commander_servo_start 在 make_servo_node 定义后赋值，见下方 MoveIt Servo 区块
+
+    # ── MoveIt（需要 IK 的控制方式，含 commander）─────────────────────────────
     needs_moveit = IfCondition(
         PythonExpression([
             "'", ctrl, "' in ['cartesian_moveit','cartesian_realtime_ik',"
-            "'cartesian_trajectory','spherical_orbit']"
+            "'cartesian_trajectory','spherical_orbit','commander']"
         ])
     )
     moveit_launch_path = os.path.join(bringup_share, 'launch', 'moveit.launch.py')
@@ -130,15 +157,9 @@ def generate_launch_description():
         condition=needs_moveit,
     )
 
-    # ── MoveIt Servo 条件（cartesian_velocity / ibvs_control）─────────────────
+    # ── MoveIt Servo 条件（cartesian_velocity / ibvs_control / commander）────────
     is_velocity     = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
     is_ibvs_control = IfCondition(PythonExpression(["'", ctrl, "' == 'ibvs_control'"]))
-    needs_servo = IfCondition(
-        PythonExpression([
-            "'", ctrl, "' in ['cartesian_velocity','ibvs_control']"
-        ])
-    )
-
     def make_servo_node(condition, check_collisions=True):
         # ibvs/velocity 模式无 move_group，禁用碰撞检测避免 run_duration 超时
         extra = {} if check_collisions else \
@@ -160,7 +181,18 @@ def generate_launch_description():
             condition=condition,
         )
 
+    # servo_node 需等安全姿态完成后再起（4s 延迟，与 velocity 模式相同）
+    commander_servo_start = TimerAction(
+        period=4.0,
+        actions=[make_servo_node(is_commander, check_collisions=False)],
+        condition=is_commander,
+    )
+
     # ── 安全姿态预移动（全零关节是运动学奇异点，servo 启动前须先移走）──────────
+    # commander 模式不需要预移动，由上层自行决定初始姿态
+    needs_safe_pose = IfCondition(
+        PythonExpression(["'", ctrl, "' in ['cartesian_velocity','ibvs_control']"])
+    )
     move_to_safe_pose = ExecuteProcess(
         cmd=[
             'ros2', 'topic', 'pub', '--once',
@@ -171,7 +203,7 @@ def generate_launch_description():
              'time_from_start: {sec: 3, nanosec: 0}}]}'),
         ],
         output='screen',
-        condition=needs_servo,
+        condition=needs_safe_pose,
     )
 
     velocity_start_after_pose = TimerAction(
@@ -283,7 +315,10 @@ def generate_launch_description():
                          move_to_safe_pose,
                          velocity_start_after_pose,
                          ibvs_control_start_after_pose,
-                         trajectory_ctrl, spherical_orbit_ctrl],
+                         trajectory_ctrl, spherical_orbit_ctrl,
+                         commander_servo_start],
             )
         ),
+        # commander：节点独立延迟启动（不等 arm_controller_spawner，5s 后自动出现）
+        commander_start,
     ])

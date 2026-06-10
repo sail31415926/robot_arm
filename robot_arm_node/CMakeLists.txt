@@ -46,6 +46,20 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# ── commander/：Arm Commander 中间层（可 headless 运行或被 GUI import）─────────
+install(PROGRAMS scripts/commander/arm_commander_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME arm_commander_node
+)
+install(PROGRAMS
+  scripts/commander/__init__.py
+  scripts/commander/move_to_pose_server.py
+  scripts/commander/trajectory_shot_server.py
+  scripts/commander/motion_executor.py
+  scripts/commander/status_aggregator.py
+  DESTINATION lib/${PROJECT_NAME}/commander
+)
+
 # ── simulation/：MuJoCo 仿真 ──────────────────────────────────────────────────
 foreach(script
   mujoco_node
@@ -79,9 +93,9 @@ foreach(script
 endforeach()
 
 # ── 测试工具脚本 ──────────────────────────────────────────────────────────────
-install(PROGRAMS tests/pose_command_publisher.py
+install(PROGRAMS tests/commander_test_gui.py
   DESTINATION lib/${PROJECT_NAME}
-  RENAME pose_command_publisher
+  RENAME commander_test_gui
 )
 
 # ── 资源安装 ──────────────────────────────────────────────────────────────────

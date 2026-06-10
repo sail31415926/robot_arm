@@ -1,14 +1,14 @@
 # ArmMoveToPose.action
-# 机械臂姿态切换动作：运动到目标姿态（收纳/观察/拍摄）并等待到位
+# 机械臂姿态切换动作：运动到目标姿态并等待到位
 # 客户端：上层（Director）
 # 服务端：Arm Commander（arm_commander 节点，robot_arm_node 包）
 #
 # exit_reason: "reached" | "timeout" | "cancelled" | "error"
 #
 # ─── 目标姿态常量 ───
-uint8 POSE_STATE_STOWED   = 0     # 收纳位
-uint8 POSE_STATE_OBSERVE  = 1     # 观察位
-uint8 POSE_STATE_SHOOTING = 2     # 拍摄位（目标坐标由 Goal 携带）
+uint8 POSE_STATE_STOWED   = 0     # 收纳位（关节回零，Commander 内置）
+uint8 POSE_STATE_OBSERVE  = 1     # 观察位（预设坐标，Commander 内置）
+uint8 POSE_STATE_SHOOTING = 2     # 拍摄位（绝对坐标，由 target_pose 携带）
 # ─── 转换速度常量 ───
 uint8 SPEED_SLOW   = 0
 uint8 SPEED_NORMAL = 1
@@ -16,16 +16,17 @@ uint8 SPEED_FAST   = 2
 # ─── Goal ──────────────────────────────────────────────────────────────────
 uint8   target_pose_state    # 目标姿态，取值为上方常量之一
 uint8   transition_speed     # 转换速度
+bool    return_to_start      # 到达目标后是否自动返回出发位姿
 
 # 仅 target_pose_state == POSE_STATE_SHOOTING 时有效
-ArmPose target_pose          # 目标末端位姿
+ArmPose target_pose          # 目标末端位姿（base_link 坐标系，x/y/z 米，roll/pitch/yaw 度）
 ---
 # ─── Result ────────────────────────────────────────────────────────────────
-bool    success              # 是否到达目标姿态
+bool    success              # 是否到达目标姿态（return_to_start=true 时表示已回到起始点）
 string  exit_reason          # "reached" | "timeout" | "cancelled" | "error"
 uint8   error_code           # 失败时的错误码（对应 ArmStatus.ERR_*）
-ArmPose actual_pose          # 实际到达的末端位姿
+ArmPose actual_pose          # 实际到达的末端位姿（return_to_start=true 时为返回后的位姿）
 ---
 # ─── Feedback ──────────────────────────────────────────────────────────────
-float32 progress_percent     # 进度百分比 [0.0, 100.0]
+float32 progress_percent     # 进度百分比 [0.0, 100.0]（return_to_start=true 时含返回过程）
 ArmPose current_pose         # 当前末端位姿
