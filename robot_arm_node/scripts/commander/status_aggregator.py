@@ -79,6 +79,7 @@ class StatusAggregator:
         self._command_result       = ArmStatus.RESULT_NONE
         self._current_pose_state   = ArmStatus.POSE_STATE_OBSERVE  # 默认
         self._error_code           = ArmStatus.ERR_NONE
+        self._is_moving            = False   # 由 Commander 状态机维护，避免速度微分抖动
 
         self._state_lock = threading.Lock()
 
@@ -179,13 +180,16 @@ class StatusAggregator:
         with self._joint_lock:
             return [self._joint_positions[n] for n in names]
 
-    # ── 运动状态判定 ──────────────────────────────────────────────────────────────
+    # ── 运动状态 ──────────────────────────────────────────────────────────────────
     @property
     def is_moving(self) -> bool:
-        """当前是否在运动（基于速度幅值判定）。"""
-        tw = self.twist
-        lin = math.sqrt(tw.vx**2 + tw.vy**2 + tw.vz**2)
-        return lin > MIN_MOVING_VELOCITY
+        with self._state_lock:
+            return self._is_moving
+
+    def set_moving(self, moving: bool):
+        """由 Commander 状态机在 MOVING 进入/退出时调用，避免速度微分抖动。"""
+        with self._state_lock:
+            self._is_moving = moving
 
     # ── 命令执行状态管理（由 ArmCommanderNode/action server 调用）─────────────────
     def set_command_state(self, command_id: int, result: int):
@@ -203,6 +207,11 @@ class StatusAggregator:
         """设置错误码。"""
         with self._state_lock:
             self._error_code = error_code
+
+    def get_error_code(self) -> int:
+        """读取当前错误码。"""
+        with self._state_lock:
+            return self._error_code
 
     def clear_error(self):
         """清除错误码。"""

@@ -23,6 +23,13 @@ import tkinter as tk
 from tkinter import ttk
 
 import math
+import os
+import sys
+
+# arm_utils 与本脚本安装在同一目录（lib/robot_arm_node/），但 ROS2 不自动加入 sys.path
+_this_dir = os.path.dirname(os.path.abspath(__file__))
+if _this_dir not in sys.path:
+    sys.path.insert(0, _this_dir)
 
 import rclpy
 from rclpy.node import Node
@@ -31,7 +38,7 @@ from rclpy.executors import MultiThreadedExecutor
 
 from robot_arm_interfaces.action import ArmMoveToPose, ArmTrajectoryShot
 from robot_arm_interfaces.msg import ArmStatus, ArmFollowCommand
-from robot_arm_interfaces.srv import ArmStop
+from robot_arm_interfaces.srv import ArmStop, ArmEnable, ArmHoming, ArmResetError
 
 try:
     from arm_utils import aim_quat, sphere_to_cart, quat_to_rpy
@@ -75,9 +82,12 @@ class CommanderTestNode(Node):
                          ])
         self._q = gui_q
 
-        self._mtp_client  = ActionClient(self, ArmMoveToPose, ACTION_MTP)
-        self._tss_client  = ActionClient(self, ArmTrajectoryShot, ACTION_TSS)
-        self._stop_client = self.create_client(ArmStop, '/robot_arm/stop')
+        self._mtp_client          = ActionClient(self, ArmMoveToPose, ACTION_MTP)
+        self._tss_client          = ActionClient(self, ArmTrajectoryShot, ACTION_TSS)
+        self._stop_client         = self.create_client(ArmStop,       '/robot_arm/stop')
+        self._enable_client       = self.create_client(ArmEnable,     '/robot_arm/enable')
+        self._homing_client       = self.create_client(ArmHoming,     '/robot_arm/homing')
+        self._reset_error_client  = self.create_client(ArmResetError, '/robot_arm/reset_error')
         self._follow_pub  = self.create_publisher(ArmFollowCommand, TOPIC_FOLLOW_CMD, 10)
         self._status_sub  = self.create_subscription(ArmStatus, TOPIC_STATUS, self._on_status, 10)
 
@@ -214,19 +224,46 @@ class CommanderTestNode(Node):
         self._follow_pub.publish(msg)
 
     def call_arm_stop(self):
-        """调用 /robot_arm/stop：运动中→急停，ERROR/STOPPED→复位到 IDLE。"""
         if not self._stop_client.wait_for_service(timeout_sec=0.5):
             self._q.put(('error', '✗ /robot_arm/stop 服务不可用')); return
-        req = ArmStop.Request()
-        self._stop_client.call_async(req).add_done_callback(self._on_stop_result)
+        self._stop_client.call_async(ArmStop.Request()).add_done_callback(
+            lambda f: self._on_simple_result(f, 'Stop'))
 
-    def _on_stop_result(self, future):
+    def call_arm_enable(self, enable: bool):
+        if not self._enable_client.wait_for_service(timeout_sec=0.5):
+            self._q.put(('error', '✗ /robot_arm/enable 服务不可用')); return
+        req = ArmEnable.Request(); req.enable = enable
+        self._enable_client.call_async(req).add_done_callback(
+            lambda f: self._on_simple_result(f, 'Enable'))
+
+    def call_arm_homing(self):
+        if not self._homing_client.wait_for_service(timeout_sec=0.5):
+            self._q.put(('error', '✗ /robot_arm/homing 服务不可用')); return
+        self._homing_client.call_async(ArmHoming.Request()).add_done_callback(
+            lambda f: self._on_simple_result(f, 'Homing'))
+
+    def call_arm_reset_error(self):
+        if not self._reset_error_client.wait_for_service(timeout_sec=0.5):
+            self._q.put(('error', '✗ /robot_arm/reset_error 服务不可用')); return
+        self._reset_error_client.call_async(ArmResetError.Request()).add_done_callback(
+            lambda f: self._on_reset_error_result(f))
+
+    def _on_simple_result(self, future, label: str):
         try:
             resp = future.result()
             flag = '✓' if resp.success else '✗'
-            self._q.put(('log', f'{flag} Stop/Reset: {resp.message}'))
+            self._q.put(('log', f'{flag} {label}: {resp.message}'))
         except Exception as e:
-            self._q.put(('error', f'✗ Stop/Reset 调用异常: {e}'))
+            self._q.put(('error', f'✗ {label} 调用异常: {e}'))
+
+    def _on_reset_error_result(self, future):
+        try:
+            resp = future.result()
+            flag = '✓' if resp.success else '✗'
+            self._q.put(('log', f'{flag} ResetError: {resp.message}  '
+                         f'cleared_err={resp.cleared_error_code}'))
+        except Exception as e:
+            self._q.put(('error', f'✗ ResetError 调用异常: {e}'))
 
     def _on_status(self, msg: ArmStatus):
         self._q.put(('status', msg))
@@ -276,16 +313,22 @@ class App:
             ttk.Entry(row2, textvariable=v, width=11, state='readonly',
                       justify='center').pack(side=tk.LEFT, padx=(0, 8))
 
-        # 急停 + 复位按钮（直接操作 Commander 状态机）
+        # 控制按钮行
         btn_row = ttk.Frame(sf); btn_row.pack(fill=tk.X, pady=(6, 0))
         tk.Button(btn_row, text='■ 急  停', width=10, bg='#cc3333', fg='white',
                   font=('', 9, 'bold'),
                   command=self._cmd_stop).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_row, text='↺ 复  位', width=10, bg='#3366cc', fg='white',
+        tk.Button(btn_row, text='↺ 清除故障', width=10, bg='#3366cc', fg='white',
                   font=('', 9, 'bold'),
-                  command=self._cmd_reset).pack(side=tk.LEFT, padx=4)
-        ttk.Label(btn_row, text='急停：终止运动 → STOPPED；复位：ERROR/STOPPED → IDLE',
-                  foreground='gray').pack(side=tk.LEFT, padx=8)
+                  command=self._cmd_reset_error).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_row, text='⌂ 回  零', width=10, bg='#336633', fg='white',
+                  font=('', 9, 'bold'),
+                  command=self._cmd_homing).pack(side=tk.LEFT, padx=4)
+        self._enable_btn = tk.Button(btn_row, text='⚡ 使  能', width=10,
+                                      bg='#666666', fg='white', font=('', 9, 'bold'),
+                                      command=self._cmd_toggle_enable)
+        self._enable_btn.pack(side=tk.LEFT, padx=4)
+        self._servo_enabled = False
 
     # ── ArmMoveToPose ─────────────────────────────────────────────────────────────
     def _build_mtp_panel(self, parent, pad):
@@ -333,14 +376,26 @@ class App:
         self._on_mtp_state_change()
 
     def _cmd_stop(self):
-        """急停按钮：MOVING → STOPPED（同时也清除 ERROR）。"""
         self.node.call_arm_stop()
         self._log('■ 急停指令已发送')
 
-    def _cmd_reset(self):
-        """复位按钮：ERROR / STOPPED → IDLE。"""
-        self.node.call_arm_stop()
-        self._log('↺ 复位指令已发送')
+    def _cmd_reset_error(self):
+        self.node.call_arm_reset_error()
+        self._log('↺ 清除故障指令已发送')
+
+    def _cmd_homing(self):
+        self.node.call_arm_homing()
+        self._log('⌂ 回零指令已发送（阻塞，约 4s）')
+
+    def _cmd_toggle_enable(self):
+        self._servo_enabled = not self._servo_enabled
+        self.node.call_arm_enable(self._servo_enabled)
+        if self._servo_enabled:
+            self._enable_btn.configure(text='⊘ 下  电', bg='#cc6600')
+            self._log('⚡ 伺服使能')
+        else:
+            self._enable_btn.configure(text='⚡ 使  能', bg='#666666')
+            self._log('⊘ 伺服下电')
 
     def _on_mtp_state_change(self):
         is_shooting = self._mtp_state_var.get() == ArmMoveToPose.Goal.POSE_STATE_SHOOTING
