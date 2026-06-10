@@ -37,7 +37,8 @@ try:
 except ImportError as e:
     raise SystemExit('✗ 未找到 ruckig 库，请先安装：pip install ruckig') from e
 
-from arm_utils import rpy_to_quat, quat_to_rpy, quat_normalize, quat_dot, quat_slerp
+from arm_utils import (rpy_to_quat, quat_to_rpy, quat_normalize, quat_dot, quat_slerp,
+                        aim_quat, look_at_quat, sphere_to_cart, cart_to_sphere)
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 JOINT_NAMES    = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
@@ -58,108 +59,6 @@ DEFAULT_V_POS = 0.05;  DEFAULT_A_POS = 0.10;  DEFAULT_J_POS = 1.00
 DEFAULT_V_ORI = 0.10;  DEFAULT_A_ORI = 0.20;  DEFAULT_J_ORI = 2.00
 
 READY_POSE = dict(x=0.3, y=0.0, z=0.6, roll=90.0, pitch=10.0, yaw=0.0)
-
-
-def aim_quat(cam_x, cam_y, cam_z, tgt_x, tgt_y, tgt_z):
-    """EEF X 轴朝向目标，roll 固定 90°（相机光轴沿 EEF X 的安装方式）。"""
-    dx, dy, dz = tgt_x - cam_x, tgt_y - cam_y, tgt_z - cam_z
-    n = math.sqrt(dx*dx + dy*dy + dz*dz)
-    if n < 1e-9:
-        return rpy_to_quat(math.pi/2, 0., 0.)
-    dx, dy, dz = dx/n, dy/n, dz/n
-    pitch = math.asin(max(-1., min(1., -dz)))
-    yaw   = math.atan2(dy, dx)
-    return rpy_to_quat(math.pi/2, pitch, yaw)
-
-
-def look_at_quat(cam_x, cam_y, cam_z, tgt_x, tgt_y, tgt_z):
-    """EEF Z 轴指向目标（look-at），world Z-up hint。返回 (qx,qy,qz,qw)。"""
-    dx, dy, dz = tgt_x - cam_x, tgt_y - cam_y, tgt_z - cam_z
-    n = math.sqrt(dx*dx + dy*dy + dz*dz)
-    if n < 1e-9:
-        return (0., 0., 0., 1.)
-    zx, zy, zz = dx/n, dy/n, dz/n          # EEF Z（forward，指向目标）
-
-    # world Z-up hint；φ ≈ ±90° 时退回 X 轴避免退化
-    if abs(zz) < 0.999:
-        ux, uy, uz = 0., 0., 1.
-    else:
-        ux, uy, uz = 1., 0., 0.
-
-    # EEF X（right）= forward × up
-    xx = zy*uz - zz*uy
-    xy = zz*ux - zx*uz
-    xz = zx*uy - zy*ux
-    xn = math.sqrt(xx*xx + xy*xy + xz*xz)
-    xx, xy, xz = xx/xn, xy/xn, xz/xn
-
-    # EEF Y（up corrected）= right × forward
-    yx = xy*zz - xz*zy
-    yy = xz*zx - xx*zz
-    yz = xx*zy - xy*zx
-
-    # 旋转矩阵列向量（EEF X, Y, Z）→ 四元数（Shepperd）
-    R = [[xx, yx, zx],
-         [xy, yy, zy],
-         [xz, yz, zz]]
-    trace = R[0][0] + R[1][1] + R[2][2]
-    if trace > 0:
-        s  = 0.5 / math.sqrt(trace + 1.0)
-        qw = 0.25 / s
-        qx = (R[2][1] - R[1][2]) * s
-        qy = (R[0][2] - R[2][0]) * s
-        qz = (R[1][0] - R[0][1]) * s
-    elif R[0][0] > R[1][1] and R[0][0] > R[2][2]:
-        s  = 2.0 * math.sqrt(1.0 + R[0][0] - R[1][1] - R[2][2])
-        qw = (R[2][1] - R[1][2]) / s
-        qx = 0.25 * s
-        qy = (R[0][1] + R[1][0]) / s
-        qz = (R[0][2] + R[2][0]) / s
-    elif R[1][1] > R[2][2]:
-        s  = 2.0 * math.sqrt(1.0 + R[1][1] - R[0][0] - R[2][2])
-        qw = (R[0][2] - R[2][0]) / s
-        qx = (R[0][1] + R[1][0]) / s
-        qy = 0.25 * s
-        qz = (R[1][2] + R[2][1]) / s
-    else:
-        s  = 2.0 * math.sqrt(1.0 + R[2][2] - R[0][0] - R[1][1])
-        qw = (R[1][0] - R[0][1]) / s
-        qx = (R[0][2] + R[2][0]) / s
-        qy = (R[1][2] + R[2][1]) / s
-        qz = 0.25 * s
-    return quat_normalize((qx, qy, qz, qw))
-
-
-def _theta_ref(ox, oy):
-    """主体→世界原点在 XY 平面的方位角，作为 θ=0° 的参考方向（近侧）。"""
-    return math.atan2(-oy, -ox)
-
-
-def sphere_to_cart(theta_rad, phi_rad, r, ox, oy, oz):
-    """Z-up 球坐标 → 世界系笛卡尔位置。
-    theta=0  : 相机在近侧（主体朝向世界原点方向）
-    theta=±π : 相机在远侧
-    phi=+π/2 : 正上方，phi=-π/2 : 正下方
-    """
-    theta_world = _theta_ref(ox, oy) + theta_rad
-    cp = math.cos(phi_rad)
-    return (
-        ox + r * cp * math.cos(theta_world),
-        oy + r * cp * math.sin(theta_world),
-        oz + r * math.sin(phi_rad),
-    )
-
-
-def cart_to_sphere(px, py, pz, ox, oy, oz):
-    """笛卡尔位置 → Z-up 球坐标（θ 以近侧为 0°）。返回 (theta_rad, phi_rad, r)。"""
-    dx, dy, dz = px - ox, py - oy, pz - oz
-    r = math.sqrt(dx*dx + dy*dy + dz*dz)
-    if r < 1e-9:
-        return 0., 0., 0.
-    phi   = math.asin(max(-1., min(1., dz / r)))
-    theta = math.atan2(dy, dx) - _theta_ref(ox, oy)
-    theta = (theta + math.pi) % (2 * math.pi) - math.pi   # 归一化到 (-π, π]
-    return theta, phi, r
 
 
 # ── ROS 节点 ──────────────────────────────────────────────────────────────────

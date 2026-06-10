@@ -1,0 +1,60 @@
+# ArmTrajectoryShot.action
+# 机械臂运镜动作：直线运镜（相对位移）或球面环绕运镜
+# 客户端：上层（Director）
+# 服务端：Arm Commander（arm_commander 节点，robot_arm_node 包）
+#
+# 执行流程：
+#   MOTION_LINEAR：从当前位姿按 delta_pose 做直线运动（不需要知道绝对坐标）
+#   MOTION_ORBIT ：先移动到起始球坐标（以 orbit_center 为球心），再沿球面运动到终止球坐标
+#   两种模式下 return_to_start = true 时，完成后均原路返回出发点
+#
+# exit_reason: "reached" | "timeout" | "cancelled" | "error"
+#
+# ─── 运动类型常量 ───
+uint8 MOTION_LINEAR = 0    # 直线运镜：升/降/推/拉/横移（相对当前位姿偏移）
+uint8 MOTION_ORBIT  = 1    # 球面环绕运镜：相机始终朝向球心
+# ─── 速度常量（与 ArmMoveToPose 一致）───
+uint8 SPEED_SLOW   = 0
+uint8 SPEED_NORMAL = 1
+uint8 SPEED_FAST   = 2
+# ─── Goal ──────────────────────────────────────────────────────────────────
+uint8   motion_type          # 运动类型，取值为上方常量之一
+uint8   transition_speed     # 速度档位，取值为上方常量之一
+bool    return_to_start      # 完成后是否原路返回出发点
+
+# ── MOTION_LINEAR 参数（motion_type == MOTION_LINEAR 时有效）───────────────
+# 末端笛卡尔位姿（base_link 坐标系，x/y/z 米，roll/pitch/yaw 度）
+ArmPose linear_start_pose    # 直线运镜起始末端位姿
+ArmPose linear_end_pose      # 直线运镜终止末端位姿
+
+# ── MOTION_ORBIT 参数（motion_type == MOTION_ORBIT 时有效）────────────────
+# 被摄主体位置（球心，base_link 坐标系，米）
+# 相机始终朝向此点；球面坐标以此点为原点展开
+float32 orbit_center_x         # 球心 x（米）
+float32 orbit_center_y         # 球心 y（米）
+float32 orbit_center_z         # 球心 z（米）
+
+# 球坐标（以球心为原点）
+#   azimuth_deg   水平方向角（度），绕 Z 轴，0°=近侧（主体朝向世界原点方向），正值顺时针
+#   elevation_deg 俯仰角（度），相对水平面，正值向上，范围 (-90, 90)
+#   radius_m      球面半径（米）
+float32 azimuth_start_deg      # 水平方向角起始值（度）
+float32 elevation_start_deg    # 俯仰角起始值（度）
+float32 radius_start_m         # 球面半径起始值（米）
+
+float32 azimuth_end_deg        # 水平方向角终止值（度）
+float32 elevation_end_deg      # 俯仰角终止值（度）
+float32 radius_end_m           # 球面半径终止值（米）
+---
+# ─── Result ────────────────────────────────────────────────────────────────
+bool    success              # 运镜是否完成
+string  exit_reason          # "reached" | "timeout" | "cancelled" | "error"
+uint8   error_code           # 失败时的错误码（对应 ArmStatus.ERR_*）
+---
+# ─── Feedback ──────────────────────────────────────────────────────────────
+float32 progress_percent       # 进度百分比 [0.0, 100.0]（含 return_to_start 过程）
+float32 elapsed_sec            # 已执行时长（秒）
+ArmPose current_pose           # 当前末端位姿（MOTION_LINEAR 时为主要反馈）
+float32 current_azimuth_deg    # 当前水平方向角（MOTION_ORBIT 时有效）
+float32 current_elevation_deg  # 当前俯仰角（MOTION_ORBIT 时有效）
+float32 current_radius_m       # 当前球面半径（MOTION_ORBIT 时有效）
