@@ -1,8 +1,8 @@
 """
 @file mujoco.launch.py
 @brief eMeetArm MuJoCo 仿真 + MoveIt 一键启动（替代 gazebo.launch.py + moveit.launch.py）
-@version 2.2
-@date 2026-06-01
+@version 2.3
+@date 2026-06-09
 
 @details 启动以下节点：
          - mujoco_node       : MuJoCo 物理仿真 + viewer + FollowJointTrajectory action
@@ -10,24 +10,22 @@
          - move_group        : MoveIt2 规划核心（使用 MuJoCo 专用 controller 配置）
          - 控制 GUI（根据 controller 参数选择其一）
 
-         通过 controller 参数选择 7 种控制方式之一：
-           slider       → arm_slider_controller            (PyQt5 关节滑块，无需 MoveIt)
-           cartesian    → cartesian_controller             (MoveIt 笛卡尔直线规划)
-           realtime     → cartesian_realtime_controller    (滑块即时 IK)
-           ruckig       → cartesian_ruckig_streamer        (Ruckig 笛卡尔流式 + servo)
-           ruckig_ik    → cartesian_ruckig_ik_streamer     (Ruckig 点到点+平面环绕)
-           sphere_orbit → spherical_orbit_streamer         (球面坐标环绕运镜)
-           velocity     → cartesian_velocity_controller    (笛卡尔速度接口，IBVS 用)
+         通过 controller 参数选择控制方式（参数名 = 对应 GUI 名去掉 _gui 后缀）：
+           joint_position        → joint_position_gui          (PyQt5 关节滑块，无需 MoveIt)
+           cartesian_moveit      → cartesian_moveit_gui        (MoveIt 笛卡尔直线规划)
+           cartesian_realtime_ik → cartesian_realtime_ik_gui   (滑块即时 IK)
+           cartesian_trajectory  → cartesian_trajectory_gui    (Ruckig 点到点 + 环绕，批量 IK)
+           spherical_orbit       → spherical_orbit_gui         (球面坐标环绕运镜)
+           cartesian_velocity    → cartesian_velocity_gui      (笛卡尔速度接口，MoveIt Servo)
 
          示例：
-           ros2 launch robot_arm_bringup mujoco.launch.py                              # 默认 slider
-           ros2 launch robot_arm_bringup mujoco.launch.py controller:=slider           # 关节滑块
-           ros2 launch robot_arm_bringup mujoco.launch.py controller:=cartesian        # MoveIt 笛卡尔直线
-           ros2 launch robot_arm_bringup mujoco.launch.py controller:=realtime         # 滑块即时 IK
-           ros2 launch robot_arm_bringup mujoco.launch.py controller:=ruckig           # Ruckig 笛卡尔流
-           ros2 launch robot_arm_bringup mujoco.launch.py controller:=ruckig_ik        # Ruckig 点到点+环绕
-           ros2 launch robot_arm_bringup mujoco.launch.py controller:=sphere_orbit     # 球面轨道运镜
-           ros2 launch robot_arm_bringup mujoco.launch.py controller:=velocity          # 笛卡尔速度/IBVS
+           ros2 launch robot_arm_bringup mujoco.launch.py                                           # 默认 joint_position
+           ros2 launch robot_arm_bringup mujoco.launch.py controller:=joint_position                # 关节滑块
+           ros2 launch robot_arm_bringup mujoco.launch.py controller:=cartesian_moveit              # MoveIt 笛卡尔直线
+           ros2 launch robot_arm_bringup mujoco.launch.py controller:=cartesian_realtime_ik         # 滑块即时 IK
+           ros2 launch robot_arm_bringup mujoco.launch.py controller:=cartesian_trajectory          # Ruckig 点到点+环绕
+           ros2 launch robot_arm_bringup mujoco.launch.py controller:=spherical_orbit               # 球面轨道运镜
+           ros2 launch robot_arm_bringup mujoco.launch.py controller:=cartesian_velocity            # 笛卡尔速度/IBVS
 
 @note 不启动 ros2_control / controller_manager；
       mujoco_node 直接提供 /arm_controller/follow_joint_trajectory action。
@@ -85,7 +83,7 @@ def generate_launch_description():
     moveit_controllers   = load_yaml(
         os.path.join(cfg, 'moveit_controllers_mujoco.yaml'))  # MuJoCo 专用
 
-    # ── MoveIt Servo（仅 controller:=ruckig 时使用）──────────────────────────
+    # ── MoveIt Servo（cartesian_velocity 模式）──────────────────────────────
     servo_params = {
         'moveit_servo': load_yaml(os.path.join(cfg, 'servo_config.yaml')),
     }
@@ -93,8 +91,9 @@ def generate_launch_description():
     # ── 控制方式参数 ──────────────────────────────────────────────────────────
     controller_arg = DeclareLaunchArgument(
         'controller',
-        default_value='slider',
-        description='控制方式: slider | cartesian | realtime | ruckig | ruckig_ik | sphere_orbit | velocity',
+        default_value='joint_position',
+        description='控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
+                    'cartesian_trajectory | spherical_orbit | cartesian_velocity',
     )
     ctrl = LaunchConfiguration('controller')
 
@@ -108,24 +107,24 @@ def generate_launch_description():
                 PythonExpression(["'", ctrl, "' == '", mode_name, "'"])),
         )
 
-    slider_ctrl       = controller_node('slider',       'arm_slider_controller')
-    cartesian_ctrl    = controller_node('cartesian',    'cartesian_controller')
-    realtime_ctrl     = controller_node('realtime',     'cartesian_realtime_controller')
-    ruckig_ctrl       = controller_node('ruckig',       'cartesian_ruckig_streamer')
-    ruckig_ik_ctrl    = controller_node('ruckig_ik',    'cartesian_ruckig_ik_streamer')
-    sphere_orbit_ctrl = controller_node('sphere_orbit', 'spherical_orbit_streamer')
-    velocity_ctrl     = controller_node('velocity',     'cartesian_velocity_controller')
+    joint_position_ctrl   = controller_node('joint_position',        'joint_position_gui')
+    cartesian_moveit_ctrl = controller_node('cartesian_moveit',      'cartesian_moveit_gui')
+    realtime_ik_ctrl      = controller_node('cartesian_realtime_ik', 'cartesian_realtime_ik_gui')
+    trajectory_ctrl       = controller_node('cartesian_trajectory',  'cartesian_trajectory_gui')
+    spherical_orbit_ctrl  = controller_node('spherical_orbit',       'spherical_orbit_gui')
+    velocity_ctrl         = controller_node('cartesian_velocity',    'cartesian_velocity_gui')
 
-    # ── MoveIt（需要 IK 的控制方式：cartesian / realtime / ruckig_ik / sphere_orbit）
+    # ── MoveIt（需要 IK 的控制方式：cartesian_moveit / cartesian_realtime_ik / cartesian_trajectory / spherical_orbit）
     needs_moveit = IfCondition(
         PythonExpression([
-            "'", ctrl, "' in ['cartesian','realtime','ruckig_ik','sphere_orbit']"
+            "'", ctrl, "' in ['cartesian_moveit','cartesian_realtime_ik',"
+            "'cartesian_trajectory','spherical_orbit']"
         ])
     )
 
-    # ── MoveIt Servo（仅 controller:=ruckig 时启动）──────────────────────────
-    is_ruckig = IfCondition(
-        PythonExpression(["'", ctrl, "' == 'ruckig'"])
+    # ── MoveIt Servo（cartesian_velocity 模式）───────────────────────────────
+    needs_servo = IfCondition(
+        PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"])
     )
 
     servo_node = Node(
@@ -140,11 +139,12 @@ def generate_launch_description():
              'use_sim_time': False},
             robot_description_kinematics,
             robot_description_planning,
+            {'moveit_servo': {'check_collisions': False}},
         ],
-        condition=is_ruckig,
+        condition=needs_servo,
     )
 
-    # ── Ruckig 模式启动序列：先把机器人移到非奇异姿态，等 4s，再起 servo + GUI ─
+    # ── 安全姿态预移动 ──────────────────────────────────────────────────────
     # 全零关节是运动学奇异点（雅可比秩亏），servo 会立刻紧急停车。
     # 选一组手肘弯的安全姿态：Joint2=1.0, Joint3=-1.5, Joint5=0.3。
     move_to_safe_pose = ExecuteProcess(
@@ -157,13 +157,13 @@ def generate_launch_description():
              'time_from_start: {sec: 3, nanosec: 0}}]}'),
         ],
         output='screen',
-        condition=is_ruckig,
+        condition=needs_servo,
     )
 
-    ruckig_start_after_pose = TimerAction(
+    velocity_start_after_pose = TimerAction(
         period=4.0,                       # 等 3s 移动 + 1s 余量
-        actions=[servo_node, ruckig_ctrl],
-        condition=is_ruckig,
+        actions=[servo_node, velocity_ctrl],
+        condition=needs_servo,
     )
 
     # ── robot_state_publisher ────────────────────────────────────────────────
@@ -207,49 +207,41 @@ def generate_launch_description():
     )
 
     # ── 控制 GUI 启动时序 ────────────────────────────────────────────────────
-    # slider：仅需 MuJoCo 就绪，延迟 2s
-    slider_timed = TimerAction(
+    # joint_position：仅需 MuJoCo 就绪，延迟 2s
+    joint_position_timed = TimerAction(
         period=2.0,
-        actions=[slider_ctrl],
+        actions=[joint_position_ctrl],
         condition=IfCondition(
-            PythonExpression(["'", ctrl, "' == 'slider'"])),
+            PythonExpression(["'", ctrl, "' == 'joint_position'"])),
     )
 
-    # cartesian / realtime / ruckig_ik / sphere_orbit：需 MoveIt 就绪，延迟 4s
-    cartesian_timed = TimerAction(
+    # cartesian_moveit / cartesian_realtime_ik / cartesian_trajectory / spherical_orbit：需 MoveIt 就绪，延迟 4s
+    cartesian_moveit_timed = TimerAction(
         period=4.0,
-        actions=[cartesian_ctrl],
+        actions=[cartesian_moveit_ctrl],
         condition=IfCondition(
-            PythonExpression(["'", ctrl, "' == 'cartesian'"])),
+            PythonExpression(["'", ctrl, "' == 'cartesian_moveit'"])),
     )
 
-    realtime_timed = TimerAction(
+    realtime_ik_timed = TimerAction(
         period=4.0,
-        actions=[realtime_ctrl],
+        actions=[realtime_ik_ctrl],
         condition=IfCondition(
-            PythonExpression(["'", ctrl, "' == 'realtime'"])),
+            PythonExpression(["'", ctrl, "' == 'cartesian_realtime_ik'"])),
     )
 
-    ruckig_ik_timed = TimerAction(
+    trajectory_timed = TimerAction(
         period=4.0,
-        actions=[ruckig_ik_ctrl],
+        actions=[trajectory_ctrl],
         condition=IfCondition(
-            PythonExpression(["'", ctrl, "' == 'ruckig_ik'"])),
+            PythonExpression(["'", ctrl, "' == 'cartesian_trajectory'"])),
     )
 
-    sphere_orbit_timed = TimerAction(
+    spherical_orbit_timed = TimerAction(
         period=4.0,
-        actions=[sphere_orbit_ctrl],
+        actions=[spherical_orbit_ctrl],
         condition=IfCondition(
-            PythonExpression(["'", ctrl, "' == 'sphere_orbit'"])),
-    )
-
-    # velocity：MuJoCo 内部直接做雅可比反解，无需 MoveIt，延迟 2s
-    velocity_timed = TimerAction(
-        period=2.0,
-        actions=[velocity_ctrl],
-        condition=IfCondition(
-            PythonExpression(["'", ctrl, "' == 'velocity'"])),
+            PythonExpression(["'", ctrl, "' == 'spherical_orbit'"])),
     )
 
     # ── 摄像头画面显示（复用 camera_view.launch.py）──────────────────────────
@@ -265,13 +257,12 @@ def generate_launch_description():
         robot_state_publisher,
         mujoco_node,
         move_group,
-        slider_timed,
-        cartesian_timed,
-        realtime_timed,
+        joint_position_timed,
+        cartesian_moveit_timed,
+        realtime_ik_timed,
         move_to_safe_pose,
-        ruckig_start_after_pose,
-        ruckig_ik_timed,
-        sphere_orbit_timed,
-        velocity_timed,
+        velocity_start_after_pose,
+        trajectory_timed,
+        spherical_orbit_timed,
         camera_view,
     ])

@@ -1,6 +1,6 @@
 # ArmStatus.msg
-# 机械臂实时状态，由 Motion Executor 上报
-# 发布方：Motion Executor → 上层（Director）
+# 机械臂实时状态，由 Arm Commander 上报
+# 发布方：Arm Commander → 上层（Director）
 
 # 上报时间戳与坐标系（frame_id 统一填 base_link）
 std_msgs/Header header

@@ -19,21 +19,32 @@ install(PROGRAMS scripts/tools/arm_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# ── controllers/：GUI 运动控制器 ──────────────────────────────────────────────
+# ── gui/：调试用 GUI（rename 为无扩展名可执行，ros2 run 调起）─────────────────
 foreach(script
-  arm_slider_controller
-  cartesian_controller
-  cartesian_realtime_controller
-  cartesian_ruckig_ik_streamer
-  cartesian_ruckig_streamer
-  cartesian_velocity_controller
-  spherical_orbit_streamer
+  joint_position_gui
+  cartesian_moveit_gui
+  cartesian_realtime_ik_gui
+  cartesian_trajectory_gui
+  cartesian_velocity_gui
+  spherical_orbit_gui
 )
-  install(PROGRAMS scripts/controllers/${script}.py
+  install(PROGRAMS scripts/gui/${script}.py
     DESTINATION lib/${PROJECT_NAME}
     RENAME ${script}
   )
 endforeach()
+
+# ── controllers/：独立控制 node（装成可 import 的 .py 模块，供 gui/ 与 arm_commander 复用）
+#    也可直接 headless 运行：ros2 run robot_arm_node <name>.py
+install(PROGRAMS
+  scripts/controllers/joint_position_controller_node.py
+  scripts/controllers/cartesian_moveit_controller_node.py
+  scripts/controllers/cartesian_realtime_ik_controller_node.py
+  scripts/controllers/cartesian_velocity_controller_node.py
+  scripts/controllers/cartesian_trajectory_controller_node.py
+  scripts/controllers/spherical_orbit_controller_node.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 # ── simulation/：MuJoCo 仿真 ──────────────────────────────────────────────────
 foreach(script
@@ -60,7 +71,6 @@ endforeach()
 # ── tools/：基础设施 & 调试 ───────────────────────────────────────────────────
 foreach(script
   arm_trajectory_bridge
-  pose_command_debug
 )
   install(PROGRAMS scripts/tools/${script}.py
     DESTINATION lib/${PROJECT_NAME}

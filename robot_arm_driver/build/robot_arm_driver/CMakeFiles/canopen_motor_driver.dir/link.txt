@@ -1,2 +1,0 @@
-/usr/bin/ar qc libcanopen_motor_driver.a CMakeFiles/canopen_motor_driver.dir/src/canopen_motor_driver.cpp.o
-/usr/bin/ranlib libcanopen_motor_driver.a

@@ -1,28 +1,28 @@
 """
 @file real.launch.py
 @brief eMeetArm 实物一键启动文件
+@version 1.5
+@date 2026-06-09
 
 启动拓扑：
   Joint1-3  →  arm_node（CANopen，JointTrajectory + joint_states 整体接口）
   Joint4-6  →  ros2_control / CameraHardwareInterface（HID）
                └─ gimbal_controller（JointTrajectoryController）
 
-用法（与 Gazebo launch 参数一致，共 9 种控制方式）：
-  ros2 launch robot_arm_bringup real.launch.py controller:=slider             # 关节滑块（PP 模式）
-  ros2 launch robot_arm_bringup real.launch.py controller:=cartesian          # MoveIt 笛卡尔直线
-  ros2 launch robot_arm_bringup real.launch.py controller:=realtime           # 滑块即时 IK
-  ros2 launch robot_arm_bringup real.launch.py controller:=ruckig             # Ruckig 笛卡尔流 + Servo
-  ros2 launch robot_arm_bringup real.launch.py controller:=ruckig_ik          # Ruckig 点到点+环绕
-  ros2 launch robot_arm_bringup real.launch.py controller:=sphere_orbit       # 球面轨道运镜
-  ros2 launch robot_arm_bringup real.launch.py controller:=velocity           # 笛卡尔速度（手动点动）
-  ros2 launch robot_arm_bringup real.launch.py controller:=ibvs_control       # 红色方块 IBVS 闭环
-  ros2 launch robot_arm_bringup real.launch.py controller:=pose_command_debug # PoseCommand 接口调试
+用法（与 Gazebo launch 参数一致）：
+  ros2 launch robot_arm_bringup real.launch.py controller:=joint_position             # 关节滑块（PP 模式）
+  ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_moveit           # MoveIt 笛卡尔直线
+  ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_realtime_ik      # 滑块即时 IK
+  ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_trajectory       # Ruckig 点到点+环绕
+  ros2 launch robot_arm_bringup real.launch.py controller:=spherical_orbit            # 球面轨道运镜
+  ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_velocity         # 笛卡尔速度（手动点动，MoveIt Servo）
+  ros2 launch robot_arm_bringup real.launch.py controller:=ibvs_control               # 红色方块 IBVS 闭环
   ros2 launch robot_arm_bringup real.launch.py camera_type:=pixy
 
 视频流由 robot_camera_node（robot_gimbal_node 包）单独启动，仅占用 V4L2，
 不与 ros2_control CameraHardwareInterface（HID）冲突，可同时运行。
 
-@date 2026-05-29
+@copyright Copyright (c) 2026 eMeet
 """
 
 import os
@@ -96,8 +96,10 @@ def generate_launch_description():
         description='摄像头型号: auto | pixy | e7002 | piko',
     )
     controller_arg = DeclareLaunchArgument(
-        'controller', default_value='slider',
-        description='控制方式: slider | cartesian | realtime | ruckig | ruckig_ik | sphere_orbit | velocity | ibvs_control | pose_command_debug',
+        'controller', default_value='joint_position',
+        description='控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
+                    'cartesian_trajectory | spherical_orbit | cartesian_velocity | '
+                    'ibvs_control',
     )
     ctrl = LaunchConfiguration('controller')
 
@@ -127,13 +129,13 @@ def generate_launch_description():
     )
 
     # 机械臂整体节点：Joint1-3，JointTrajectory 输入，joint_states 输出
-    # slider 模式使用 PP（轮廓位置）模式，其余模式使用 IP（插补位置）模式
+    # joint_position 模式使用 PP（轮廓位置）模式，其余模式使用 IP（插补位置）模式
     arm_node = Node(
         package='robot_arm_driver', executable='arm_node',
         name='arm_node', output='screen',
         parameters=[arm_yaml, {
             'motion_mode': PythonExpression(
-                ["'pp' if '", ctrl, "' == 'slider' else 'ip'"]
+                ["'pp' if '", ctrl, "' == 'joint_position' else 'ip'"]
             )
         }],
     )
@@ -169,19 +171,18 @@ def generate_launch_description():
             condition=IfCondition(PythonExpression(["'", ctrl, "' == '", mode, "'"])),
         )
 
-    slider_ctrl            = ctrl_node('slider',             'arm_slider_controller')
-    cartesian_ctrl         = ctrl_node('cartesian',          'cartesian_controller')
-    realtime_ctrl          = ctrl_node('realtime',           'cartesian_realtime_controller')
-    ruckig_ctrl            = ctrl_node('ruckig',             'cartesian_ruckig_streamer')
-    ruckig_ik_ctrl         = ctrl_node('ruckig_ik',          'cartesian_ruckig_ik_streamer')
-    sphere_orbit_ctrl      = ctrl_node('sphere_orbit',       'spherical_orbit_streamer')
-    velocity_ctrl          = ctrl_node('velocity',           'cartesian_velocity_controller')
-    pose_command_debug_ctrl = ctrl_node('pose_command_debug', 'pose_command_debug')
+    joint_position_ctrl    = ctrl_node('joint_position',        'joint_position_gui')
+    cartesian_moveit_ctrl  = ctrl_node('cartesian_moveit',      'cartesian_moveit_gui')
+    realtime_ik_ctrl       = ctrl_node('cartesian_realtime_ik', 'cartesian_realtime_ik_gui')
+    trajectory_ctrl        = ctrl_node('cartesian_trajectory',  'cartesian_trajectory_gui')
+    spherical_orbit_ctrl   = ctrl_node('spherical_orbit',       'spherical_orbit_gui')
+    velocity_ctrl          = ctrl_node('cartesian_velocity',    'cartesian_velocity_gui')
 
-    # ── MoveIt（需要 IK 的控制方式：cartesian / realtime / ruckig_ik / sphere_orbit / pose_command_debug）
+    # ── MoveIt（需要 IK 的控制方式）────────────────────────────────────────────
     needs_moveit = IfCondition(
         PythonExpression([
-            "'", ctrl, "' in ['cartesian','realtime','ruckig_ik','sphere_orbit','pose_command_debug']"
+            "'", ctrl, "' in ['cartesian_moveit','cartesian_realtime_ik',"
+            "'cartesian_trajectory','spherical_orbit']"
         ])
     )
     # 实物模式直接创建 move_group，使用 FollowJointTrajectory action 配置
@@ -205,13 +206,11 @@ def generate_launch_description():
         condition=needs_moveit,
     )
 
-    # ── MoveIt Servo（ruckig / velocity / ibvs_control 模式）────────────────────
-    is_ruckig       = IfCondition(PythonExpression(["'", ctrl, "' == 'ruckig'"]))
-    is_velocity     = IfCondition(PythonExpression(["'", ctrl, "' == 'velocity'"]))
+    # ── MoveIt Servo（cartesian_velocity / ibvs_control 模式）─────────────────
+    is_velocity     = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
     is_ibvs_control = IfCondition(PythonExpression(["'", ctrl, "' == 'ibvs_control'"]))
     needs_servo     = IfCondition(PythonExpression(
-        ["'", ctrl, "' in ['ruckig','velocity','ibvs_control']"]))
-    is_pose_cmd_debug = IfCondition(PythonExpression(["'", ctrl, "' == 'pose_command_debug'"]))
+        ["'", ctrl, "' in ['cartesian_velocity','ibvs_control']"]))
 
     def make_servo_node(condition, check_collisions=True):
         extra = {} if check_collisions else {'moveit_servo': {'check_collisions': False}}
@@ -249,11 +248,6 @@ def generate_launch_description():
         condition=needs_servo,
     )
 
-    pose_command_publisher_node = Node(
-        package='robot_arm_node', executable='pose_command_publisher',
-        output='screen', condition=is_pose_cmd_debug,
-    )
-
     # 电机状态控制 GUI：一键 使能/失能/故障复位（作用于整体 arm_node 的 Joint1-3）
     motor_state_gui = Node(
         package='robot_arm_driver', executable='motor_state_control_gui',
@@ -262,12 +256,7 @@ def generate_launch_description():
     )
 
     # Servo 模式：t=3s 安全姿态预移动（3s 运动），t=7s 启动 servo_node + 控制器
-    ruckig_start = TimerAction(
-        period=7.0,
-        actions=[make_servo_node(is_ruckig), ruckig_ctrl],
-        condition=is_ruckig,
-    )
-    velocity_start = TimerAction(
+    cartesian_velocity_start = TimerAction(
         period=7.0,
         actions=[make_servo_node(is_velocity, check_collisions=False), velocity_ctrl],
         condition=is_velocity,
@@ -276,10 +265,12 @@ def generate_launch_description():
         period=7.0,
         actions=[
             make_servo_node(is_ibvs_control, check_collisions=False),
-            Node(package='robot_arm_node', executable='cartesian_velocity_controller',
+            Node(package='robot_arm_node', executable='cartesian_velocity_gui',
                  output='screen', condition=is_ibvs_control),
             Node(package='robot_arm_node', executable='red_box_detector',
-                 output='screen', condition=is_ibvs_control),
+                 output='screen',
+                 parameters=[{'use_sim_time': False}],
+                 condition=is_ibvs_control),
             Node(package='robot_arm_node', executable='ibvs_control_node',
                  output='screen', condition=is_ibvs_control),
         ],
@@ -296,9 +287,8 @@ def generate_launch_description():
     spawn_gui = TimerAction(
         period=3.0,
         actions=[
-            slider_ctrl, cartesian_ctrl, realtime_ctrl,
-            ruckig_ik_ctrl, sphere_orbit_ctrl,
-            pose_command_debug_ctrl, pose_command_publisher_node,
+            joint_position_ctrl, cartesian_moveit_ctrl, realtime_ik_ctrl,
+            trajectory_ctrl, spherical_orbit_ctrl,
             motor_state_gui,     # 电机状态控制 GUI（所有控制方式通用）
             move_to_safe_pose,   # Servo 模式专用（condition=needs_servo）
         ],
@@ -312,10 +302,9 @@ def generate_launch_description():
         arm_node,
         robot_camera_node,
         camera_view_node,
-        move_group_node,     # cartesian / realtime / ruckig_ik / sphere_orbit / pose_command_debug
+        move_group_node,           # cartesian_moveit / cartesian_realtime_ik / cartesian_trajectory / spherical_orbit
         spawn_camera,
         spawn_gui,
-        ruckig_start,        # t=7s，仅 ruckig 模式
-        velocity_start,      # t=7s，仅 velocity 模式
-        ibvs_start,          # t=7s，仅 ibvs_control 模式
+        cartesian_velocity_start,  # t=7s，仅 cartesian_velocity 模式
+        ibvs_start,                # t=7s，仅 ibvs_control 模式
     ])

@@ -1,7 +1,7 @@
 # ArmMoveToPose.action
 # 机械臂姿态切换动作：运动到目标姿态（收纳/观察/拍摄）并等待到位
 # 客户端：上层（Director）
-# 服务端：Motion Executor（robot_arm_node 包）
+# 服务端：Arm Commander（arm_commander 节点，robot_arm_node 包）
 #
 # exit_reason: "reached" | "timeout" | "cancelled" | "error"
 #
