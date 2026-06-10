@@ -73,12 +73,15 @@
 #   调试 GUI：
 #     ros2 run arm motor_test_gui
 
+# ── 快速修改 CAN 接口（改这一行，下面所有关节自动生效）────────────────────────
+_can_if: &can_if "can0"               # <<<< 修改 CAN 接口在这里
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 无命名空间默认配置（单关节调试用）
 # ──────────────────────────────────────────────────────────────────────────────
 arm_motor_node:
   ros__parameters:
-    can_interface:     "can0"
+    can_interface:     *can_if
     node_id:           1
     joint_name:        "joint_1"
     sdo_timeout_ms:    500
@@ -103,7 +106,7 @@ arm_motor_node:
 # ──────────────────────────────────────────────────────────────────────────────
 /joint1/arm_motor_node:
   ros__parameters:
-    can_interface:     "can0"
+    can_interface:     *can_if
     node_id:           1
     joint_name:        "joint_1"
     sdo_timeout_ms:    500
@@ -126,7 +129,7 @@ arm_motor_node:
 
 /joint2/arm_motor_node:
   ros__parameters:
-    can_interface:     "can0"
+    can_interface:     *can_if
     node_id:           2
     joint_name:        "joint_2"
     sdo_timeout_ms:    500
@@ -148,7 +151,7 @@ arm_motor_node:
 
 /joint3/arm_motor_node:
   ros__parameters:
-    can_interface:     "can0"
+    can_interface:     *can_if
     node_id:           3
     joint_name:        "joint_3"
     sdo_timeout_ms:    500
