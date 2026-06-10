@@ -9,7 +9,6 @@
   1. ArmMoveToPose      —— 姿态切换（STOWED/OBSERVE/SHOOTING）+ return_to_start
   2. ArmTrajectoryShot  —— 直线运镜（LINEAR）/ 球面环绕运镜（ORBIT）+ return_to_start
   3. ArmStatus 实时监控 —— 位姿/速度/状态/错误码
-  4. ArmFollowCommand   —— 速度流点动（开关控制）
 
 用法：
   ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander
@@ -37,7 +36,7 @@ from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 
 from robot_arm_interfaces.action import ArmMoveToPose, ArmTrajectoryShot
-from robot_arm_interfaces.msg import ArmStatus, ArmFollowCommand
+from robot_arm_interfaces.msg import ArmStatus
 from robot_arm_interfaces.srv import ArmStop, ArmEnable, ArmHoming, ArmResetError
 
 try:
@@ -48,10 +47,9 @@ except ImportError:
 
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────────
-ACTION_MTP  = '/robot_arm/move_to_pose'
-ACTION_TSS  = '/robot_arm/trajectory_shot'
-TOPIC_STATUS     = '/robot_arm/arm_status'
-TOPIC_FOLLOW_CMD = '/robot_arm/follow_command'
+ACTION_MTP   = '/robot_arm/move_to_pose'
+ACTION_TSS   = '/robot_arm/trajectory_shot'
+TOPIC_STATUS = '/robot_arm/arm_status'
 
 STATE_LABELS = [
     (ArmMoveToPose.Goal.POSE_STATE_STOWED,   'STOWED  (0)  收纳位'),
@@ -66,9 +64,6 @@ SPEED_LABELS = [
 POSE_STATE_NAMES = {0: 'STOWED', 1: 'OBSERVE', 2: 'SHOOTING'}
 CMD_RESULT_NAMES = {0: 'NONE', 1: 'EXECUTING', 2: 'SUCCEEDED', 3: 'FAILED', 4: 'ABORTED'}
 ERR_NAMES        = {0: 'NONE', 1: 'LIMIT', 2: 'DRIVER', 3: 'TIMEOUT'}
-
-JOG_LIN = 0.05    # m/s
-JOG_ANG = 10.0    # deg/s
 
 
 # ── ROS 节点 ─────────────────────────────────────────────────────────────────────
@@ -88,13 +83,7 @@ class CommanderTestNode(Node):
         self._enable_client       = self.create_client(ArmEnable,     '/robot_arm/enable')
         self._homing_client       = self.create_client(ArmHoming,     '/robot_arm/homing')
         self._reset_error_client  = self.create_client(ArmResetError, '/robot_arm/reset_error')
-        self._follow_pub  = self.create_publisher(ArmFollowCommand, TOPIC_FOLLOW_CMD, 10)
         self._status_sub  = self.create_subscription(ArmStatus, TOPIC_STATUS, self._on_status, 10)
-
-        self._jog_linear  = [0.0, 0.0, 0.0]
-        self._jog_angular = [0.0, 0.0, 0.0]
-        self._vel_enabled = False
-        self.create_timer(0.02, self._publish_jog)
 
     # ── ArmMoveToPose ─────────────────────────────────────────────────────────────
     def send_mtp_goal(self, state, speed, return_to_start,
@@ -201,28 +190,6 @@ class CommanderTestNode(Node):
         flag = '✓' if r.success else '✗'
         self._q.put(('log', f'{flag} TSS {r.exit_reason}  err={r.error_code}'))
 
-    # ── FollowCommand ─────────────────────────────────────────────────────────────
-    def set_jog(self, linear, angular):
-        self._jog_linear  = list(linear)
-        self._jog_angular = list(angular)
-
-    def set_vel_enabled(self, enabled: bool):
-        self._vel_enabled = enabled
-        if not enabled:
-            self._jog_linear = self._jog_angular = [0.0, 0.0, 0.0]
-            self._follow_pub.publish(ArmFollowCommand())
-
-    def _publish_jog(self):
-        if not self._vel_enabled:
-            return
-        if all(v == 0.0 for v in self._jog_linear + self._jog_angular):
-            return
-        msg = ArmFollowCommand()
-        msg.twist.vx = self._jog_linear[0];  msg.twist.vy = self._jog_linear[1]
-        msg.twist.vz = self._jog_linear[2];  msg.twist.wroll  = self._jog_angular[0]
-        msg.twist.wpitch = self._jog_angular[1]; msg.twist.wyaw = self._jog_angular[2]
-        self._follow_pub.publish(msg)
-
     def call_arm_stop(self):
         if not self._stop_client.wait_for_service(timeout_sec=0.5):
             self._q.put(('error', '✗ /robot_arm/stop 服务不可用')); return
@@ -286,7 +253,6 @@ class App:
         self._build_status_panel(main, pad)
         self._build_mtp_panel(main, pad)
         self._build_tss_panel(main, pad)
-        self._build_jog_panel(main, pad)
         self._build_log_panel(main, pad)
         self._poll()
 
@@ -598,60 +564,6 @@ class App:
         self._log(f'↩ 移到环绕起始  球心=({ox:.3f},{oy:.3f},{oz:.3f})  '
                   f'az={s["方位角Az"].get():.1f}° el={s["俯仰角El"].get():.1f}° '
                   f'r={r:.3f}m → ({px:.3f},{py:.3f},{pz:.3f})')
-
-    # ── ArmFollowCommand 点动 ──────────────────────────────────────────────────────
-    def _build_jog_panel(self, parent, pad):
-        jf = ttk.LabelFrame(parent, text='ArmFollowCommand 点动  (/robot_arm/follow_command)', padding=6)
-        jf.pack(fill=tk.X, **pad)
-
-        top = ttk.Frame(jf); top.pack(fill=tk.X, pady=(0, 4))
-        self._vel_btn = tk.Button(top, text='▶ 开启速度控制', width=18,
-                                  bg='#d0d0d0', fg='#444444', relief='raised',
-                                  command=self._toggle_vel)
-        self._vel_btn.pack(side=tk.LEFT, padx=4)
-        ttk.Label(top, text='（开启后点动生效，关闭时自动置零）',
-                  foreground='gray').pack(side=tk.LEFT, padx=6)
-
-        self._jog_btns = []
-        btn_row = ttk.Frame(jf); btn_row.pack(fill=tk.X)
-        for title, btns in [
-            ('线速度 (m/s)', [
-                ('X+',( JOG_LIN,0,0),(0,0,0)), ('X-',(-JOG_LIN,0,0),(0,0,0)),
-                ('Y+',(0, JOG_LIN,0),(0,0,0)), ('Y-',(0,-JOG_LIN,0),(0,0,0)),
-                ('Z+',(0,0, JOG_LIN),(0,0,0)), ('Z-',(0,0,-JOG_LIN),(0,0,0)),
-            ]),
-            ('角速度 (°/s)', [
-                ('Rx+',(0,0,0),( JOG_ANG,0,0)), ('Rx-',(0,0,0),(-JOG_ANG,0,0)),
-                ('Ry+',(0,0,0),(0, JOG_ANG,0)), ('Ry-',(0,0,0),(0,-JOG_ANG,0)),
-                ('Rz+',(0,0,0),(0,0, JOG_ANG)), ('Rz-',(0,0,0),(0,0,-JOG_ANG)),
-            ]),
-        ]:
-            f = ttk.LabelFrame(btn_row, text=title, padding=3)
-            f.pack(side=tk.LEFT, padx=4, pady=2)
-            for lbl, lin, ang in btns:
-                b = ttk.Button(f, text=lbl, width=4, state='disabled',
-                               command=lambda l=lin, a=ang: self.node.set_jog(l, a))
-                b.pack(side=tk.LEFT, padx=1)
-                self._jog_btns.append(b)
-            sb = ttk.Button(f, text='■', width=3, state='disabled',
-                            command=lambda: self.node.set_jog((0,0,0),(0,0,0)))
-            sb.pack(side=tk.LEFT, padx=4)
-            self._jog_btns.append(sb)
-
-    def _toggle_vel(self):
-        enabled = not self.node._vel_enabled
-        self.node.set_vel_enabled(enabled)
-        if enabled:
-            self._vel_btn.configure(text='■ 关闭速度控制', bg='#e06060',
-                                    fg='white', relief='sunken')
-            self._log('▶ 速度控制已开启')
-        else:
-            self._vel_btn.configure(text='▶ 开启速度控制', bg='#d0d0d0',
-                                    fg='#444444', relief='raised')
-            self._log('■ 速度控制已关闭')
-        s = 'normal' if enabled else 'disabled'
-        for b in self._jog_btns:
-            b.configure(state=s)
 
     # ── 日志 ──────────────────────────────────────────────────────────────────────
     def _build_log_panel(self, parent, pad):

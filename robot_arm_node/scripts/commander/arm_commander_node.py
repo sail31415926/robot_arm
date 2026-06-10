@@ -7,7 +7,6 @@
 
 职责：
   - 承载 ArmMoveToPose / ArmTrajectoryShot 两个 Action Server
-  - 订阅 ArmFollowCommand（持续速度流）
   - 发布 ArmStatus（10Hz 周期广播）
   - 管理高层状态机：IDLE → MOVING → REACHED / STOPPED / ERROR
 
@@ -37,6 +36,7 @@
 """
 
 import queue
+import time
 import threading
 from enum import IntEnum
 
@@ -46,8 +46,10 @@ from rclpy.action import ActionServer, CancelResponse
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 
+from std_srvs.srv import Trigger
+
 from robot_arm_interfaces.action import ArmMoveToPose, ArmTrajectoryShot
-from robot_arm_interfaces.msg import ArmFollowCommand, ArmStatus
+from robot_arm_interfaces.msg import ArmStatus
 from robot_arm_interfaces.srv import ArmStop, ArmEnable, ArmHoming, ArmResetError
 
 from commander.move_to_pose_server import MoveToPoseServer
@@ -88,7 +90,6 @@ DEFAULT_POSE_OBSERVE = dict(x=0.20, y=0.00, z=0.75, roll=90.0, pitch=0.0, yaw=0.
 
 
 # ── 话题 / 动作名称常量 ───────────────────────────────────────────────────────────
-TOPIC_FOLLOW_CMD   = '/robot_arm/follow_command'
 TOPIC_ARM_STATUS   = '/robot_arm/arm_status'
 ACTION_MOVE_TO_POSE   = '/robot_arm/move_to_pose'
 ACTION_TRAJECTORY_SHOT  = '/robot_arm/trajectory_shot'
@@ -96,6 +97,11 @@ SERVICE_ARM_STOP        = '/robot_arm/stop'
 SERVICE_ARM_ENABLE      = '/robot_arm/enable'
 SERVICE_ARM_HOMING      = '/robot_arm/homing'
 SERVICE_ARM_RESET_ERROR = '/robot_arm/reset_error'
+
+# arm_node（实物驱动层）底层服务
+ARM_NODE_ENABLE_SRV  = '/arm_node/enable'
+ARM_NODE_DISABLE_SRV = '/arm_node/disable'
+ARM_NODE_RECOVER_SRV = '/arm_node/recover'
 
 HOMING_JOINTS    = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 HOMING_DURATION  = 4.0   # 秒
@@ -106,7 +112,6 @@ class ArmCommanderNode(Node):
 
     作为 ROS 2 Node 运行，承载：
       - ActionServer: ArmMoveToPose, ArmTrajectoryShot
-      - Subscription: ArmFollowCommand
       - Publisher:    ArmStatus (10Hz)
 
     对外接口：
@@ -156,13 +161,6 @@ class ArmCommanderNode(Node):
             callback_group   = self._cb_group,
         )
 
-        # ── 订阅：ArmFollowCommand ──────────────────────────────────────────────
-        self._follow_sub = self.create_subscription(
-            ArmFollowCommand, TOPIC_FOLLOW_CMD,
-            self._on_follow_command, 10,
-            callback_group=self._cb_group,
-        )
-
         # ── 发布：ArmStatus ─────────────────────────────────────────────────────
         self._status_pub  = self.create_publisher(ArmStatus, TOPIC_ARM_STATUS, 10)
         self._status_timer = self.create_timer(0.1, self._publish_status)   # 10Hz
@@ -190,6 +188,11 @@ class ArmCommanderNode(Node):
         )
         self._enabled = False   # 伺服使能状态
 
+        # ── 驱动层客户端（实物）：服务不可用时仅本地记录，支持仿真运行 ──────────
+        self._drv_enable_cli  = self.create_client(Trigger, ARM_NODE_ENABLE_SRV)
+        self._drv_disable_cli = self.create_client(Trigger, ARM_NODE_DISABLE_SRV)
+        self._drv_recover_cli = self.create_client(Trigger, ARM_NODE_RECOVER_SRV)
+
         # ── 参数声明 ────────────────────────────────────────────────────────────
         self.declare_parameter('pose_observe_x',  DEFAULT_POSE_OBSERVE['x'])
         self.declare_parameter('pose_observe_y',  DEFAULT_POSE_OBSERVE['y'])
@@ -201,7 +204,7 @@ class ArmCommanderNode(Node):
         self.get_logger().info('Arm Commander 已就绪  |  '
                                f'状态={STATE_NAME[self._state]}  |  '
                                f'action: {ACTION_MOVE_TO_POSE} / {ACTION_TRAJECTORY_SHOT}  |  '
-                               f'topic: {TOPIC_FOLLOW_CMD} → {TOPIC_ARM_STATUS}')
+                               f'status: {TOPIC_ARM_STATUS}')
 
     # ── 状态机接口 ────────────────────────────────────────────────────────────────
     @property
@@ -351,13 +354,43 @@ class ArmCommanderNode(Node):
         self.get_logger().info(f'ArmStop: {response.message}')
         return response
 
+    # ── 驱动层 Trigger 服务调用辅助 ──────────────────────────────────────────────
+    def _call_driver_trigger(self, client, srv_path: str) -> tuple:
+        """同步调用驱动层 Trigger 服务（0.5s 等待可用，3s 调用超时）。
+        使用 threading.Event + add_done_callback，避免在回调中 sleep 轮询造成死锁。
+        服务不可用时（仿真模式）返回 (True, '仿真模式，跳过') 而不报错。
+        """
+        if not client.wait_for_service(timeout_sec=0.5):
+            self.get_logger().info(f'{srv_path} 不可用，仿真模式跳过')
+            return True, '仿真模式，跳过'
+
+        event = threading.Event()
+        result = [None]
+
+        def _done(future):
+            try:
+                result[0] = future.result()
+            except Exception:
+                pass
+            event.set()
+
+        client.call_async(Trigger.Request()).add_done_callback(_done)
+
+        if event.wait(timeout=10.0) and result[0] is not None:
+            return result[0].success, result[0].message
+        return False, f'{srv_path} 调用超时'
+
     # ── ArmEnable 服务（伺服使能）────────────────────────────────────────────────
     def _on_arm_enable(self, request, response):
-        """上电/下电。仿真层直接记录状态；实机由驱动层接管。"""
-        self._enabled = request.enable
+        """上电/下电：转发到 arm_node 驱动层服务，仿真模式仅本地记录。"""
+        if request.enable:
+            ok, msg = self._call_driver_trigger(self._drv_enable_cli, ARM_NODE_ENABLE_SRV)
+        else:
+            ok, msg = self._call_driver_trigger(self._drv_disable_cli, ARM_NODE_DISABLE_SRV)
+        self._enabled = request.enable if ok else self._enabled
         state_str = '使能' if request.enable else '下电'
-        response.success = True
-        response.message = f'伺服已{state_str}'
+        response.success = ok
+        response.message = f'伺服{state_str}: {msg}'
         self.get_logger().info(f'ArmEnable: {response.message}')
         return response
 
@@ -374,7 +407,6 @@ class ArmCommanderNode(Node):
         self._transition(CommanderState.MOVING)
         self.motion.go_to_joints(HOMING_JOINTS, HOMING_DURATION)
 
-        import time
         deadline = time.time() + HOMING_DURATION + 2.0
         while time.time() < deadline:
             joints = self.motion.get_current_joints()
@@ -391,29 +423,25 @@ class ArmCommanderNode(Node):
 
     # ── ArmResetError 服务（清除故障）────────────────────────────────────────────
     def _on_arm_reset_error(self, _, response):
-        """从 ERROR/STOPPED 恢复到 IDLE，清除错误码。"""
+        """从 ERROR/STOPPED 恢复到 IDLE，同时调用驱动层 recover 清除硬件故障。"""
+        # 先调用驱动层 recover（清除电机 fault 状态）
+        drv_ok, drv_msg = self._call_driver_trigger(self._drv_recover_cli, ARM_NODE_RECOVER_SRV)
+
         current = self.state
         if current in (CommanderState.ERROR, CommanderState.STOPPED):
             cleared = self.status.get_error_code()
             self._transition(CommanderState.IDLE)
             self.status.clear_error()
             self.status.set_command_state(0, ArmStatus.RESULT_NONE)
-            response.success = True
+            response.success = drv_ok
             response.cleared_error_code = cleared
-            response.message = f'已复位，状态 {STATE_NAME[current]} → IDLE'
+            response.message = f'已复位 {STATE_NAME[current]}→IDLE，驱动层: {drv_msg}'
         else:
-            response.success = True
+            response.success = drv_ok
             response.cleared_error_code = 0
-            response.message = f'当前状态={STATE_NAME[current]}，无故障需清除'
+            response.message = f'状态={STATE_NAME[current]}，驱动层recover: {drv_msg}'
         self.get_logger().info(f'ArmResetError: {response.message}')
         return response
-
-    # ── ArmFollowCommand 订阅 ─────────────────────────────────────────────────────
-    def _on_follow_command(self, msg: ArmFollowCommand):
-        """接收 Director 下发的持续速度流（点动 / IBVS），故障时屏蔽。"""
-        if self.state == CommanderState.ERROR:
-            return
-        self.motion.execute_twist(msg.twist)
 
     # ── ArmStatus 周期发布 ────────────────────────────────────────────────────────
     def _publish_status(self):

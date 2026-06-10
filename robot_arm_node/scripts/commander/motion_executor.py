@@ -190,15 +190,25 @@ class MotionExecutor:
         duration = max(dist_xyz / max(v, 1e-6) * 1.5, 0.5)  # 1.5x 加减速余量，下限 0.5s
 
         # ── 4. 下发 JointTrajectory ─────────────────────────────────────────────
+        # 必须包含起始点（t=0）+ 目标点（t=duration）：
+        #   IP 模式：需要两点之间做线性插补，单点会导致缓冲下溢→驱动失能
+        #   PP 模式：取最后一个 waypoint，起始点不影响行为
         msg = JointTrajectory()
         msg.header.stamp = self._node.get_clock().now().to_msg()
         msg.joint_names  = JOINT_NAMES
-        pt = JointTrajectoryPoint()
-        pt.positions     = [float(j) for j in joints]
-        pt.velocities    = [0.0] * len(JOINT_NAMES)
-        pt.time_from_start = Duration(
+
+        pt0 = JointTrajectoryPoint()
+        pt0.positions      = [float(j) for j in self.get_current_joints()]
+        pt0.velocities     = [0.0] * len(JOINT_NAMES)
+        pt0.time_from_start = Duration(sec=0, nanosec=0)
+
+        pt1 = JointTrajectoryPoint()
+        pt1.positions      = [float(j) for j in joints]
+        pt1.velocities     = [0.0] * len(JOINT_NAMES)
+        pt1.time_from_start = Duration(
             sec=int(duration), nanosec=int((duration % 1) * 1e9))
-        msg.points = [pt]
+
+        msg.points = [pt0, pt1]
         self._traj_pub.publish(msg)
 
         self._logger.info(f'JointTrajectory 已下发 (duration={duration:.2f}s)')
@@ -362,12 +372,19 @@ class MotionExecutor:
         msg = JointTrajectory()
         msg.header.stamp = self._node.get_clock().now().to_msg()
         msg.joint_names  = JOINT_NAMES
-        pt = JointTrajectoryPoint()
-        pt.positions     = [float(j) for j in target_joints]
-        pt.velocities    = [0.0] * len(target_joints)
-        pt.time_from_start = Duration(
+
+        pt0 = JointTrajectoryPoint()
+        pt0.positions      = [float(j) for j in self.get_current_joints()]
+        pt0.velocities     = [0.0] * len(JOINT_NAMES)
+        pt0.time_from_start = Duration(sec=0, nanosec=0)
+
+        pt1 = JointTrajectoryPoint()
+        pt1.positions      = [float(j) for j in target_joints]
+        pt1.velocities     = [0.0] * len(target_joints)
+        pt1.time_from_start = Duration(
             sec=int(duration_sec), nanosec=int((duration_sec % 1) * 1e9))
-        msg.points = [pt]
+
+        msg.points = [pt0, pt1]
         self._traj_pub.publish(msg)
 
         return {'success': True, 'exit_reason': 'sent', 'error_code': 0}

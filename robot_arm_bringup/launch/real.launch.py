@@ -17,6 +17,7 @@
   ros2 launch robot_arm_bringup real.launch.py controller:=spherical_orbit            # 球面轨道运镜
   ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_velocity         # 笛卡尔速度（手动点动，MoveIt Servo）
   ros2 launch robot_arm_bringup real.launch.py controller:=ibvs_control               # 红色方块 IBVS 闭环
+  ros2 launch robot_arm_bringup real.launch.py controller:=commander                  # Arm Commander 中间层
   ros2 launch robot_arm_bringup real.launch.py camera_type:=pixy
 
 视频流由 robot_camera_node（robot_gimbal_node 包）单独启动，仅占用 V4L2，
@@ -99,7 +100,7 @@ def generate_launch_description():
         'controller', default_value='joint_position',
         description='控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
                     'cartesian_trajectory | spherical_orbit | cartesian_velocity | '
-                    'ibvs_control',
+                    'ibvs_control | commander',
     )
     ctrl = LaunchConfiguration('controller')
 
@@ -182,7 +183,7 @@ def generate_launch_description():
     needs_moveit = IfCondition(
         PythonExpression([
             "'", ctrl, "' in ['cartesian_moveit','cartesian_realtime_ik',"
-            "'cartesian_trajectory','spherical_orbit']"
+            "'cartesian_trajectory','spherical_orbit','commander']"
         ])
     )
     # 实物模式直接创建 move_group，使用 FollowJointTrajectory action 配置
@@ -206,9 +207,10 @@ def generate_launch_description():
         condition=needs_moveit,
     )
 
-    # ── MoveIt Servo（cartesian_velocity / ibvs_control 模式）─────────────────
+    # ── MoveIt Servo（cartesian_velocity / ibvs_control / commander 模式）──────
     is_velocity     = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
     is_ibvs_control = IfCondition(PythonExpression(["'", ctrl, "' == 'ibvs_control'"]))
+    is_commander    = IfCondition(PythonExpression(["'", ctrl, "' == 'commander'"]))
     needs_servo     = IfCondition(PythonExpression(
         ["'", ctrl, "' in ['cartesian_velocity','ibvs_control']"]))
 
@@ -249,10 +251,12 @@ def generate_launch_description():
     )
 
     # 电机状态控制 GUI：一键 使能/失能/故障复位（作用于整体 arm_node 的 Joint1-3）
+    # commander 模式由 commander_test_gui 统一管理使能/复位，不需要此窗口
     motor_state_gui = Node(
         package='robot_arm_driver', executable='motor_state_control_gui',
         name='motor_state_control_gui', output='screen',
         parameters=[{'namespaces': ['/arm_node'], 'labels': ['ARM']}],
+        condition=IfCondition(PythonExpression(["'", ctrl, "' != 'commander'"])),
     )
 
     # Servo 模式：t=3s 安全姿态预移动（3s 运动），t=7s 启动 servo_node + 控制器
@@ -275,6 +279,28 @@ def generate_launch_description():
                  output='screen', condition=is_ibvs_control),
         ],
         condition=is_ibvs_control,
+    )
+
+    # ── commander 模式 ────────────────────────────────────────────────────────
+    # t=10s：等 move_group planning scene 完全就绪后再启动
+    commander_start = TimerAction(
+        period=10.0,
+        actions=[
+            Node(
+                package='robot_arm_node',
+                executable='arm_commander_node',
+                output='screen',
+                parameters=[{'use_sim_time': False}],
+                condition=is_commander,
+            ),
+            Node(
+                package='robot_arm_node',
+                executable='commander_test_gui',
+                output='screen',
+                condition=is_commander,
+            ),
+        ],
+        condition=is_commander,
     )
 
     # 摄像头控制器 2 s 后 spawn（等 ros2_control_node 初始化）
@@ -307,4 +333,5 @@ def generate_launch_description():
         spawn_gui,
         cartesian_velocity_start,  # t=7s，仅 cartesian_velocity 模式
         ibvs_start,                # t=7s，仅 ibvs_control 模式
+        commander_start,           # t=10s，仅 commander 模式
     ])

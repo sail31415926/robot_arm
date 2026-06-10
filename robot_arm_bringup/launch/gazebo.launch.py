@@ -141,8 +141,6 @@ def generate_launch_description():
         ],
         condition=is_commander,
     )
-    # commander_servo_start 在 make_servo_node 定义后赋值，见下方 MoveIt Servo 区块
-
     # ── MoveIt（需要 IK 的控制方式，含 commander）─────────────────────────────
     needs_moveit = IfCondition(
         PythonExpression([
@@ -157,7 +155,7 @@ def generate_launch_description():
         condition=needs_moveit,
     )
 
-    # ── MoveIt Servo 条件（cartesian_velocity / ibvs_control / commander）────────
+    # ── MoveIt Servo 条件（cartesian_velocity / ibvs_control）────────────────────
     is_velocity     = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
     is_ibvs_control = IfCondition(PythonExpression(["'", ctrl, "' == 'ibvs_control'"]))
     def make_servo_node(condition, check_collisions=True):
@@ -180,13 +178,6 @@ def generate_launch_description():
             ],
             condition=condition,
         )
-
-    # servo_node 需等安全姿态完成后再起（4s 延迟，与 velocity 模式相同）
-    commander_servo_start = TimerAction(
-        period=4.0,
-        actions=[make_servo_node(is_commander, check_collisions=False)],
-        condition=is_commander,
-    )
 
     # ── 安全姿态预移动（全零关节是运动学奇异点，servo 启动前须先移走）──────────
     # commander 模式不需要预移动，由上层自行决定初始姿态
@@ -315,8 +306,7 @@ def generate_launch_description():
                          move_to_safe_pose,
                          velocity_start_after_pose,
                          ibvs_control_start_after_pose,
-                         trajectory_ctrl, spherical_orbit_ctrl,
-                         commander_servo_start],
+                         trajectory_ctrl, spherical_orbit_ctrl],
             )
         ),
         # commander：节点独立延迟启动（不等 arm_controller_spawner，5s 后自动出现）
