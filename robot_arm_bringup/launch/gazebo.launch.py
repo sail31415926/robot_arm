@@ -20,7 +20,7 @@
            ibvs_control          → cartesian_velocity_gui + red_box_detector
                                    + ibvs_control_node          (红色方块 IBVS 闭环)
            commander             → arm_commander_node          (Arm Commander 中间层)
-                                   + commander_test_gui         (Director 视角测试 GUI，需要 MoveIt/IK)
+                                   + commander_test_gui         (Director 视角测试 GUI，需要 MoveIt/IK，gui:=false 可关闭)
          MoveIt 由本文件自动 include，无需额外启动 moveit.launch.py。
 
          示例：
@@ -32,7 +32,8 @@
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=spherical_orbit                  # 球面轨道运镜
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_velocity               # 笛卡尔速度（手动点动）
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control                     # 红色方块 IBVS
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander                        # Arm Commander 中间层测试
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander                        # Arm Commander 中间层（含 GUI）
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander gui:=false             # Arm Commander 中间层（无 GUI）
 
 @copyright Copyright (c) 2026 eMeet
 """
@@ -100,7 +101,12 @@ def generate_launch_description():
         description=('控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
                      'cartesian_trajectory | spherical_orbit | cartesian_velocity | ibvs_control | commander'),
     )
+    gui_arg = DeclareLaunchArgument(
+        'gui', default_value='true',
+        description='是否启动 commander_test_gui（仅 controller:=commander 时生效）: true | false',
+    )
     ctrl = LaunchConfiguration('controller')
+    gui  = LaunchConfiguration('gui')
 
     def controller_node(mode_name, exe_name):
         """根据 controller 参数条件启动对应节点"""
@@ -137,6 +143,9 @@ def generate_launch_description():
                 package='robot_arm_node',
                 executable='commander_test_gui',
                 output='screen',
+                condition=IfCondition(PythonExpression(
+                    ["'", ctrl, "' == 'commander' and '", gui, "' == 'true'"]
+                )),
             ),
         ],
         condition=is_commander,
@@ -279,6 +288,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         controller_arg,
+        gui_arg,
         SetEnvironmentVariable('GAZEBO_MODEL_DATABASE_URI', ''),
         SetEnvironmentVariable(
             name='GAZEBO_MODEL_PATH',

@@ -17,7 +17,8 @@
   ros2 launch robot_arm_bringup real.launch.py controller:=spherical_orbit            # 球面轨道运镜
   ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_velocity         # 笛卡尔速度（手动点动，MoveIt Servo）
   ros2 launch robot_arm_bringup real.launch.py controller:=ibvs_control               # 红色方块 IBVS 闭环
-  ros2 launch robot_arm_bringup real.launch.py controller:=commander                  # Arm Commander 中间层
+  ros2 launch robot_arm_bringup real.launch.py controller:=commander                  # Arm Commander 中间层（含 GUI）
+  ros2 launch robot_arm_bringup real.launch.py controller:=commander gui:=false       # Arm Commander 中间层（无 GUI，纯话题接口）
   ros2 launch robot_arm_bringup real.launch.py camera_type:=pixy
 
 视频流由 robot_camera_node（robot_gimbal_node 包）单独启动，仅占用 V4L2，
@@ -102,7 +103,12 @@ def generate_launch_description():
                     'cartesian_trajectory | spherical_orbit | cartesian_velocity | '
                     'ibvs_control | commander',
     )
+    gui_arg = DeclareLaunchArgument(
+        'gui', default_value='true',
+        description='是否启动 commander_test_gui（仅 controller:=commander 时生效）: true | false',
+    )
     ctrl = LaunchConfiguration('controller')
+    gui  = LaunchConfiguration('gui')
 
     resolved_camera_type = 'auto'
     for arg in sys.argv:
@@ -297,7 +303,9 @@ def generate_launch_description():
                 package='robot_arm_node',
                 executable='commander_test_gui',
                 output='screen',
-                condition=is_commander,
+                condition=IfCondition(PythonExpression(
+                    ["'", ctrl, "' == 'commander' and '", gui, "' == 'true'"]
+                )),
             ),
         ],
         condition=is_commander,
@@ -323,6 +331,7 @@ def generate_launch_description():
     return LaunchDescription([
         camera_type_arg,
         controller_arg,
+        gui_arg,
         robot_state_publisher,
         ros2_control_node,
         arm_node,
