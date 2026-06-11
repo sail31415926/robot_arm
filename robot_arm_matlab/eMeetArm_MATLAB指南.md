@@ -11,6 +11,8 @@
 | `eMeetArm_workspace.m` | 蒙特卡洛法求无姿态约束的最大可达空间 |
 | `eMeetArm_workspace_IK.m` | IK 扫描法求固定末端朝向下的可达空间 |
 | `eMeetArm_joint_control.m` | 滑块交互控制，3D 实时显示关节位姿 |
+| `eMeetArm_cartesian_traj.m` | 笛卡尔直线轨迹：IK 逐点求解 + 关节角曲线 + 误差分析 |
+| `eMeetArm_velocity_dynamics.m` | **末端速度 → 关节速度（Jacobian 伪逆）+ 关节力矩（逆动力学）时间曲线** |
 
 ---
 
