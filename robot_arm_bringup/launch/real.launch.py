@@ -18,8 +18,9 @@
   ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_velocity         # 笛卡尔速度（手动点动，MoveIt Servo）
   ros2 launch robot_arm_bringup real.launch.py controller:=ibvs_control               # 红色方块 IBVS 闭环
   ros2 launch robot_arm_bringup real.launch.py controller:=commander                  # Arm Commander 中间层（含 GUI）
-  ros2 launch robot_arm_bringup real.launch.py controller:=commander gui:=false       # Arm Commander 中间层（无 GUI，纯话题接口）
+  ros2 launch robot_arm_bringup real.launch.py controller:=commander gui:=false       # Arm Commander 中间层（无 GUI，纯话题接口，同时关闭视频流窗口）
   ros2 launch robot_arm_bringup real.launch.py camera_type:=pixy
+  gui 参数（默认 true）同时控制：commander_test_gui + camera_view 窗口
 
 视频流由 robot_camera_node（robot_gimbal_node 包）单独启动，仅占用 V4L2，
 不与 ros2_control CameraHardwareInterface（HID）冲突，可同时运行。
@@ -157,6 +158,7 @@ def generate_launch_description():
     camera_view_node = Node(
         package='robot_gimbal_node', executable='camera_view',
         name='camera_view_gui', output='screen',
+        condition=IfCondition(gui),
     )
 
     # ── Camera controller spawners ────────────────────────────────────────────
