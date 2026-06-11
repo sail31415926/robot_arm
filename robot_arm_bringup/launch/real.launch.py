@@ -17,9 +17,9 @@
   ros2 launch robot_arm_bringup real.launch.py controller:=spherical_orbit            # 球面轨道运镜
   ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_velocity         # 笛卡尔速度（手动点动，MoveIt Servo）
   ros2 launch robot_arm_bringup real.launch.py controller:=ibvs_control               # 红色方块 IBVS 闭环
+  
   ros2 launch robot_arm_bringup real.launch.py controller:=commander                  # Arm Commander 中间层（含 GUI）
   ros2 launch robot_arm_bringup real.launch.py controller:=commander gui:=false       # Arm Commander 中间层（无 GUI，纯话题接口，同时关闭视频流窗口）
-  ros2 launch robot_arm_bringup real.launch.py camera_type:=pixy
   gui 参数（默认 true）同时控制：commander_test_gui + camera_view 窗口
 
 视频流由 robot_camera_node（robot_gimbal_node 包）单独启动，仅占用 V4L2，
@@ -29,7 +29,6 @@
 """
 
 import os
-import sys
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -94,10 +93,6 @@ def generate_launch_description():
     srdf_content     = open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf')).read()
 
     # ── Launch arguments ──────────────────────────────────────────────────────
-    camera_type_arg = DeclareLaunchArgument(
-        'camera_type', default_value='auto',
-        description='摄像头型号: auto | pixy | e7002 | piko',
-    )
     controller_arg = DeclareLaunchArgument(
         'controller', default_value='joint_position',
         description='控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
@@ -111,11 +106,7 @@ def generate_launch_description():
     ctrl = LaunchConfiguration('controller')
     gui  = LaunchConfiguration('gui')
 
-    resolved_camera_type = 'auto'
-    for arg in sys.argv:
-        if arg.startswith('camera_type:='):
-            resolved_camera_type = arg.split(':=', 1)[1]
-    camera_urdf = _camera_ros2_control_urdf(resolved_camera_type)
+    camera_urdf = _camera_ros2_control_urdf('auto')
 
     with open(urdf_path, 'r') as f:
         full_urdf = f.read()
@@ -331,7 +322,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        camera_type_arg,
         controller_arg,
         gui_arg,
         robot_state_publisher,
