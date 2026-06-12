@@ -327,7 +327,7 @@ def generate_launch_description():
         robot_state_publisher,
         ros2_control_node,
         arm_node,
-        robot_camera_node,
+        # robot_camera_node,
         camera_view_node,
         move_group_node,           # cartesian_moveit / cartesian_realtime_ik / cartesian_trajectory / spherical_orbit
         spawn_camera,
