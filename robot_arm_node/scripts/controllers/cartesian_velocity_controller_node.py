@@ -40,7 +40,7 @@ from arm_utils import rpy_to_quat, quat_to_rpy
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 EEF_LINK   = 'tool0'
-BASE_FRAME = 'base_link'
+BASE_FRAME = 'arm_base_link'
 
 JOINT_NAMES    = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
 PLANNING_GROUP = 'arm'

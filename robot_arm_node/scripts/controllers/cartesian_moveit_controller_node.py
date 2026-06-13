@@ -47,7 +47,7 @@ PARAMS = [
 ]
 PLANNING_GROUP = 'arm'
 EEF_LINK       = 'tool0'
-BASE_FRAME     = 'base_link'
+BASE_FRAME     = 'arm_base_link'
 
 # ── 运动参数默认值（在此修改即可）────────────────────────────────────────────
 DEFAULT_VEL      = 0.9    # 速度缩放比例   (0.01 ~ 1.0)

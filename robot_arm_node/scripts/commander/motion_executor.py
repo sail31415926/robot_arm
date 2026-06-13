@@ -50,7 +50,7 @@ from arm_utils import rpy_to_quat, quat_to_rpy, sphere_to_cart, aim_quat
 JOINT_NAMES    = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
 PLANNING_GROUP = 'arm'
 EEF_LINK       = 'tool0'
-BASE_FRAME     = 'base_link'
+BASE_FRAME     = 'arm_base_link'
 
 STREAM_DT    = 0.01     # s，Ruckig 内部步长（100Hz）
 IK_TIMEOUT_S = 0.05     # 单次 IK 超时

@@ -43,6 +43,20 @@ def _load_yaml(path):
         return yaml.safe_load(f)
 
 
+def _arm_only_urdf(full_urdf_path: str) -> str:
+    """从合并 URDF 中提取机械臂部分（arm_base_link 为根），供 MoveIt 使用。
+    去掉底盘 base_link 和连接关节 arm_base_joint，避免 arm_base_link 出现
+    两个父节点导致 MoveIt 运动学树出现环路。"""
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(full_urdf_path)
+    root = tree.getroot()
+    for elem in root.findall('link[@name="base_link"]'):
+        root.remove(elem)
+    for elem in root.findall('joint[@name="arm_base_joint"]'):
+        root.remove(elem)
+    return ET.tostring(root, encoding='unicode')
+
+
 def _camera_ros2_control_urdf(camera_type: str) -> str:
     return f"""<?xml version="1.0"?>
 <robot name="eMeetCamera">
@@ -85,12 +99,12 @@ def generate_launch_description():
     bringup_share    = get_package_share_directory('robot_arm_bringup')
     driver_share     = get_package_share_directory('robot_arm_driver')
     gimbal_share     = get_package_share_directory('robot_gimbal_node')
-    urdf_path        = os.path.join(desc_share, 'urdf', 'eMeetArm_models.urdf')
+    urdf_path        = os.path.join(desc_share, 'urdf', 'eMeetArm_with_chassis.urdf')
     arm_yaml         = os.path.join(driver_share, 'config', 'arm.yaml')
     controllers_yaml = os.path.join(desc_share, 'config', 'controllers.yaml')
     moveit_cfg       = os.path.join(bringup_share, 'config', 'moveit')
     servo_params     = _load_yaml(os.path.join(moveit_cfg, 'servo_config.yaml'))
-    srdf_content     = open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf')).read()
+    srdf_content     = open(os.path.join(desc_share, 'srdf', 'eMeetArm_with_chassis.srdf')).read()
 
     # ── Launch arguments ──────────────────────────────────────────────────────
     controller_arg = DeclareLaunchArgument(
@@ -110,6 +124,8 @@ def generate_launch_description():
 
     with open(urdf_path, 'r') as f:
         full_urdf = f.read()
+    # MoveIt 专用：去掉底盘 base_link，让 arm_base_link 作为运动学根节点
+    arm_moveit_urdf = _arm_only_urdf(urdf_path)
 
     # ── Core nodes ────────────────────────────────────────────────────────────
     robot_state_publisher = Node(
@@ -192,7 +208,7 @@ def generate_launch_description():
         executable='move_group',
         output='screen',
         parameters=[
-            {'robot_description': full_urdf},
+            {'robot_description': arm_moveit_urdf},
             {'robot_description_semantic': srdf_content},
             {'robot_description_kinematics': _load_yaml(
                 os.path.join(desc_share, 'config', 'kinematics.yaml'))},
@@ -222,7 +238,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 servo_params,
-                {'robot_description': full_urdf,
+                {'robot_description': arm_moveit_urdf,
                  'robot_description_semantic': srdf_content,
                  'use_sim_time': False,
                  'use_gazebo': False},

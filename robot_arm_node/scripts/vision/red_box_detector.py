@@ -63,7 +63,7 @@ IMAGE_TOPIC   = '/camera/camera_sensor/image_raw'
 DEBUG_TOPIC   = '/red_detector/image'
 FEATURE_TOPIC = '/red_detector/feature'   # PointStamped: x=x_norm, y=y_norm, z=depth
 CAMERA_FRAME  = 'camera_optical_frame'
-BASE_FRAME    = 'base_link'
+BASE_FRAME    = 'arm_base_link'
 WINDOW_NAME   = 'Red Box Detector'
 
 

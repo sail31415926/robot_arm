@@ -71,7 +71,7 @@ CAM_DIST = np.zeros((4, 1), dtype=np.float32)
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 CAMERA_FRAME = 'camera_optical_frame'
-BASE_FRAME   = 'base_link'
+BASE_FRAME   = 'arm_base_link'
 IMAGE_TOPIC   = '/camera/camera_sensor/image_raw'
 FEATURE_TOPIC = '/red_detector/feature'   # 由 red_box_detector 发布
 VEL_TOPIC     = '/arm_vel_cmd'

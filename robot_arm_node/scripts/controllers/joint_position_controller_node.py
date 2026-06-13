@@ -59,7 +59,7 @@ class JointPositionControllerNode(Node):
 
     def _publish_end_effector(self):
         try:
-            t = self.tf_buffer.lookup_transform('base_link', 'tool0', rclpy.time.Time())
+            t = self.tf_buffer.lookup_transform('arm_base_link', 'tool0', rclpy.time.Time())
             tr = t.transform.translation
             q = t.transform.rotation
             # quaternion → RPY (rad)

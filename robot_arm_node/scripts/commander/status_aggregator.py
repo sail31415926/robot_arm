@@ -34,7 +34,7 @@ from arm_utils import quat_to_rpy
 # ── 常量 ──────────────────────────────────────────────────────────────────────────
 JOINT_NAMES       = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
 EEF_LINK          = 'tool0'
-BASE_FRAME        = 'base_link'
+BASE_FRAME        = 'arm_base_link'
 JOINT_STATE_TOPIC = '/joint_states'
 
 # 末端速度估算：保留最近 N 个位姿样本做数值微分

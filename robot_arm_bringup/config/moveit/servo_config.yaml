@@ -33,9 +33,9 @@ monitored_planning_scene_topic: "/move_group/monitored_planning_scene"
 
 # 关联到 MoveIt 规划组与帧
 move_group_name:           arm
-planning_frame:            base_link
+planning_frame:            arm_base_link
 ee_frame_name:             tool0
-robot_link_command_frame:  base_link
+robot_link_command_frame:  arm_base_link
 
 # 命令超时：超过此秒数没收到 Twist 则停止伺服
 # 0.5s 太长（机器人会漂 0.5s），改成 0.1s 让 servo 快速进入 HALT

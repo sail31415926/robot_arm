@@ -36,7 +36,7 @@ from arm_utils import rpy_to_quat, quat_to_rpy
 JOINT_NAMES    = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
 PLANNING_GROUP = 'arm'
 EEF_LINK       = 'tool0'
-BASE_FRAME     = 'base_link'
+BASE_FRAME     = 'arm_base_link'
 
 TRAJ_DURATION  = 0.3    # s，控制器平滑插值窗口，越长运动越平滑
 DEBOUNCE_MS    = 10     # ms，滑块防抖延迟，越短响应越及时
