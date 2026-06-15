@@ -99,6 +99,17 @@ def generate_launch_description():
     ).toxml()
 
     # ── Launch arguments ──────────────────────────────────────────────────────
+    robot_description_arg = DeclareLaunchArgument(
+        'robot_description',
+        default_value=_arm_urdf,
+        description='完整机器人 URDF/XML 字符串；默认使用 arm_sim.urdf.xacro 处理结果',
+    )
+    robot_description_semantic_arg = DeclareLaunchArgument(
+        'robot_description_semantic',
+        default_value=srdf_content,
+        description='SRDF 语义描述字符串；默认使用 eMeetArm_models.srdf',
+    )
+
     controller_arg = DeclareLaunchArgument(
         'controller', default_value='joint_position',
         description='控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
@@ -112,15 +123,16 @@ def generate_launch_description():
     ctrl = LaunchConfiguration('controller')
     gui  = LaunchConfiguration('gui')
 
-    camera_urdf     = _camera_ros2_control_urdf('auto')
-    arm_moveit_urdf = _arm_urdf
+    camera_urdf = _camera_ros2_control_urdf('auto')
+    rd  = LaunchConfiguration('robot_description')
+    rds = LaunchConfiguration('robot_description_semantic')
 
     # ── Core nodes ────────────────────────────────────────────────────────────
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='screen',
-        parameters=[{'robot_description': _arm_urdf, 'use_sim_time': False}],
+        parameters=[{'robot_description': rd, 'use_sim_time': False}],
     )
 
     # ros2_control 只管摄像头云台（Joint4-6）
@@ -196,8 +208,8 @@ def generate_launch_description():
         executable='move_group',
         output='screen',
         parameters=[
-            {'robot_description': arm_moveit_urdf},
-            {'robot_description_semantic': srdf_content},
+            {'robot_description': rd},
+            {'robot_description_semantic': rds},
             {'robot_description_kinematics': _load_yaml(
                 os.path.join(desc_share, 'config', 'kinematics.yaml'))},
             {'robot_description_planning': _load_yaml(
@@ -226,8 +238,8 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 servo_params,
-                {'robot_description': arm_moveit_urdf,
-                 'robot_description_semantic': srdf_content,
+                {'robot_description': rd,
+                 'robot_description_semantic': rds,
                  'use_sim_time': False,
                  'use_gazebo': False},
                 {'robot_description_kinematics': _load_yaml(
@@ -326,6 +338,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        robot_description_arg,
+        robot_description_semantic_arg,
         controller_arg,
         gui_arg,
         robot_state_publisher,
