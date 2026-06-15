@@ -20,6 +20,7 @@
 """
 
 import os
+import xacro
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -52,8 +53,8 @@ def generate_launch_description():
     rviz         = LaunchConfiguration('rviz')
 
     # ── Robot description ──────────────────────────────────────────────────────
-    with open(os.path.join(desc_share, 'urdf', 'eMeetArm_models.urdf'), 'r') as f:
-        urdf_content = f.read()
+    xacro_path = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
+    urdf_content = xacro.process_file(xacro_path).toxml()
     with open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf'), 'r') as f:
         srdf_content = f.read()
 

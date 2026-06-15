@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<!--
+  arm_sim.urdf.xacro — 独立仿真入口（Gazebo / MuJoCo / display / MoveIt）
+
+  xacro 参数（通过 xacro.process_file mappings 传入）：
+    sim_mode        true / false  eMeetCamera 仿真模式（默认 true）
+    gazebo_camera   true / false  Joint4-6 是否用 GazeboSystem（默认 false）
+                                  Gazebo 仿真时须设为 true
+    controllers_yaml              gazebo_ros2_control 控制器配置文件路径
+                                  空字符串时跳过插件（MuJoCo/display 不需要）
+
+  TF 树：
+    world
+      └─ arm_base_joint (fixed)
+           └─ arm_base_link
+                └─ Joint1 → ... → tool0 → camera_optical_frame
+-->
+<robot name="eMeetArm_models" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="sim_mode"         default="true"/>
+  <xacro:arg name="gazebo_camera"    default="false"/>
+  <xacro:arg name="controllers_yaml" default=""/>
+
+  <xacro:include filename="$(find robot_arm_description)/urdf/arm.urdf.xacro"/>
+
+  <link name="world"/>
+
+  <xacro:emeet_arm
+      parent="world"
+      xyz="0 0 0"
+      rpy="0 0 0"
+      sim_mode="$(arg sim_mode)"
+      gazebo_camera="$(arg gazebo_camera)"
+      controllers_yaml="$(arg controllers_yaml)"/>
+
+</robot>

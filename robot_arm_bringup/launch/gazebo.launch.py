@@ -39,7 +39,7 @@
 """
 
 import os
-import re
+import xacro
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -64,22 +64,19 @@ def generate_launch_description():
     bringup_share    = get_package_share_directory('robot_arm_bringup')
     arm_share_parent = os.path.dirname(desc_share)   # Gazebo 解析 package://robot_arm_description/... 需要
     moveit_cfg       = os.path.join(bringup_share, 'config', 'moveit')
-    urdf_path     = os.path.join(desc_share, 'urdf', 'eMeetArm_models.urdf')
+    xacro_path        = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
     controllers_yaml_path = os.path.join(desc_share, 'config', 'controllers.yaml')
     world_file    = os.path.join(bringup_share, 'sim', 'gazebo', 'worlds', 'emeet_arm.world')
     gazebo_ros_share = get_package_share_directory('gazebo_ros')
 
-    with open(urdf_path, 'r') as f:
-        robot_description = f.read().replace('CONTROLLERS_YAML_PATH', controllers_yaml_path)
-    # Gazebo 需要 gazebo_ros2_control::GazeboSystemInterface，而 CameraHardwareInterface
-    # 继承的是 hardware_interface::SystemInterface，两者不兼容。
-    # 仿真时 Joint4-6 同样用 GazeboSystem 托管，sim_mode 参数同时去掉（Gazebo 不认识）。
-    robot_description = robot_description.replace(
-        '<plugin>emeet_camera_driver/CameraHardwareInterface</plugin>',
-        '<plugin>gazebo_ros2_control/GazeboSystem</plugin>',
-    )
-    robot_description = re.sub(r'<!--.*?-->', '', robot_description, flags=re.DOTALL)
-    robot_description = ' '.join(robot_description.split())
+    robot_description = xacro.process_file(
+        xacro_path,
+        mappings={
+            'sim_mode':         'true',
+            'gazebo_camera':    'true',
+            'controllers_yaml': controllers_yaml_path,
+        },
+    ).toxml()
 
     # ── MoveIt Servo 用到的额外资源（servo 模式：cartesian_velocity / ibvs_control）─
     with open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf'), 'r') as f:

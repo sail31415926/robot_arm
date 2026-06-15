@@ -1,0 +1,422 @@
+<?xml version="1.0"?>
+<!--
+  arm.urdf.xacro — eMeetArm 机械臂可复用 xacro macro
+
+  参数：
+    parent           挂载父 link 名称（必填，例如 "base_link"）
+    xyz              机械臂基座相对父 link 的位置偏移（默认 "0 0 0.31"）
+    rpy              机械臂基座相对父 link 的姿态偏移（默认 "0 0 0"）
+    sim_mode         eMeetCamera 硬件插件是否仿真模式（默认 "true"）
+                       true  → 回显指令作为状态，不连接 USB HID（Gazebo）
+                       false → 连接实物 USB HID 设备（真实硬件）
+    controllers_yaml gazebo_ros2_control 控制器配置文件路径
+                       非空时插入 gazebo_ros2_control 插件
+                       空字符串时跳过（由外层组合 xacro 统一注入）
+
+  用法示例（在 full_robot.urdf.xacro 中挂到底盘）：
+    <xacro:include filename="$(find robot_arm_description)/urdf/arm.urdf.xacro"/>
+    <xacro:emeet_arm
+        parent="base_link"
+        xyz="0 0 0.31" rpy="0 0 0"
+        sim_mode="true"
+        controllers_yaml="$(find robot_arm_bringup)/config/controllers.yaml"/>
+
+  用法示例（独立仿真，作为顶层 robot）：
+    <robot name="eMeetArm" xmlns:xacro="http://www.ros.org/wiki/xacro">
+      <xacro:include filename="$(find robot_arm_description)/urdf/arm.urdf.xacro"/>
+      <link name="world"/>
+      <xacro:emeet_arm parent="world" xyz="0 0 0" rpy="0 0 0"
+                       sim_mode="true"
+                       controllers_yaml="$(find robot_arm_description)/config/controllers.yaml"/>
+    </robot>
+
+  TF 树（挂载到底盘时）：
+    ${parent}（底盘根节点）
+      └─ arm_base_joint (fixed, offset = xyz/rpy)
+           └─ arm_base_link
+                └─ Joint1 → Link1
+                     └─ Joint2 → Link2
+                          └─ Joint3 → Link3
+                               └─ Joint4 → Link4
+                                    └─ Joint5 → Link5
+                                         └─ Joint6 → Link6
+                                              └─ tool0_joint → tool0
+                                                   └─ camera_optical_joint → camera_optical_frame
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:macro name="emeet_arm"
+             params="parent
+                     xyz:='0 0 0.31'
+                     rpy:='0 0 0'
+                     sim_mode:='true'
+                     gazebo_camera:='false'
+                     controllers_yaml:=''">
+
+  <!-- ══ 挂载关节：连接父 link 与机械臂基座 ══════════════════════════════════ -->
+  <joint name="arm_base_joint" type="fixed">
+    <parent link="${parent}"/>
+    <child link="arm_base_link"/>
+    <origin xyz="${xyz}" rpy="${rpy}"/>
+  </joint>
+
+  <!-- ══ Links ════════════════════════════════════════════════════════════════ -->
+
+  <!-- 机械臂基座（原 eMeetArm_models.urdf 中的 base_link，重命名避免与底盘冲突） -->
+  <link name="arm_base_link">
+    <inertial>
+      <origin xyz="-1.26513871156475E-05 -1.5742724565615E-05 0.0452777610383739" rpy="0 0 0"/>
+      <mass value="2.9887249749171"/>
+      <inertia ixx="0.0136862770640689" ixy="6.69045000229793E-07"  ixz="-3.08621535501323E-07"
+               iyy="0.0112779246258948" iyz="-2.26930660317598E-07" izz="0.0223184454586288"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/base_link.STL"/></geometry>
+      <material name=""><color rgba="0.22 0.22 0.23 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/base_link.STL"/></geometry>
+    </collision>
+  </link>
+
+  <link name="Link1">
+    <inertial>
+      <origin xyz="-7.4393277062379E-05 -0.00743203317797858 0.128765008589431" rpy="0 0 0"/>
+      <mass value="2.35824980558236"/>
+      <inertia ixx="0.00383791573125331" ixy="7.01396501492847E-07"   ixz="-3.09202743571665E-06"
+               iyy="0.00465819508220185" iyz="-0.000530039602599771"  izz="0.00221408091488039"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link1.STL"/></geometry>
+      <material name=""><color rgba="0.25 0.25 0.25 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link1.STL"/></geometry>
+    </collision>
+  </link>
+
+  <link name="Link2">
+    <inertial>
+      <origin xyz="0.262334166073163 -2.30075418332643E-05 0.0292792731278192" rpy="0 0 0"/>
+      <mass value="1.23593589919935"/>
+      <inertia ixx="0.000521066265507803" ixy="1.66498206532369E-07" ixz="1.28943373675324E-05"
+               iyy="0.00836492400345204"  iyz="-2.82843566382884E-07" izz="0.00851304966664655"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link2.STL"/></geometry>
+      <material name=""><color rgba="0.28 0.27 0.27 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link2.STL"/></geometry>
+    </collision>
+  </link>
+
+  <link name="Link3">
+    <inertial>
+      <origin xyz="0.250990565530514 0.00808545394179894 -0.0222401755365892" rpy="0 0 0"/>
+      <mass value="0.752556593812719"/>
+      <inertia ixx="0.000425309657305075" ixy="-5.61728607430966E-05"  ixz="-1.50015547434599E-06"
+               iyy="0.00322998845965891"  iyz="-5.25098997553526E-07"  izz="0.00319703542103549"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link3.STL"/></geometry>
+      <material name=""><color rgba="0.26 0.26 0.29 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link3.STL"/></geometry>
+    </collision>
+  </link>
+
+  <link name="Link4">
+    <inertial>
+      <origin xyz="-0.0101264888829805 -9.43656253071801E-06 0.0183147239415546" rpy="0 0 0"/>
+      <mass value="0.096843847451149"/>
+      <inertia ixx="3.90651033692534E-05" ixy="-7.03126515657744E-09" ixz="1.31677639794987E-05"
+               iyy="4.72677970007942E-05" iyz="-4.24198916633624E-09" izz="5.03679132119555E-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link4.STL"/></geometry>
+      <material name=""><color rgba="0.30 0.30 0.30 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link4.STL"/></geometry>
+    </collision>
+  </link>
+
+  <link name="Link5">
+    <inertial>
+      <origin xyz="0.0012638 0.00010623 0.021049" rpy="0 0 0"/>
+      <mass value="0.045324"/>
+      <inertia ixx="9.6597E-06" ixy="4.2023E-08"  ixz="1.6641E-06"
+               iyy="1.3078E-05" iyz="-8.5768E-08" izz="8.9202E-06"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link5.STL"/></geometry>
+      <material name=""><color rgba="0.27 0.28 0.27 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link5.STL"/></geometry>
+    </collision>
+  </link>
+
+  <link name="Link6">
+    <inertial>
+      <origin xyz="-0.000391828204109268 -5.10898276429028E-05 8.72654266097506E-05" rpy="0 0 0"/>
+      <mass value="0.0550538676063611"/>
+      <inertia ixx="1.97473690747458E-05" ixy="2.97287907271867E-08"  ixz="-3.3993136804071E-08"
+               iyy="1.6757375365036E-05"  iyz="-1.34242857049597E-07" izz="1.07644206564509E-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link6.STL"/></geometry>
+      <material name=""><color rgba="0.24 0.24 0.26 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robot_arm_description/meshes/Link6.STL"/></geometry>
+    </collision>
+  </link>
+
+  <link name="tool0"/>
+  <link name="camera_optical_frame"/>
+
+  <!-- ══ Joints ═══════════════════════════════════════════════════════════════ -->
+
+  <joint name="Joint1" type="revolute">
+    <origin xyz="0 0 0.1078" rpy="0 0 0"/>
+    <parent link="arm_base_link"/>
+    <child link="Link1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.1" upper="3.1" effort="5" velocity="3.14"/>
+    <dynamics damping="1.0" friction="0.0"/>
+  </joint>
+
+  <joint name="Joint2" type="revolute">
+    <origin xyz="0 -0.0625 0.1502" rpy="1.5708 -0.30769 -3.1416"/>
+    <parent link="Link1"/>
+    <child link="Link2"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.8" upper="3.14" effort="30" velocity="3.14"/>
+    <dynamics damping="5.0" friction="0.0"/>
+  </joint>
+
+  <joint name="Joint3" type="revolute">
+    <origin xyz="0.35 0 0.089" rpy="0 0 2.8339"/>
+    <parent link="Link2"/>
+    <child link="Link3"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="0.05" effort="5" velocity="3.14"/>
+    <dynamics damping="3.0" friction="0.0"/>
+  </joint>
+
+  <joint name="Joint4" type="revolute">
+    <origin xyz="0.339 -0.024975 -0.04" rpy="1.5708 0 0"/>
+    <parent link="Link3"/>
+    <child link="Link4"/>
+    <axis xyz="0 0 -1"/>
+    <limit lower="-3.1" upper="3.1" effort="1" velocity="1"/>
+    <dynamics damping="0.5" friction="0.0"/>
+  </joint>
+
+  <joint name="Joint5" type="revolute">
+    <origin xyz="-0.022739 0 0.048353" rpy="-1.5708 0 -1.5708"/>
+    <parent link="Link4"/>
+    <child link="Link5"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.7854" upper="0.7854" effort="1" velocity="1"/>
+    <dynamics damping="0.5" friction="0.0"/>
+  </joint>
+
+  <joint name="Joint6" type="revolute">
+    <origin xyz="0 0 0.03484" rpy="3.1416 -1.5708 0"/>
+    <parent link="Link5"/>
+    <child link="Link6"/>
+    <axis xyz="0 0 -1"/>
+    <limit lower="-1.5" upper="0.5" effort="1" velocity="1"/>
+    <dynamics damping="0.5" friction="0.0"/>
+  </joint>
+
+  <joint name="tool0_joint" type="fixed">
+    <parent link="Link6"/>
+    <child link="tool0"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="camera_optical_joint" type="fixed">
+    <parent link="tool0"/>
+    <child link="camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="0 -1.5708 3.1416"/>
+  </joint>
+
+  <!-- ══ ros2_control ══════════════════════════════════════════════════════════
+       Arm joints 1-3：Gazebo 仿真 / 未来 CANopen 硬件插件
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <ros2_control name="eMeetArm_hardware" type="system">
+    <hardware>
+      <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+    </hardware>
+    <joint name="Joint1">
+      <command_interface name="position">
+        <param name="min">-3.1</param>
+        <param name="max">3.1</param>
+      </command_interface>
+      <command_interface name="velocity"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="Joint2">
+      <command_interface name="position">
+        <param name="min">-0.8</param>
+        <param name="max">3.14</param>
+      </command_interface>
+      <command_interface name="velocity"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="Joint3">
+      <command_interface name="position">
+        <param name="min">-3.14</param>
+        <param name="max">0.05</param>
+      </command_interface>
+      <command_interface name="velocity"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+  <!-- ══ ros2_control ══════════════════════════════════════════════════════════
+       Camera joints 4-6：
+         gazebo_camera=true  → GazeboSystem（Gazebo 仿真，物理由 Gazebo 托管）
+         gazebo_camera=false → CameraHardwareInterface（实物/MuJoCo/display）
+                               sim_mode=true  仅回显指令（无 HID 连接）
+                               sim_mode=false 连接实物 USB HID
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <ros2_control name="eMeetCamera_hardware" type="system">
+    <hardware>
+      <xacro:if value="${gazebo_camera}">
+        <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+      </xacro:if>
+      <xacro:unless value="${gazebo_camera}">
+        <plugin>emeet_camera_driver/CameraHardwareInterface</plugin>
+        <param name="camera_type">auto</param>
+        <xacro:if value="${sim_mode}">
+          <param name="sim_mode">true</param>
+        </xacro:if>
+        <xacro:unless value="${sim_mode}">
+          <param name="sim_mode">false</param>
+        </xacro:unless>
+      </xacro:unless>
+    </hardware>
+    <joint name="Joint4">
+      <command_interface name="position">
+        <param name="min">-3.1</param>
+        <param name="max">3.1</param>
+      </command_interface>
+      <command_interface name="velocity"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="Joint5">
+      <command_interface name="position">
+        <param name="min">-0.7854</param>
+        <param name="max">0.7854</param>
+      </command_interface>
+      <command_interface name="velocity"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="Joint6">
+      <command_interface name="position">
+        <param name="min">-1.5</param>
+        <param name="max">0.5</param>
+      </command_interface>
+      <command_interface name="velocity"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+  <!-- ══ Gazebo 材质 ══════════════════════════════════════════════════════════ -->
+  <gazebo reference="arm_base_link">
+    <visual><material>
+      <ambient>0.55 0.57 0.60 1</ambient><diffuse>0.75 0.77 0.80 1</diffuse>
+      <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
+    </material></visual>
+  </gazebo>
+  <gazebo reference="Link1">
+    <visual><material>
+      <ambient>0.55 0.57 0.60 1</ambient><diffuse>0.75 0.77 0.80 1</diffuse>
+      <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
+    </material></visual>
+  </gazebo>
+  <gazebo reference="Link2">
+    <visual><material>
+      <ambient>0.55 0.57 0.60 1</ambient><diffuse>0.75 0.77 0.80 1</diffuse>
+      <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
+    </material></visual>
+  </gazebo>
+  <gazebo reference="Link3">
+    <visual><material>
+      <ambient>0.55 0.57 0.60 1</ambient><diffuse>0.75 0.77 0.80 1</diffuse>
+      <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
+    </material></visual>
+  </gazebo>
+  <gazebo reference="Link4">
+    <visual><material>
+      <ambient>0.55 0.57 0.60 1</ambient><diffuse>0.75 0.77 0.80 1</diffuse>
+      <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
+    </material></visual>
+  </gazebo>
+  <gazebo reference="Link5">
+    <visual><material>
+      <ambient>0.55 0.57 0.60 1</ambient><diffuse>0.75 0.77 0.80 1</diffuse>
+      <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
+    </material></visual>
+  </gazebo>
+  <gazebo reference="Link6">
+    <visual><material>
+      <ambient>0.55 0.57 0.60 1</ambient><diffuse>0.75 0.77 0.80 1</diffuse>
+      <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
+    </material></visual>
+    <sensor name="camera_sensor" type="camera">
+      <pose>0 0 0 -1.5708 0 0</pose>
+      <camera name="head">
+        <horizontal_fov>1.518</horizontal_fov>
+        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+        <clip><near>0.05</near><far>10.0</far></clip>
+      </camera>
+      <plugin name="camera_controller" filename="libgazebo_ros_camera.so">
+        <frame_name>camera_optical_frame</frame_name>
+        <ros><namespace>/camera</namespace></ros>
+      </plugin>
+      <always_on>1</always_on>
+      <update_rate>30</update_rate>
+      <visualize>true</visualize>
+    </sensor>
+  </gazebo>
+
+  <!-- ══ Gazebo ros2_control 插件 ══════════════════════════════════════════════
+       controllers_yaml 非空时才插入，避免组合时重复注入
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <xacro:if value="${controllers_yaml != ''}">
+    <gazebo>
+      <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
+        <parameters>${controllers_yaml}</parameters>
+      </plugin>
+    </gazebo>
+  </xacro:if>
+
+</xacro:macro>
+</robot>

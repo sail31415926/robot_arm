@@ -1,0 +1,162 @@
+# robot_arm_description
+
+eMeetArm 6 轴机械臂描述包。提供 URDF/xacro、网格、运动学配置和控制器配置。
+
+---
+
+## 目录结构
+
+```bash
+robot_arm_description/
+├── urdf/
+│   ├── arm.urdf.xacro          # 机械臂宏定义（对外接口）
+│   ├── arm_sim.urdf.xacro      # 仿真入口（内部 launch 使用）
+│   └── eMeetArm_models.urdf    # SolidWorks 原始导出（参考/备用）
+├── srdf/
+│   └── eMeetArm_models.srdf    # MoveIt 规划组定义
+├── meshes/
+│   └── base_link.STL / Link1~6.STL
+├── config/
+│   ├── controllers.yaml        # ros2_control 控制器配置
+│   ├── kinematics.yaml         # pick_ik 求解器配置
+│   └── joint_limits.yaml       # MoveIt 关节速度/加速度限制
+└── rviz/
+    ├── eMeetArm_models.rviz    # display 可视化配置
+    └── moveit.rviz             # MoveIt MotionPlanning 配置
+```
+
+---
+
+## TF 树
+
+```bash
+world
+  └─ arm_base_joint (fixed)
+       └─ arm_base_link
+            ├─ Joint1 → Link1
+            │    └─ Joint2 → Link2
+            │         └─ Joint3 → Link3
+            │              └─ Joint4 → Link4
+            │                   └─ Joint5 → Link5
+            │                        └─ Joint6 → Link6
+            │                             └─ tool0_joint → tool0
+            │                                  └─ camera_optical_joint → camera_optical_frame
+```
+
+关节分组：
+
+| 关节 | 类型 | 驱动 | 仿真 |
+| --- | --- | --- | --- |
+| Joint1–3 | revolute | CANopen（arm_node） | GazeboSystem |
+| Joint4–6 | revolute | HID（CameraHardwareInterface） | GazeboSystem（`gazebo_camera=true`） |
+
+---
+
+## 核心文件说明
+
+### `urdf/arm.urdf.xacro` — 对外接口
+
+定义 `emeet_arm` xacro 宏，**本包对外唯一暴露的 URDF 接口**。
+
+```xml
+<xacro:include filename="$(find robot_arm_description)/urdf/arm.urdf.xacro"/>
+
+<xacro:emeet_arm
+    parent="base_link"
+    xyz="0 0 0.31"
+    rpy="0 0 0"
+    sim_mode="false"
+    gazebo_camera="false"
+    controllers_yaml=""/>
+```
+
+宏参数说明：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `parent` | —（必填） | 挂载父 link 名称 |
+| `xyz` | `0 0 0.31` | 安装位置偏移（m） |
+| `rpy` | `0 0 0` | 安装姿态偏移（rad） |
+| `sim_mode` | `true` | `false`=连接实物 HID，`true`=仿真回显 |
+| `gazebo_camera` | `false` | `true`=Gazebo 托管 Joint4-6，`false`=CameraHardwareInterface |
+| `controllers_yaml` | `''` | 非空时注入 `gazebo_ros2_control` 插件 |
+
+外部包（底盘包）的 `full_robot.urdf.xacro` 示例：
+
+```xml
+<robot name="my_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- 底盘 -->
+  <xacro:include filename="$(find chassis_description)/urdf/chassis.urdf.xacro"/>
+  <xacro:chassis/>
+
+  <!-- 机械臂挂载到底盘 base_link -->
+  <xacro:include filename="$(find robot_arm_description)/urdf/arm.urdf.xacro"/>
+  <xacro:emeet_arm
+      parent="base_link"
+      xyz="0 0 0.31"
+      rpy="0 0 0"
+      sim_mode="false"
+      gazebo_camera="false"
+      controllers_yaml=""/>
+
+</robot>
+```
+
+### `urdf/arm_sim.urdf.xacro` — 仿真入口（内部使用）
+
+以 `world` 为根节点的独立完整 robot 文档，供 Gazebo / MuJoCo / display / MoveIt launch 文件加载。外部包**不需要**使用此文件，使用 `arm.urdf.xacro` 宏即可。
+
+```python
+# launch 文件中加载方式
+import xacro
+
+robot_description = xacro.process_file(
+    os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro'),
+    mappings={
+        'sim_mode':         'true',    # 仿真
+        'gazebo_camera':    'true',    # Gazebo 模式
+        'controllers_yaml': '/path/to/controllers.yaml',
+    }
+).toxml()
+```
+
+| 参数 | Gazebo | MuJoCo / display / MoveIt | 实物 |
+| ------ | -------- | -------------------------- | ------ |
+| `sim_mode` | `true` | `true` | `false` |
+| `gazebo_camera` | `true` | `false` | `false` |
+| `controllers_yaml` | 实际路径 | `''` | `''` |
+
+---
+
+## 控制器配置（`config/controllers.yaml`）
+
+| 控制器 | 关节 | 使用场景 |
+| -------- | ------ | ---------- |
+| `joint_state_broadcaster` | 全部 | 所有模式 |
+| `arm_controller` | Joint1–6 | Gazebo / MuJoCo 仿真 |
+| `gimbal_controller` | Joint4–6 | 实物（Joint1–3 由 arm_node 独立驱动） |
+
+---
+
+## 运动学（`config/kinematics.yaml`）
+
+使用 **pick_ik** 全局 IK 求解器：
+
+- `position_threshold`: 1 mm
+- `orientation_threshold`: 0.01 rad
+- `kinematics_solver_timeout`: 50 ms
+
+---
+
+## 与其他包的关系
+
+```bash
+robot_arm_description          提供 URDF/xacro、配置
+  ↑ include arm.urdf.xacro
+外部底盘包                     组合完整机器人 URDF
+  ↑ 加载 arm_sim.urdf.xacro
+robot_arm_bringup              仿真/实物 launch 文件（内部使用）
+```
+
+本包对底盘/外部系统**零感知**，所有外部集成通过 `arm.urdf.xacro` 宏参数完成。

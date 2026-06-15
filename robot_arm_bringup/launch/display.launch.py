@@ -16,7 +16,7 @@
 """
 
 import os
-import re
+import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch_ros.actions import Node
@@ -24,12 +24,9 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('robot_arm_description')
-    urdf_path = os.path.join(pkg_share, 'urdf', 'eMeetArm_models.urdf')
+    xacro_path = os.path.join(pkg_share, 'urdf', 'arm_sim.urdf.xacro')
 
-    with open(urdf_path, 'r') as f:
-        robot_description = f.read()
-    robot_description = re.sub(r'<!--.*?-->', '', robot_description, flags=re.DOTALL)
-    robot_description = ' '.join(robot_description.split())
+    robot_description = xacro.process_file(xacro_path).toxml()
 
     return LaunchDescription([
         Node(

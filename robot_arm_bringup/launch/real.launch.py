@@ -29,6 +29,7 @@
 """
 
 import os
+import xacro
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -42,19 +43,6 @@ def _load_yaml(path):
     with open(path, 'r') as f:
         return yaml.safe_load(f)
 
-
-def _arm_only_urdf(full_urdf_path: str) -> str:
-    """从合并 URDF 中提取机械臂部分（arm_base_link 为根），供 MoveIt 使用。
-    去掉底盘 base_link 和连接关节 arm_base_joint，避免 arm_base_link 出现
-    两个父节点导致 MoveIt 运动学树出现环路。"""
-    import xml.etree.ElementTree as ET
-    tree = ET.parse(full_urdf_path)
-    root = tree.getroot()
-    for elem in root.findall('link[@name="base_link"]'):
-        root.remove(elem)
-    for elem in root.findall('joint[@name="arm_base_joint"]'):
-        root.remove(elem)
-    return ET.tostring(root, encoding='unicode')
 
 
 def _camera_ros2_control_urdf(camera_type: str) -> str:
@@ -99,12 +87,16 @@ def generate_launch_description():
     bringup_share    = get_package_share_directory('robot_arm_bringup')
     driver_share     = get_package_share_directory('robot_arm_driver')
     gimbal_share     = get_package_share_directory('robot_gimbal_node')
-    urdf_path        = os.path.join(desc_share, 'urdf', 'eMeetArm_with_chassis.urdf')
     arm_yaml         = os.path.join(driver_share, 'config', 'arm.yaml')
     controllers_yaml = os.path.join(desc_share, 'config', 'controllers.yaml')
     moveit_cfg       = os.path.join(bringup_share, 'config', 'moveit')
     servo_params     = _load_yaml(os.path.join(moveit_cfg, 'servo_config.yaml'))
-    srdf_content     = open(os.path.join(desc_share, 'srdf', 'eMeetArm_with_chassis.srdf')).read()
+    srdf_content     = open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf')).read()
+
+    _xacro_path  = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
+    _arm_urdf    = xacro.process_file(
+        _xacro_path, mappings={'sim_mode': 'false', 'gazebo_camera': 'false'}
+    ).toxml()
 
     # ── Launch arguments ──────────────────────────────────────────────────────
     controller_arg = DeclareLaunchArgument(
@@ -120,19 +112,15 @@ def generate_launch_description():
     ctrl = LaunchConfiguration('controller')
     gui  = LaunchConfiguration('gui')
 
-    camera_urdf = _camera_ros2_control_urdf('auto')
-
-    with open(urdf_path, 'r') as f:
-        full_urdf = f.read()
-    # MoveIt 专用：去掉底盘 base_link，让 arm_base_link 作为运动学根节点
-    arm_moveit_urdf = _arm_only_urdf(urdf_path)
+    camera_urdf     = _camera_ros2_control_urdf('auto')
+    arm_moveit_urdf = _arm_urdf
 
     # ── Core nodes ────────────────────────────────────────────────────────────
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='screen',
-        parameters=[{'robot_description': full_urdf, 'use_sim_time': False}],
+        parameters=[{'robot_description': _arm_urdf, 'use_sim_time': False}],
     )
 
     # ros2_control 只管摄像头云台（Joint4-6）

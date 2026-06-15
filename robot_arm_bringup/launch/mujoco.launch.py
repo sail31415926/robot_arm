@@ -34,7 +34,7 @@
 """
 
 import os
-import re
+import xacro
 import yaml
 
 from ament_index_python.packages import get_package_share_directory
@@ -57,14 +57,10 @@ def generate_launch_description():
     desc_share    = get_package_share_directory('robot_arm_description')
     bringup_share = get_package_share_directory('robot_arm_bringup')
     cfg           = os.path.join(bringup_share, 'config', 'moveit')
-    urdf_path     = os.path.join(desc_share, 'urdf', 'eMeetArm_models.urdf')
+    xacro_path = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
 
-    # ── URDF（去掉注释，move_group 只需 kinematic 结构）────────────────────────
-    with open(urdf_path, 'r') as f:
-        robot_description_raw = f.read()
-    robot_description_raw = re.sub(
-        r'<!--.*?-->', '', robot_description_raw, flags=re.DOTALL)
-    robot_description_raw = ' '.join(robot_description_raw.split())
+    # ── URDF（MuJoCo 不用 ros2_control，xacro 参数均取默认值即可）────────────
+    robot_description_raw = xacro.process_file(xacro_path).toxml()
     robot_description = {'robot_description': robot_description_raw}
 
     # ── MoveIt 配置参数 ──────────────────────────────────────────────────────
