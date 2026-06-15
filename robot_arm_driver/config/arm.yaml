@@ -12,7 +12,7 @@ arm_node:
   ros__parameters:
 
     # ── CAN 总线 ───────────────────────────────────────────────────────────────
-    can_interface:    "can2"          # <<<< 修改 CAN 接口在这里
+    can_interface:    "can0"          # <<<< 修改 CAN 接口在这里
     sdo_timeout_ms:   500
     master_node_id:   127
     heartbeat_ms:     100         # joint1 驱动负责发心跳，其余关节无需关心
