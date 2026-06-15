@@ -173,8 +173,8 @@ class MotionExecutor:
 
         joints, error_code = self.ik_sync(pose_stamped)
         if joints is None:
-            self._logger.error(f'IK 求解失败 (error_code={error_code})')
-            return {'success': False, 'exit_reason': 'error',
+            self._logger.warn(f'IK 无解，目标不可达 (error_code={error_code})')
+            return {'success': False, 'exit_reason': 'unreachable',
                     'actual_pose': start_pose, 'error_code': error_code}
 
         self._logger.info(f'IK 成功: {[f"{j:.3f}" for j in joints]}')

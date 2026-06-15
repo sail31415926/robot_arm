@@ -90,7 +90,7 @@ class MoveToPoseServer:
         if target is None:
             result = ArmMoveToPose.Result()
             result.success     = False
-            result.exit_reason = 'error'
+            result.exit_reason = 'unreachable'
             result.error_code  = ArmStatus.ERR_LIMIT
             return result
         self._logger.info(f'MoveToPose 目标: x={target.x:.3f} y={target.y:.3f} '

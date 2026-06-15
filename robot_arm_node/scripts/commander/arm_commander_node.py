@@ -263,6 +263,11 @@ class ArmCommanderNode(Node):
                 self._transition(CommanderState.STOPPED)
                 self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
                 goal_handle.canceled()
+            elif result.exit_reason == 'unreachable':
+                self.get_logger().warn('目标不可达（IK 无解），拒绝本次 goal，恢复空闲')
+                self._transition(CommanderState.IDLE)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
+                goal_handle.abort()
             else:
                 self._transition(CommanderState.ERROR)
                 self.status.set_command_state(cmd_id, ArmStatus.RESULT_FAILED)
