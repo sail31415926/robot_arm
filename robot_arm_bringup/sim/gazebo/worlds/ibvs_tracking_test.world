@@ -1,0 +1,500 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <!--
+    IBVS 跟踪测试世界
+    ─────────────────────────────────────────────────────────────────────
+    专为 visp_ibvs_control / ibvs_control 设计：
+      • 地板、灯光、场景色、桌面材质、布幔、墙体与 emeet_arm.world 保持一致
+      • 三张桌子围绕机械臂，形成 U 形工作区：
+          前方桌 center (0.80,  0.00)  0.70×0.80m  ← IBVS 主跟踪区域
+          左侧桌 center (0.25, -0.75)  0.80×0.50m  ← 蓝圆柱 + 绿方块
+          右侧桌 center (0.25, +0.75)  0.80×0.50m  ← 黄球
+      • 前方桌面铺浅灰检测底板，三面灰布幔作背景
+      • 红色方块（libgazebo_ros_planar_move）在前方桌面做 r=0.12m 圆周运动，周期 12s
+        尺寸与 red_box_detector 期望一致：0.06×0.04×0.04 m
+      • 另有蓝圆柱、绿方块、黄球陪衬
+    坐标系（机械臂 base_link 在原点）：
+      +X 前方   -Y 左侧   +Z 上方
+    桌面顶端 z = 0.45 m，方块中心 z = 0.47 m（底贴桌面）
+
+    启动：
+      ros2 launch robot_arm_bringup gazebo.launch.py \
+        controller:=visp_ibvs_control world:=ibvs_tracking_test
+  -->
+
+  <world name="ibvs_tracking_test">
+
+    <!-- ── 物理引擎 ─────────────────────────────────────────────────────── -->
+    <physics type="ode">
+      <real_time_update_rate>1000</real_time_update_rate>
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>50</iters>
+          <sor>1.3</sor>
+        </solver>
+        <constraints>
+          <cfm>0</cfm>
+          <erp>0.2</erp>
+          <contact_max_correcting_vel>100</contact_max_correcting_vel>
+          <contact_surface_layer>0.001</contact_surface_layer>
+        </constraints>
+      </ode>
+    </physics>
+
+    <!-- ── 初始视角（与 emeet_arm.world 一致）──────────────────────────── -->
+    <gui fullscreen="0">
+      <camera name="user_camera">
+        <pose>-1.8 -2.2 1.6 0 0.38 0.62</pose>
+        <view_controller>orbit</view_controller>
+      </camera>
+    </gui>
+
+    <!-- ── 场景（与 emeet_arm.world 一致）──────────────────────────────── -->
+    <scene>
+      <shadows>false</shadows>
+      <grid>false</grid>
+      <ambient>0.50 0.50 0.50 1</ambient>
+      <background>0.20 0.20 0.20 1</background>
+    </scene>
+
+    <!-- ── 地面（物理碰撞用，不可见）──────────────────────────────────── -->
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- ── 木质地板（与 emeet_arm.world 完全一致：11 条交替色木板）────────
+         范围：x=-1.50~3.75，y=±4.0，每条板宽 0.50m
+         深色：rgba(0.48 0.32 0.16)  浅色：rgba(0.62 0.44 0.24)
+    ──────────────────────────────────────────────────────────────────── -->
+    <model name="wood_floor">
+      <static>true</static>
+      <link name="p0"><pose>-1.25 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.48 0.32 0.16 1</ambient><diffuse>0.50 0.34 0.17 1</diffuse><specular>0.15 0.10 0.06 25</specular></material>
+        </visual>
+      </link>
+      <link name="p1"><pose>-0.75 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.62 0.44 0.24 1</ambient><diffuse>0.64 0.46 0.25 1</diffuse><specular>0.18 0.12 0.07 25</specular></material>
+        </visual>
+      </link>
+      <link name="p2"><pose>-0.25 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.48 0.32 0.16 1</ambient><diffuse>0.50 0.34 0.17 1</diffuse><specular>0.15 0.10 0.06 25</specular></material>
+        </visual>
+      </link>
+      <link name="p3"><pose>0.25 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.62 0.44 0.24 1</ambient><diffuse>0.64 0.46 0.25 1</diffuse><specular>0.18 0.12 0.07 25</specular></material>
+        </visual>
+      </link>
+      <link name="p4"><pose>0.75 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.48 0.32 0.16 1</ambient><diffuse>0.50 0.34 0.17 1</diffuse><specular>0.15 0.10 0.06 25</specular></material>
+        </visual>
+      </link>
+      <link name="p5"><pose>1.25 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.62 0.44 0.24 1</ambient><diffuse>0.64 0.46 0.25 1</diffuse><specular>0.18 0.12 0.07 25</specular></material>
+        </visual>
+      </link>
+      <link name="p6"><pose>1.75 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.48 0.32 0.16 1</ambient><diffuse>0.50 0.34 0.17 1</diffuse><specular>0.15 0.10 0.06 25</specular></material>
+        </visual>
+      </link>
+      <link name="p7"><pose>2.25 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.62 0.44 0.24 1</ambient><diffuse>0.64 0.46 0.25 1</diffuse><specular>0.18 0.12 0.07 25</specular></material>
+        </visual>
+      </link>
+      <link name="p8"><pose>2.75 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.48 0.32 0.16 1</ambient><diffuse>0.50 0.34 0.17 1</diffuse><specular>0.15 0.10 0.06 25</specular></material>
+        </visual>
+      </link>
+      <link name="p9"><pose>3.25 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.62 0.44 0.24 1</ambient><diffuse>0.64 0.46 0.25 1</diffuse><specular>0.18 0.12 0.07 25</specular></material>
+        </visual>
+      </link>
+      <link name="p10"><pose>3.75 0 0.004 0 0 0</pose>
+        <visual name="v"><geometry><box><size>0.50 8.0 0.008</size></box></geometry>
+          <material><ambient>0.48 0.32 0.16 1</ambient><diffuse>0.50 0.34 0.17 1</diffuse><specular>0.15 0.10 0.06 25</specular></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ── 主光源（与 emeet_arm.world 一致）────────────────────────────── -->
+    <light type="directional" name="overhead_light">
+      <pose>0.75 0 3.0 0 0.1 0</pose>
+      <diffuse>0.92 0.92 0.88 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <direction>0 0 -1</direction>
+      <cast_shadows>false</cast_shadows>
+    </light>
+
+    <light type="point" name="fill_light">
+      <pose>-0.3 0.5 1.2 0 0 0</pose>
+      <diffuse>0.55 0.55 0.60 1</diffuse>
+      <specular>0.1 0.1 0.1 1</specular>
+      <attenuation>
+        <range>5</range>
+        <constant>0.3</constant>
+        <linear>0.1</linear>
+        <quadratic>0.01</quadratic>
+      </attenuation>
+      <cast_shadows>false</cast_shadows>
+    </light>
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         前方工作台（IBVS 主跟踪区域）
+         台面中心 (0.80, 0, 0.43)，尺寸 0.70m×0.80m×0.04m
+         材质与 emeet_arm.world workbench 一致
+    ═══════════════════════════════════════════════════════════════════ -->
+    <model name="table_front">
+      <static>true</static>
+      <link name="surface">
+        <pose>0.80 0 0.43 0 0 0</pose>
+        <collision name="col">
+          <geometry><box><size>0.70 0.80 0.04</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <geometry><box><size>0.70 0.80 0.04</size></box></geometry>
+          <material>
+            <ambient>0.52 0.46 0.38 1</ambient>
+            <diffuse>0.54 0.48 0.40 1</diffuse>
+            <specular>0.06 0.05 0.04 8</specular>
+          </material>
+        </visual>
+      </link>
+      <link name="leg_fl"><pose>0.47 -0.37 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_fr"><pose>0.47  0.37 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_bl"><pose>1.13 -0.37 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_br"><pose>1.13  0.37 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 前方桌面检测底板（浅灰，与 emeet_arm.world inspection_plate 一致）-->
+    <model name="inspection_plate">
+      <static>true</static>
+      <pose>0.80 0 0.453 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <geometry><box><size>0.64 0.74 0.005</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <geometry><box><size>0.64 0.74 0.005</size></box></geometry>
+          <material>
+            <ambient>0.65 0.65 0.65 1</ambient>
+            <diffuse>0.65 0.65 0.65 1</diffuse>
+            <specular>0.03 0.03 0.03 5</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         左侧工作台（机械臂 -Y 方向）
+         台面中心 (0.25, -0.75, 0.43)，尺寸 0.80m×0.50m×0.04m
+    ═══════════════════════════════════════════════════════════════════ -->
+    <model name="table_left">
+      <static>true</static>
+      <link name="surface">
+        <pose>0.25 -0.75 0.43 0 0 0</pose>
+        <collision name="col">
+          <geometry><box><size>0.80 0.50 0.04</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <geometry><box><size>0.80 0.50 0.04</size></box></geometry>
+          <material>
+            <ambient>0.52 0.46 0.38 1</ambient>
+            <diffuse>0.54 0.48 0.40 1</diffuse>
+            <specular>0.06 0.05 0.04 8</specular>
+          </material>
+        </visual>
+      </link>
+      <link name="leg_fl"><pose>-0.15 -0.52 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_fr"><pose>-0.15 -0.98 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_bl"><pose>0.65 -0.52 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_br"><pose>0.65 -0.98 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         右侧工作台（机械臂 +Y 方向，与左侧对称）
+         台面中心 (0.25, +0.75, 0.43)，尺寸 0.80m×0.50m×0.04m
+    ═══════════════════════════════════════════════════════════════════ -->
+    <model name="table_right">
+      <static>true</static>
+      <link name="surface">
+        <pose>0.25 0.75 0.43 0 0 0</pose>
+        <collision name="col">
+          <geometry><box><size>0.80 0.50 0.04</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <geometry><box><size>0.80 0.50 0.04</size></box></geometry>
+          <material>
+            <ambient>0.52 0.46 0.38 1</ambient>
+            <diffuse>0.54 0.48 0.40 1</diffuse>
+            <specular>0.06 0.05 0.04 8</specular>
+          </material>
+        </visual>
+      </link>
+      <link name="leg_fl"><pose>-0.15  0.52 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_fr"><pose>-0.15  0.98 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_bl"><pose>0.65  0.52 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_br"><pose>0.65  0.98 0.205 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ── 三面灰布幔（与 emeet_arm.world cloth 材质一致）────────────────
+         前方布幔：前桌前沿 x=1.15，布在 x=1.22
+         左侧布幔：左桌左沿 y=-1.00，布在 y=-1.07
+         右侧布幔：右桌右沿 y=+1.00，布在 y=+1.07
+    ──────────────────────────────────────────────────────────────────── -->
+    <model name="cloth_front">
+      <static>true</static>
+      <pose>1.22 0 0.45 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <geometry><box><size>0.01 1.10 0.90</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <geometry><box><size>0.01 1.10 0.90</size></box></geometry>
+          <material>
+            <ambient>0.52 0.52 0.52 1</ambient>
+            <diffuse>0.52 0.52 0.52 1</diffuse>
+            <specular>0.02 0.02 0.02 2</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="cloth_left">
+      <static>true</static>
+      <pose>0.25 -1.07 0.45 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <geometry><box><size>0.90 0.01 0.90</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <geometry><box><size>0.90 0.01 0.90</size></box></geometry>
+          <material>
+            <ambient>0.52 0.52 0.52 1</ambient>
+            <diffuse>0.52 0.52 0.52 1</diffuse>
+            <specular>0.02 0.02 0.02 2</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="cloth_right">
+      <static>true</static>
+      <pose>0.25 1.07 0.45 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <geometry><box><size>0.90 0.01 0.90</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <geometry><box><size>0.90 0.01 0.90</size></box></geometry>
+          <material>
+            <ambient>0.52 0.52 0.52 1</ambient>
+            <diffuse>0.52 0.52 0.52 1</diffuse>
+            <specular>0.02 0.02 0.02 2</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ── 三面墙（与 emeet_arm.world 完全一致）────────────────────────── -->
+    <model name="wall_back">
+      <static>true</static>
+      <link name="base"><pose>4.00 0 1.10 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.20 8.20 2.20</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.20 8.20 2.20</size></box></geometry>
+          <material><ambient>0.64 0.61 0.57 1</ambient><diffuse>0.64 0.61 0.57 1</diffuse><specular>0.08 0.08 0.07 10</specular></material></visual>
+      </link>
+    </model>
+
+    <model name="wall_left">
+      <static>true</static>
+      <link name="base"><pose>1.30 -4.00 1.10 0 0 0</pose>
+        <collision name="col"><geometry><box><size>5.60 0.20 2.20</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>5.60 0.20 2.20</size></box></geometry>
+          <material><ambient>0.64 0.61 0.57 1</ambient><diffuse>0.64 0.61 0.57 1</diffuse><specular>0.08 0.08 0.07 10</specular></material></visual>
+      </link>
+    </model>
+
+    <model name="wall_right">
+      <static>true</static>
+      <link name="base"><pose>1.30 4.00 1.10 0 0 0</pose>
+        <collision name="col"><geometry><box><size>5.60 0.20 2.20</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>5.60 0.20 2.20</size></box></geometry>
+          <material><ambient>0.64 0.61 0.57 1</ambient><diffuse>0.64 0.61 0.57 1</diffuse><specular>0.08 0.08 0.07 10</specular></material></visual>
+      </link>
+    </model>
+
+    <!-- ── 陪衬物体（左侧桌：蓝圆柱 + 绿方块；右侧桌：黄球）────────────
+         z 取桌面顶端 0.45 + 物体半高
+    ──────────────────────────────────────────────────────────────────── -->
+    <model name="obj_cylinder_blue">
+      <static>false</static>
+      <pose>0.25 -0.72 0.485 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.15</mass>
+          <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>5e-5</izz></inertia>
+        </inertial>
+        <collision name="col"><geometry><cylinder><radius>0.025</radius><length>0.07</length></cylinder></geometry></collision>
+        <visual name="vis">
+          <geometry><cylinder><radius>0.025</radius><length>0.07</length></cylinder></geometry>
+          <material>
+            <ambient>0.10 0.25 0.85 1</ambient>
+            <diffuse>0.10 0.25 0.85 1</diffuse>
+            <specular>0.4 0.4 0.7 40</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="obj_box_green">
+      <static>false</static>
+      <pose>0.10 -0.80 0.4625 0 0 -0.5</pose>
+      <link name="link">
+        <inertial><mass>0.08</mass>
+          <inertia><ixx>5e-5</ixx><iyy>5e-5</iyy><izz>5e-5</izz></inertia>
+        </inertial>
+        <collision name="col"><geometry><box><size>0.08 0.05 0.025</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.08 0.05 0.025</size></box></geometry>
+          <material>
+            <ambient>0.10 0.72 0.22 1</ambient>
+            <diffuse>0.10 0.72 0.22 1</diffuse>
+            <specular>0.2 0.4 0.2 15</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="obj_sphere_yellow">
+      <static>false</static>
+      <pose>0.25 0.72 0.475 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.05</mass>
+          <inertia><ixx>2e-5</ixx><iyy>2e-5</iyy><izz>2e-5</izz></inertia>
+        </inertial>
+        <collision name="col"><geometry><sphere><radius>0.025</radius></sphere></geometry></collision>
+        <visual name="vis">
+          <geometry><sphere><radius>0.025</radius></sphere></geometry>
+          <material>
+            <ambient>0.95 0.82 0.05 1</ambient>
+            <diffuse>0.95 0.82 0.05 1</diffuse>
+            <specular>0.5 0.5 0.1 50</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         移动红色方块（物理模型 + libgazebo_ros_planar_move 插件）
+         ─────────────────────────────────────────────────────────────────
+         尺寸：0.06m(X)×0.04m(Y)×0.04m(Z)（与 red_box_detector 一致）
+         运动：顺时针圆周，圆心 (0.65, 0)，r=0.10 m，T=12 s（贴近机械臂工作区）
+           v = 2π·0.10/12 ≈ 0.0524 m/s
+           ω = 2π/12      ≈ 0.5236 rad/s（顺时针取负）
+         初始位姿 (0.75, -0.10, 0.47)，yaw=-π/2（朝 -Y，偏左 10cm）
+           → ICR 在右侧 0.10 m 处 = 世界坐标 (0.65, -0.10)
+         话题：/red_box/cmd_vel，由 gazebo.launch.py 自动发布
+    ═══════════════════════════════════════════════════════════════════ -->
+    <model name="obj_box_red">
+      <static>false</static>
+      <pose>0.75 -0.10 0.47 0 0 -1.5708</pose>
+      <link name="link">
+        <inertial>
+          <mass>0.1</mass>
+          <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
+        </inertial>
+        <collision name="col">
+          <geometry><box><size>0.06 0.04 0.04</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <geometry><box><size>0.06 0.04 0.04</size></box></geometry>
+          <material>
+            <ambient>0.85 0.12 0.10 1</ambient>
+            <diffuse>0.85 0.12 0.10 1</diffuse>
+            <specular>0.3 0.1 0.1 20</specular>
+          </material>
+        </visual>
+      </link>
+      <plugin name="box_circle_mover" filename="libgazebo_ros_planar_move.so">
+        <ros>
+          <namespace>/red_box</namespace>
+        </ros>
+        <update_rate>20</update_rate>
+        <publish_odom>false</publish_odom>
+        <publish_odom_tf>false</publish_odom_tf>
+      </plugin>
+    </model>
+
+  </world>
+</sdf>

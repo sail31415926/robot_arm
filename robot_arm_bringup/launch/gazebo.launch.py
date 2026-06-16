@@ -26,17 +26,23 @@
          MoveIt 由本文件自动 include，无需额外启动 moveit.launch.py。
 
          示例：
-           ros2 launch robot_arm_bringup gazebo.launch.py                                              # 默认 joint_position
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=joint_position                   # 关节滑块
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_moveit                 # MoveIt 笛卡尔直线
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_realtime_ik            # 滑块即时 IK
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_trajectory             # Ruckig 点到点+环绕
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=spherical_orbit                  # 球面轨道运镜
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_velocity               # 笛卡尔速度（手动点动）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control                     # 红色方块 IBVS（Python 版）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=visp_ibvs_control               # 红色方块 IBVS（ViSP C++ 版）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander                        # Arm Commander 中间层（含 GUI）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander gui:=false             # Arm Commander 中间层（无 GUI）
+           ros2 launch robot_arm_bringup gazebo.launch.py                                                                         # 默认 joint_position
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=joint_position                                              # 关节滑块
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_moveit                                            # MoveIt 笛卡尔直线
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_realtime_ik                                       # 滑块即时 IK
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_trajectory                                        # Ruckig 点到点+环绕
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=spherical_orbit                                             # 球面轨道运镜
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_velocity                                          # 笛卡尔速度（手动点动）
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control                                                # 红色方块 IBVS（Python 版）
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=visp_ibvs_control                                          # 红色方块 IBVS（ViSP C++ 版，默认世界）
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=visp_ibvs_control world:=ibvs_tracking_test                 # 红色方块 IBVS（U 形桌+圆周移动方块，推荐跟踪测试）
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control      world:=ibvs_tracking_test                 # 红色方块 IBVS（Python 版 + 跟踪测试世界）
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander                                                   # Arm Commander 中间层（含 GUI）
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander gui:=false                                        # Arm Commander 中间层（无 GUI）
+
+         world 参数（默认 emeet_arm）：
+           world:=emeet_arm            → 标准工作台场景（默认）
+           world:=ibvs_tracking_test   → IBVS 跟踪测试专用：U 形三桌 + 红色方块圆周运动（r=0.12m，周期 12s）
 
 @copyright Copyright (c) 2026 eMeet
 """
@@ -53,7 +59,7 @@ from launch.actions import (
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -69,7 +75,7 @@ def generate_launch_description():
     moveit_cfg       = os.path.join(bringup_share, 'config', 'moveit')
     xacro_path        = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
     controllers_yaml_path = os.path.join(desc_share, 'config', 'controllers.yaml')
-    world_file    = os.path.join(bringup_share, 'sim', 'gazebo', 'worlds', 'emeet_arm.world')
+    worlds_dir    = os.path.join(bringup_share, 'sim', 'gazebo', 'worlds')
     gazebo_ros_share = get_package_share_directory('gazebo_ros')
 
     robot_description = xacro.process_file(
@@ -106,8 +112,15 @@ def generate_launch_description():
         'gui', default_value='true',
         description='是否启动 commander_test_gui（仅 controller:=commander 时生效）: true | false',
     )
-    ctrl = LaunchConfiguration('controller')
-    gui  = LaunchConfiguration('gui')
+    world_arg = DeclareLaunchArgument(
+        'world', default_value='emeet_arm',
+        description='世界文件名（不含 .world 后缀），位于 sim/gazebo/worlds/ 下。'
+                    '示例: emeet_arm | ibvs_tracking_test',
+    )
+    ctrl       = LaunchConfiguration('controller')
+    gui        = LaunchConfiguration('gui')
+    world_name = LaunchConfiguration('world')
+    world_file = PathJoinSubstitution([worlds_dir, [world_name, '.world']])
 
     def controller_node(mode_name, exe_name):
         """根据 controller 参数条件启动对应节点"""
@@ -252,6 +265,25 @@ def generate_launch_description():
         condition=is_ibvs_control,
     )
 
+    # ── ibvs_tracking_test 世界：红色方块圆周运动 cmd_vel 发布 ────────────────
+    # libgazebo_ros_planar_move 插件监听 /red_box/cmd_vel；
+    # v=0.0524 m/s, ω=-0.5236 rad/s → 顺时针 r=0.10 m 圆，圆心 (0.65,0)，周期 12 s
+    red_box_circle_mover = TimerAction(
+        period=5.0,
+        actions=[
+            ExecuteProcess(
+                cmd=['ros2', 'topic', 'pub', '--rate', '10',
+                     '/red_box/cmd_vel', 'geometry_msgs/msg/Twist',
+                     '{linear: {x: 0.0524, y: 0.0, z: 0.0},'
+                     ' angular: {x: 0.0, y: 0.0, z: -0.5236}}'],
+                output='screen',
+            ),
+        ],
+        condition=IfCondition(
+            PythonExpression(["'", world_name, "' == 'ibvs_tracking_test'"])
+        ),
+    )
+
     # ── gzserver（物理引擎，无需 GPU 渲染）────────────────────────────────────
     gzserver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -311,6 +343,7 @@ def generate_launch_description():
     return LaunchDescription([
         controller_arg,
         gui_arg,
+        world_arg,
         SetEnvironmentVariable('GAZEBO_MODEL_DATABASE_URI', ''),
         SetEnvironmentVariable(
             name='GAZEBO_MODEL_PATH',
@@ -344,4 +377,6 @@ def generate_launch_description():
         ),
         # commander：节点独立延迟启动（不等 arm_controller_spawner，5s 后自动出现）
         commander_start,
+        # ibvs_tracking_test 世界：红色方块圆周运动（5s 后开始发布 cmd_vel）
+        red_box_circle_mover,
     ])

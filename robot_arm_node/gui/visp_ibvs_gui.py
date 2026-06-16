@@ -33,12 +33,13 @@ from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+import tf2_ros
 
 import tkinter as tk
 from tkinter import ttk
 
 # ── 与 visp_ibvs_node.cpp 常量保持一致 ───────────────────────────────────────
-W_GIMBAL      = 3.0     # 云台基础权重
+W_GIMBAL      = 1.0     # 云台基础权重（与 C++ W_GIMBAL 同步）
 W_DYN_K       = 15.0    # 动态涨价斜率
 IMG_STOP_TH   = 0.005
 DEPTH_STOP_TH = 0.02
@@ -86,6 +87,8 @@ class _DebugNode(Node):
         self.create_subscription(JointState, '/joint_states',
                                  self._on_joints, 10)
         self._traj_pub = self.create_publisher(JointTrajectory, TRAJ_TOPIC, 10)
+        self._tf_buffer   = tf2_ros.Buffer()
+        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
     def _on_feat(self, msg: PointStamped):
         self._q.put(('feat', msg.point.x, msg.point.y, msg.point.z))
@@ -101,6 +104,27 @@ class _DebugNode(Node):
         pt.time_from_start = Duration(sec=duration_sec, nanosec=0)
         msg.points = [pt]
         self._traj_pub.publish(msg)
+
+    def get_camera_pose(self):
+        """查询 arm_base_link→camera_optical_frame TF，返回 (x,y,z,roll°,pitch°,yaw°) 或 None。"""
+        try:
+            t = self._tf_buffer.lookup_transform(
+                'arm_base_link', 'camera_optical_frame', rclpy.time.Time())
+            tx = t.transform.translation.x
+            ty = t.transform.translation.y
+            tz = t.transform.translation.z
+            qx = t.transform.rotation.x
+            qy = t.transform.rotation.y
+            qz = t.transform.rotation.z
+            qw = t.transform.rotation.w
+            roll  = math.atan2(2*(qw*qx + qy*qz), 1 - 2*(qx*qx + qy*qy))
+            sinp  = max(-1.0, min(1.0, 2*(qw*qy - qz*qx)))
+            pitch = math.asin(sinp)
+            yaw   = math.atan2(2*(qw*qz + qx*qy), 1 - 2*(qy*qy + qz*qz))
+            return (tx, ty, tz,
+                    math.degrees(roll), math.degrees(pitch), math.degrees(yaw))
+        except Exception:
+            return None
 
     def go_ready(self):
         self._send_joint_traj(READY_JOINTS, duration_sec=3)
@@ -123,6 +147,11 @@ class App:
         self._desired_y     = tk.DoubleVar(value=0.0)
         self._desired_depth = tk.DoubleVar(value=0.3)
         self._status_var    = tk.StringVar(value='等待节点启动…')
+        # 球坐标约束（与 spherical_orbit_gui 约定一致：θ=方位角, φ=仰角）
+        self._sphere_el_en  = tk.BooleanVar(value=False)
+        self._sphere_az_en  = tk.BooleanVar(value=False)
+        self._sphere_el_deg = tk.DoubleVar(value=30.0)  # φ 仰角，默认 30°
+        self._sphere_az_deg = tk.DoubleVar(value=0.0)   # θ 方位角，默认 0°（臂侧近侧）
 
         self._setup_styles()
         self._build()
@@ -139,17 +168,18 @@ class App:
     # ── 布局构建 ─────────────────────────────────────────────────────────────
     def _build(self):
         r = self._root
-        self._build_top(r)
-        self._build_errors(r)
-        self._build_joints(r)
-        self._build_buttons(r)
+        self._build_top(r)       # row 0
+        self._build_cam_pose(r)  # row 1
+        self._build_errors(r)    # row 2
+        self._build_joints(r)    # row 3
+        self._build_buttons(r)   # row 4
         ttk.Label(r, textvariable=self._status_var, relief='sunken',
-                  anchor='w').grid(row=4, column=0, sticky='ew', padx=6, pady=(2, 4))
+                  anchor='w').grid(row=5, column=0, sticky='ew', padx=6, pady=(2, 4))
         r.grid_columnconfigure(0, weight=1)
 
     def _build_buttons(self, parent):
         bf = tk.Frame(parent)
-        bf.grid(row=3, column=0, pady=(2, 4))
+        bf.grid(row=4, column=0, pady=(2, 4))
         tk.Button(bf, text='预 备 位 置', width=14, height=1,
                   bg='#1976d2', fg='white', font=('', 10, 'bold'),
                   relief='flat', cursor='hand2',
@@ -199,9 +229,50 @@ class App:
         ttk.Button(des, text='✔  应用', command=self._apply_desired).grid(
             row=len(fields), column=0, columnspan=2, pady=(6, 4), ipadx=8)
 
+        # ── 球坐标约束 ────────────────────────────────────────────────────────
+        ttk.Separator(des, orient='horizontal').grid(
+            row=len(fields)+1, column=0, columnspan=2, sticky='ew', padx=4, pady=(4, 2))
+        ttk.Label(des, text='球坐标约束', font=('', 9, 'bold')).grid(
+            row=len(fields)+2, column=0, columnspan=2, sticky='w', padx=6)
+
+        # φ 仰角
+        fr_el = tk.Frame(des)
+        fr_el.grid(row=len(fields)+3, column=0, columnspan=2, sticky='w', padx=4, pady=2)
+        ttk.Checkbutton(fr_el, text='φ 仰角(°)', variable=self._sphere_el_en,
+                        width=10).pack(side=tk.LEFT)
+        ttk.Spinbox(fr_el, from_=-89.0, to=89.0, increment=5.0,
+                    textvariable=self._sphere_el_deg, width=7,
+                    format='%.1f').pack(side=tk.LEFT, padx=4)
+
+        # θ 方位角
+        fr_az = tk.Frame(des)
+        fr_az.grid(row=len(fields)+4, column=0, columnspan=2, sticky='w', padx=4, pady=2)
+        ttk.Checkbutton(fr_az, text='θ 方位角(°)', variable=self._sphere_az_en,
+                        width=10).pack(side=tk.LEFT)
+        ttk.Spinbox(fr_az, from_=-180.0, to=180.0, increment=10.0,
+                    textvariable=self._sphere_az_deg, width=7,
+                    format='%.1f').pack(side=tk.LEFT, padx=4)
+
+        ttk.Button(des, text='✔  应用约束', command=self._apply_sphere).grid(
+            row=len(fields)+5, column=0, columnspan=2, pady=(4, 4), ipadx=8)
+
+    def _build_cam_pose(self, parent):
+        fr = ttk.LabelFrame(parent, text='相机末端位姿  (arm_base_link → camera_optical_frame)')
+        fr.grid(row=1, column=0, sticky='ew', padx=6, pady=2)
+        self._pose_vars: dict[str, tk.StringVar] = {}
+        labels = [('X(m)', 'X'), ('Y(m)', 'Y'), ('Z(m)', 'Z'),
+                  ('Roll(°)', 'Roll'), ('Pitch(°)', 'Pitch'), ('Yaw(°)', 'Yaw')]
+        for col, (lbl, key) in enumerate(labels):
+            ttk.Label(fr, text=lbl + ':', width=8, anchor='e').grid(
+                row=0, column=col * 2, padx=4, pady=4, sticky='e')
+            v = tk.StringVar(value='—')
+            ttk.Entry(fr, textvariable=v, width=8, state='readonly',
+                      justify='right').grid(row=0, column=col * 2 + 1, padx=2)
+            self._pose_vars[key] = v
+
     def _build_errors(self, parent):
         fr = ttk.LabelFrame(parent, text='控制误差')
-        fr.grid(row=1, column=0, sticky='ew', padx=6, pady=2)
+        fr.grid(row=2, column=0, sticky='ew', padx=6, pady=2)
 
         self._img_err_var   = tk.StringVar(value='—')
         self._depth_err_var = tk.StringVar(value='—')
@@ -225,7 +296,7 @@ class App:
 
     def _build_joints(self, parent):
         fr = ttk.LabelFrame(parent, text='关节状态  |  机械臂 J1-J3  ·  云台 J4-J6')
-        fr.grid(row=2, column=0, sticky='ew', padx=6, pady=4)
+        fr.grid(row=3, column=0, sticky='ew', padx=6, pady=4)
 
         for col, txt in enumerate(['关节', '位置(rad)',
                                     '关节', '位置(rad)', '限位使用率', '动态权重']):
@@ -264,6 +335,26 @@ class App:
             ttk.Label(fr, textvariable=wv, width=10, anchor='center').grid(
                 row=row_idx, column=5, padx=6)
             self._gw_vars[gim] = wv
+
+    # ── 球坐标约束推送 ────────────────────────────────────────────────────────
+    def _apply_sphere(self):
+        el_en = self._sphere_el_en.get()
+        az_en = self._sphere_az_en.get()
+        el_rad = math.radians(self._sphere_el_deg.get())
+        az_rad = math.radians(self._sphere_az_deg.get())
+        params = [
+            ('constrain_elevation', 'true' if el_en else 'false'),
+            ('constrain_azimuth',   'true' if az_en else 'false'),
+            ('desired_elevation',   f'{el_rad:.4f}'),
+            ('desired_azimuth',     f'{az_rad:.4f}'),
+        ]
+        for param, val in params:
+            subprocess.Popen(
+                ['ros2', 'param', 'set', VISP_NODE, param, val],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._status_var.set(
+            f'球坐标约束 → 俯仰:{"启" if el_en else "停"}({self._sphere_el_deg.get():.0f}°)'
+            f'  方位:{"启" if az_en else "停"}({self._sphere_az_deg.get():.0f}°)')
 
     # ── 位置指令 ──────────────────────────────────────────────────────────────
     def _go_ready(self):
@@ -351,6 +442,17 @@ class App:
                     self._gbars[gim].configure(
                         style=_S_LOW if pct < 50 else (_S_MID if pct < 80 else _S_HIGH))
                     self._gw_vars[gim].set(f'w={w:.1f}')
+
+        # 相机末端位姿（TF 查询，每次 poll 刷新）
+        pose = self._node.get_camera_pose()
+        if pose is not None:
+            x, y, z, roll, pitch, yaw = pose
+            self._pose_vars['X'].set(f'{x:.4f}')
+            self._pose_vars['Y'].set(f'{y:.4f}')
+            self._pose_vars['Z'].set(f'{z:.4f}')
+            self._pose_vars['Roll'].set(f'{roll:.1f}')
+            self._pose_vars['Pitch'].set(f'{pitch:.1f}')
+            self._pose_vars['Yaw'].set(f'{yaw:.1f}')
 
         # 检测超时：指示灯变灰
         if now - self._last_feat_t > FEATURE_TIMEOUT and self._last_feat_t > 0:

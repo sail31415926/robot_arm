@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""离线绘制关节力矩、速度、位置曲线。
+
+用法:
+    plot_joint_torques joint_states_20240101_120000.csv
+    plot_joint_torques joint_states_*.csv --save ./figs
+    plot_joint_torques data.csv --no-pos   # 只显示力矩和速度
+"""
+import argparse
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+
+from arm_analysis.plotter import (
+    load_joint_states,
+    plot_all_joint_data,
+    plot_joint_torques,
+    plot_joint_velocities,
+)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='从 joint_states CSV 绘制关节力矩/速度/位置曲线')
+    parser.add_argument('csv', nargs='+', help='joint_states_*.csv 文件')
+    parser.add_argument('--save', metavar='DIR',
+                        help='将图片保存到指定目录而不是弹窗显示')
+    parser.add_argument('--no-pos', action='store_true',
+                        help='跳过关节位置子图')
+    args = parser.parse_args()
+
+    if args.save:
+        Path(args.save).mkdir(parents=True, exist_ok=True)
+
+    for path in args.csv:
+        df = load_joint_states(path)
+
+        if args.no_pos:
+            fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+            fig.suptitle(f'关节数据 — {Path(path).name}')
+            plot_joint_torques(df, ax=axes[0])
+            plot_joint_velocities(df, ax=axes[1])
+            axes[0].set_title('关节力矩')
+            axes[1].set_title('关节速度')
+            fig.tight_layout()
+        else:
+            fig = plot_all_joint_data(df, title=f'关节数据 — {Path(path).name}')
+
+        if args.save:
+            out = Path(args.save) / (Path(path).stem + '_joint_analysis.png')
+            fig.savefig(out, dpi=150)
+            print(f'Saved → {out}')
+        else:
+            plt.show()
+
+
+if __name__ == '__main__':
+    main()
