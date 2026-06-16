@@ -9,4 +9,3 @@ log/
 # 不参与 git（恢复时删除下面这行即可）
 robot_arm_rl/
 robot_arm_matlab/
-robot_arm_analysis/

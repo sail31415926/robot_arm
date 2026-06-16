@@ -18,7 +18,9 @@
            spherical_orbit       → spherical_orbit_gui         (球面坐标环绕运镜)
            cartesian_velocity    → cartesian_velocity_gui      (笛卡尔速度接口，手动点动，MoveIt Servo)
            ibvs_control          → cartesian_velocity_gui + red_box_detector
-                                   + ibvs_control_node          (红色方块 IBVS 闭环)
+                                   + ibvs_control_node          (红色方块 IBVS 闭环，Python 版)
+           visp_ibvs_control     → cartesian_velocity_gui + red_box_detector
+                                   + visp_ibvs_node             (红色方块 IBVS 闭环，ViSP C++ 版)
            commander             → arm_commander_node          (Arm Commander 中间层)
                                    + commander_test_gui         (Director 视角测试 GUI，需要 MoveIt/IK，gui:=false 可关闭)
          MoveIt 由本文件自动 include，无需额外启动 moveit.launch.py。
@@ -31,7 +33,8 @@
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_trajectory             # Ruckig 点到点+环绕
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=spherical_orbit                  # 球面轨道运镜
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_velocity               # 笛卡尔速度（手动点动）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control                     # 红色方块 IBVS
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control                     # 红色方块 IBVS（Python 版）
+           ros2 launch robot_arm_bringup gazebo.launch.py controller:=visp_ibvs_control               # 红色方块 IBVS（ViSP C++ 版）
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander                        # Arm Commander 中间层（含 GUI）
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander gui:=false             # Arm Commander 中间层（无 GUI）
 
@@ -96,7 +99,8 @@ def generate_launch_description():
         'controller',
         default_value='joint_position',
         description=('控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
-                     'cartesian_trajectory | spherical_orbit | cartesian_velocity | ibvs_control | commander'),
+                     'cartesian_trajectory | spherical_orbit | cartesian_velocity | '
+                     'ibvs_control | visp_ibvs_control | commander'),
     )
     gui_arg = DeclareLaunchArgument(
         'gui', default_value='true',
@@ -162,8 +166,9 @@ def generate_launch_description():
     )
 
     # ── MoveIt Servo 条件（cartesian_velocity / ibvs_control）────────────────────
-    is_velocity     = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
-    is_ibvs_control = IfCondition(PythonExpression(["'", ctrl, "' == 'ibvs_control'"]))
+    is_velocity      = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
+    is_ibvs_control  = IfCondition(PythonExpression(["'", ctrl, "' == 'ibvs_control'"]))
+    is_visp_ibvs     = IfCondition(PythonExpression(["'", ctrl, "' == 'visp_ibvs_control'"]))
     def make_servo_node(condition, check_collisions=True):
         # ibvs/velocity 模式无 move_group，禁用碰撞检测避免 run_duration 超时
         extra = {} if check_collisions else \
@@ -184,6 +189,26 @@ def generate_launch_description():
             ],
             condition=condition,
         )
+
+    # visp_ibvs_control：Pinocchio 加权 Jacobian，直接发 JointTrajectory，无需 Servo
+    visp_ibvs_start_after_pose = TimerAction(
+        period=4.0,
+        actions=[
+            Node(package='robot_arm_node', executable='red_box_detector',
+                 output='screen',
+                 parameters=[{'use_sim_time': True}],
+                 condition=is_visp_ibvs),
+            Node(package='robot_arm_node', executable='visp_ibvs_node',
+                 output='screen',
+                 parameters=[{'robot_description': robot_description,
+                               'use_sim_time': True}],
+                 condition=is_visp_ibvs),
+            Node(package='robot_arm_node', executable='visp_ibvs_gui',
+                 output='screen',
+                 condition=is_visp_ibvs),
+        ],
+        condition=is_visp_ibvs,
+    )
 
     # ── 安全姿态预移动（全零关节是运动学奇异点，servo 启动前须先移走）──────────
     # commander 模式不需要预移动，由上层自行决定初始姿态
@@ -279,7 +304,7 @@ def generate_launch_description():
             os.path.join(bringup_share, 'launch', 'camera_view.launch.py')
         ),
         condition=IfCondition(
-            PythonExpression(["'", ctrl, "' != 'ibvs_control'"])
+            PythonExpression(["'", ctrl, "' not in ['ibvs_control','visp_ibvs_control']"])
         ),
     )
 
@@ -313,6 +338,7 @@ def generate_launch_description():
                          move_to_safe_pose,
                          velocity_start_after_pose,
                          ibvs_control_start_after_pose,
+                         visp_ibvs_start_after_pose,
                          trajectory_ctrl, spherical_orbit_ctrl],
             )
         ),
