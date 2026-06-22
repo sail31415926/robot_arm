@@ -73,6 +73,9 @@ static constexpr double DAMPING_ARM_SQ        = 0.1;
 static constexpr double K_NULL_GIMBAL         = 0.01;
 // 球坐标约束增益（m/s per m error）：俯仰角/方位角约束的位置误差增益
 static constexpr double K_SPHERE              = 0.8;
+// 画面水平校正增益（rad/s per rad）：消除相机绕光轴的 Roll 漂移，使相机 X 轴保持水平。
+// 作为 v_c 滚转分量进入云台超定加权阻尼伪逆；残差受云台滚转权限限制（约几度，位姿相关）。
+static constexpr double K_LEVEL               = 4.0;
 // 单关节速度上限（rad/s）
 static constexpr double MAX_JOINT_VEL         = 1.5;
 // 控制周期（s）— 与 create_wall_timer 一致
@@ -255,7 +258,7 @@ private:
         // ── ViSP 相机速度（图像居中，相机坐标系）───────────────────────────
         p_curr_.buildFrom(feat_x_, feat_y_, feat_z_);
         vpColVector vc_visp = task_.computeControlLaw();
-        vc_visp[2] += DEPTH_GAIN * depth_err;   // 独立深度校正
+        vc_visp[2] += DEPTH_GAIN * depth_err;   // 独立深度校正（平移，走机械臂残差）
 
         Eigen::Matrix<double, 6, 1> v_c;
         for (int i = 0; i < 6; ++i) v_c[i] = vc_visp[i];
@@ -265,11 +268,21 @@ private:
         J.setZero();
         pin::computeFrameJacobian(pin_model_, pin_data_, pin_q_,
                                    cam_frame_id_, pin::LOCAL, J);
+
+        // ── 画面水平校正（绕光轴 omega_z）─────────────────────────────────
+        // 水平条件：相机 X 轴（图像右方向）落在世界水平面内（世界 Z 分量为零）。
+        // 作为 v_c 滚转分量，和图像跟踪一起进入超定加权阻尼最小二乘——稳定优先。
+        const pin::SE3& T_cam = pin_data_.oMf[cam_frame_id_];
+        const Eigen::Vector3d cam_x_world = T_cam.rotation().col(0);
+        const double roll_err = std::atan2(cam_x_world.z(),
+            std::hypot(cam_x_world.x(), cam_x_world.y()));
+        v_c[5] -= K_LEVEL * roll_err;
+
         // ── 分离 Jacobian ──────────────────────────────────────────────────
         const Eigen::Matrix<double, 6, 3> J_g = J.rightCols(3);  // 云台 J4-J6
         const Eigen::Matrix<double, 6, 3> J_a = J.leftCols(3);   // 机械臂 J1-J3
 
-        // ── 第一优先级：云台处理图像误差（v_c 只含图像跟踪速度）───────────
+        // ── 第一优先级：云台处理图像误差 + 画面水平（超定加权阻尼伪逆）─────
         const Eigen::Matrix<double, 3, 3> W_g     = computeGimbalWeight();
         const Eigen::Matrix<double, 3, 3> W_g_inv = W_g.inverse();
         Eigen::Matrix<double, 6, 6> A_g = J_g * W_g_inv * J_g.transpose();
@@ -283,10 +296,9 @@ private:
 
         // ── 第二优先级：机械臂 = 图像残差 + 球坐标位置约束 ──────────────
         // 球坐标约束只走机械臂路径（J1-J3 平移相机位置），不经过云台
-        // 约定与 arm_utils.sphere_to_cart 一致（Z-up）：
+        // 约定（Z-up）：
         //   φ = desired_elevation（仰角，0=水平，+π/2=正上方）
         //   θ = desired_azimuth  （方位角，θ=0 = 近侧/臂方向）
-        //   theta_ref = atan2(-P.y,-P.x)，theta_world = theta_ref + θ
         const Eigen::Matrix<double, 6, 1> v_res = v_c - J_g * q_dot_g;
         Eigen::Matrix<double, 6, 1> v_arm = v_res;
 
@@ -296,22 +308,18 @@ private:
             const Eigen::Vector3d P_base = T.rotation() * P_cam3 + T.translation();
             const Eigen::Vector3d C      = T.translation();
 
-            // 相机相对目标的向量（世界系）
             const Eigen::Vector3d C_rel = C - P_base;
-            const double r_h = std::hypot(C_rel.x(), C_rel.y());   // 水平距离
-            const double r   = C_rel.norm();                         // 空间距离
+            const double r_h = std::hypot(C_rel.x(), C_rel.y());
+            const double r   = C_rel.norm();
 
-            // 当前球坐标角
             const double phi_curr   = std::atan2(C_rel.z(), std::max(r_h, 1e-6));
             const double theta_curr = std::atan2(C_rel.y(), C_rel.x());
 
-            // 期望方位角：从目标指向相机的水平角（世界系 XY）
             const double th_world = std::atan2(-P_base.y(), -P_base.x()) + desired_azimuth_;
 
             Eigen::Vector3d dC_world = Eigen::Vector3d::Zero();
 
             if (constrain_elevation_) {
-                // 仰角误差 → 沿经线切线方向，纯仰角分量，与方位/深度完全解耦
                 const double d_phi = desired_elevation_ - phi_curr;
                 const Eigen::Vector3d meridional(
                     -std::sin(phi_curr) * std::cos(theta_curr),
@@ -321,9 +329,8 @@ private:
             }
 
             if (constrain_azimuth_) {
-                // 方位角误差 → 沿纬线切线方向，纯水平切向，无径向无竖向分量
                 double d_theta = th_world - theta_curr;
-                d_theta -= 2.0 * M_PI * std::round(d_theta / (2.0 * M_PI));  // 归一化到 [-π, π]
+                d_theta -= 2.0 * M_PI * std::round(d_theta / (2.0 * M_PI));
                 const Eigen::Vector3d tangent(
                     -std::sin(theta_curr),
                      std::cos(theta_curr),

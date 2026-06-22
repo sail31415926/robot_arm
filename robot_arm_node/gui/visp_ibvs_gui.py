@@ -147,11 +147,11 @@ class App:
         self._desired_y     = tk.DoubleVar(value=0.0)
         self._desired_depth = tk.DoubleVar(value=0.3)
         self._status_var    = tk.StringVar(value='等待节点启动…')
-        # 球坐标约束（与 spherical_orbit_gui 约定一致：θ=方位角, φ=仰角）
+        # 球坐标约束（θ=方位角, φ=仰角）
         self._sphere_el_en  = tk.BooleanVar(value=False)
         self._sphere_az_en  = tk.BooleanVar(value=False)
-        self._sphere_el_deg = tk.DoubleVar(value=30.0)  # φ 仰角，默认 30°
-        self._sphere_az_deg = tk.DoubleVar(value=0.0)   # θ 方位角，默认 0°（臂侧近侧）
+        self._sphere_el_deg = tk.DoubleVar(value=30.0)
+        self._sphere_az_deg = tk.DoubleVar(value=0.0)
 
         self._setup_styles()
         self._build()
@@ -235,7 +235,6 @@ class App:
         ttk.Label(des, text='球坐标约束', font=('', 9, 'bold')).grid(
             row=len(fields)+2, column=0, columnspan=2, sticky='w', padx=6)
 
-        # φ 仰角
         fr_el = tk.Frame(des)
         fr_el.grid(row=len(fields)+3, column=0, columnspan=2, sticky='w', padx=4, pady=2)
         ttk.Checkbutton(fr_el, text='φ 仰角(°)', variable=self._sphere_el_en,
@@ -244,7 +243,6 @@ class App:
                     textvariable=self._sphere_el_deg, width=7,
                     format='%.1f').pack(side=tk.LEFT, padx=4)
 
-        # θ 方位角
         fr_az = tk.Frame(des)
         fr_az.grid(row=len(fields)+4, column=0, columnspan=2, sticky='w', padx=4, pady=2)
         ttk.Checkbutton(fr_az, text='θ 方位角(°)', variable=self._sphere_az_en,

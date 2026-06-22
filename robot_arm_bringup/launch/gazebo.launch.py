@@ -322,13 +322,13 @@ def generate_launch_description():
     joint_state_broadcaster_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['joint_state_broadcaster'],
+        arguments=['joint_state_broadcaster', '--controller-manager-timeout', '30'],
     )
 
     arm_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['arm_controller'],
+        arguments=['arm_controller', '--controller-manager-timeout', '30'],
     )
 
     camera_view = IncludeLaunchDescription(
