@@ -86,7 +86,7 @@ STATE_NAME = {v: k for k, v in CommanderState.__members__.items()}
 
 # ── 预定义姿态（可通过 ROS param 覆盖）─────────────────────────────────────────────
 # STOWED 收纳位 → 关节空间回零 [0,0,0,0,0,0]，不走 IK，无需 Cartesian 参数
-DEFAULT_POSE_OBSERVE = dict(x=0.20, y=0.00, z=0.75, roll=90.0, pitch=0.0, yaw=0.0)
+DEFAULT_POSE_OBSERVE = dict(x=0.1, y=0.00, z=0.8, roll=90.0, pitch=0.0, yaw=0.0)
 
 
 # ── 话题 / 动作名称常量 ───────────────────────────────────────────────────────────

@@ -41,6 +41,7 @@ using namespace visp;
 #include <pinocchio/multibody/data.hpp>
 #include <pinocchio/parsers/urdf.hpp>
 #include <pinocchio/algorithm/jacobian.hpp>
+#include <pinocchio/algorithm/kinematics.hpp>
 #include <pinocchio/algorithm/frames.hpp>
 namespace pin = pinocchio;
 
@@ -71,8 +72,14 @@ static constexpr double DAMPING_SQ            = 1e-4;
 static constexpr double DAMPING_ARM_SQ        = 0.1;
 // 云台极小软衰减增益（防关节极端漂移，不影响跟踪）
 static constexpr double K_NULL_GIMBAL         = 0.01;
-// 球坐标约束增益（m/s per m error）：俯仰角/方位角约束的位置误差增益
-static constexpr double K_SPHERE              = 0.8;
+// ── 拍摄高度控制（直接指定相机高度，替代原球坐标 仰角/方位角 约束）──────────
+// 让相机停在目标上方指定高度：给世界 Z 方向一个 P 速度喂给机械臂（J1-J3 平移），
+// 深度环保持距离、云台保持居中+水平，相机自然升/降到目标高度并停在球面上。
+static constexpr double K_HEIGHT              = 2.5;   // m/s per m（高度误差增益）
+static constexpr double HEIGHT_VEL_MAX        = 0.2;   // m/s，高度修正速度上限（防一次冲太猛）
+// 图像误差门控：目标偏离画面中心越多，高度修正越收敛让位给跟踪，避免追高度把目标跟丢。
+// gate = 1/(1+(img_err/HEIGHT_IMG_GATE)^2)
+static constexpr double HEIGHT_IMG_GATE       = 0.13;
 // 画面水平校正增益（rad/s per rad）：消除相机绕光轴的 Roll 漂移，使相机 X 轴保持水平。
 // 作为 v_c 滚转分量进入云台超定加权阻尼伪逆；残差受云台滚转权限限制（约几度，位姿相关）。
 static constexpr double K_LEVEL               = 4.0;
@@ -111,19 +118,16 @@ public:
         this->declare_parameter("desired_x",         DEFAULT_DESIRED_X);
         this->declare_parameter("desired_y",         DEFAULT_DESIRED_Y);
         this->declare_parameter("paused",            false);
-        // 球坐标约束参数（GUI 可调，ros2 param set 运行时修改）
-        this->declare_parameter("desired_elevation",   0.5);   // rad ≈ 28.6°
-        this->declare_parameter("desired_azimuth",     0.0);   // rad
-        this->declare_parameter("constrain_elevation", false);
-        this->declare_parameter("constrain_azimuth",   false);
+        // 拍摄高度约束参数（GUI 可调，ros2 param set 运行时修改）
+        // desired_height = 期望相机高度（arm_base 系 Z，m），与 GUI 显示的相机 Z 同一坐标
+        this->declare_parameter("desired_height",   0.5);    // m
+        this->declare_parameter("constrain_height", false);
 
         desired_depth_ = this->get_parameter("desired_depth").as_double();
         desired_x_     = this->get_parameter("desired_x").as_double();
         desired_y_     = this->get_parameter("desired_y").as_double();
-        desired_elevation_   = this->get_parameter("desired_elevation").as_double();
-        desired_azimuth_     = this->get_parameter("desired_azimuth").as_double();
-        constrain_elevation_ = this->get_parameter("constrain_elevation").as_bool();
-        constrain_azimuth_   = this->get_parameter("constrain_azimuth").as_bool();
+        desired_height_   = this->get_parameter("desired_height").as_double();
+        constrain_height_ = this->get_parameter("constrain_height").as_bool();
 
         param_cb_ = this->add_on_set_parameters_callback(
             [this](const std::vector<rclcpp::Parameter>& params) {
@@ -132,14 +136,13 @@ public:
                     else if (p.get_name() == "desired_x")            desired_x_           = p.as_double();
                     else if (p.get_name() == "desired_y")            desired_y_           = p.as_double();
                     else if (p.get_name() == "paused")               paused_              = p.as_bool();
-                    else if (p.get_name() == "desired_elevation")    desired_elevation_   = p.as_double();
-                    else if (p.get_name() == "desired_azimuth")      desired_azimuth_     = p.as_double();
-                    else if (p.get_name() == "constrain_elevation")  constrain_elevation_ = p.as_bool();
-                    else if (p.get_name() == "constrain_azimuth")    constrain_azimuth_   = p.as_bool();
+                    else if (p.get_name() == "desired_height")       desired_height_      = p.as_double();
+                    else if (p.get_name() == "constrain_height")     constrain_height_    = p.as_bool();
                 }
                 updateDesired();
-                RCLCPP_INFO(get_logger(), "desired updated: x=%.3f y=%.3f depth=%.3fm",
-                    desired_x_, desired_y_, desired_depth_);
+                RCLCPP_INFO(get_logger(), "desired updated: x=%.3f y=%.3f depth=%.3fm height=%.3fm[%s]",
+                    desired_x_, desired_y_, desired_depth_,
+                    desired_height_, constrain_height_ ? "on" : "off");
                 rcl_interfaces::msg::SetParametersResult r;
                 r.successful = true;
                 return r;
@@ -269,14 +272,27 @@ private:
         pin::computeFrameJacobian(pin_model_, pin_data_, pin_q_,
                                    cam_frame_id_, pin::LOCAL, J);
 
+        // computeFrameJacobian 不刷新 data.oMf —— 必须显式做一次前向运动学 + 帧 placement，
+        // 否则下面读到的 oMf 还是单位阵（平移=0、旋转=I），水平校正与球坐标约束全部失效。
+        pin::forwardKinematics(pin_model_, pin_data_, pin_q_);
+        pin::updateFramePlacement(pin_model_, pin_data_, cam_frame_id_);
+
         // ── 画面水平校正（绕光轴 omega_z）─────────────────────────────────
-        // 水平条件：相机 X 轴（图像右方向）落在世界水平面内（世界 Z 分量为零）。
+        // 目标：图像上正下倒——相机 X 轴（图像右方向）落在世界水平面内且朝向正确。
+        // 期望图像右方向 = 光轴 × 世界上方向（恒水平、垂直于视线，能区分正立/倒立）。
+        // roll_err = 绕光轴把当前 cam_x 转到期望方向所需的有符号角度（atan2 自带正确符号，
+        // 不会像“只把 cam_x.z 推到 0”那样在 cam_y.z<0 的正常姿态下变成正反馈）。
         // 作为 v_c 滚转分量，和图像跟踪一起进入超定加权阻尼最小二乘——稳定优先。
         const pin::SE3& T_cam = pin_data_.oMf[cam_frame_id_];
-        const Eigen::Vector3d cam_x_world = T_cam.rotation().col(0);
-        const double roll_err = std::atan2(cam_x_world.z(),
-            std::hypot(cam_x_world.x(), cam_x_world.y()));
-        v_c[5] -= K_LEVEL * roll_err;
+        const Eigen::Vector3d cam_x = T_cam.rotation().col(0);
+        const Eigen::Vector3d cam_y = T_cam.rotation().col(1);
+        const Eigen::Vector3d cam_z = T_cam.rotation().col(2);
+        Eigen::Vector3d right_des = cam_z.cross(Eigen::Vector3d::UnitZ());  // 期望图像右方向（世界水平）
+        if (right_des.norm() > 1e-6) {   // 光轴近竖直时图像本就水平、绕轴自由，跳过
+            right_des.normalize();
+            const double roll_err = std::atan2(right_des.dot(cam_y), right_des.dot(cam_x));
+            v_c[5] += K_LEVEL * roll_err;
+        }
 
         // ── 分离 Jacobian ──────────────────────────────────────────────────
         const Eigen::Matrix<double, 6, 3> J_g = J.rightCols(3);  // 云台 J4-J6
@@ -294,54 +310,25 @@ private:
         for (int i = 0; i < 3; ++i)
             q_dot_g[i] -= K_NULL_GIMBAL * (q_curr_[i + 3] - Q_NULL_TARGET[i + 3]);
 
-        // ── 第二优先级：机械臂 = 图像残差 + 球坐标位置约束 ──────────────
-        // 球坐标约束只走机械臂路径（J1-J3 平移相机位置），不经过云台
-        // 约定（Z-up）：
-        //   φ = desired_elevation（仰角，0=水平，+π/2=正上方）
-        //   θ = desired_azimuth  （方位角，θ=0 = 近侧/臂方向）
+        // ── 第二优先级：机械臂 = 图像残差 + 拍摄高度约束 ──────────────────
+        // 高度约束只走机械臂路径（J1-J3 平移相机），不经过云台。
+        // 给世界 Z 方向一个 P 速度把相机抬到/降到期望高度；深度环保持距离、
+        // 云台保持居中+水平，相机自然停在目标上方该高度处的球面上。
         const Eigen::Matrix<double, 6, 1> v_res = v_c - J_g * q_dot_g;
         Eigen::Matrix<double, 6, 1> v_arm = v_res;
 
-        if (constrain_elevation_ || constrain_azimuth_) {
+        if (constrain_height_) {
             const pin::SE3& T = pin_data_.oMf[cam_frame_id_];
-            const Eigen::Vector3d P_cam3(feat_x_ * feat_z_, feat_y_ * feat_z_, feat_z_);
-            const Eigen::Vector3d P_base = T.rotation() * P_cam3 + T.translation();
-            const Eigen::Vector3d C      = T.translation();
-
-            const Eigen::Vector3d C_rel = C - P_base;
-            const double r_h = std::hypot(C_rel.x(), C_rel.y());
-            const double r   = C_rel.norm();
-
-            const double phi_curr   = std::atan2(C_rel.z(), std::max(r_h, 1e-6));
-            const double theta_curr = std::atan2(C_rel.y(), C_rel.x());
-
-            const double th_world = std::atan2(-P_base.y(), -P_base.x()) + desired_azimuth_;
-
-            Eigen::Vector3d dC_world = Eigen::Vector3d::Zero();
-
-            if (constrain_elevation_) {
-                const double d_phi = desired_elevation_ - phi_curr;
-                const Eigen::Vector3d meridional(
-                    -std::sin(phi_curr) * std::cos(theta_curr),
-                    -std::sin(phi_curr) * std::sin(theta_curr),
-                     std::cos(phi_curr));
-                dC_world += std::max(r, desired_depth_) * d_phi * meridional;
-            }
-
-            if (constrain_azimuth_) {
-                double d_theta = th_world - theta_curr;
-                d_theta -= 2.0 * M_PI * std::round(d_theta / (2.0 * M_PI));
-                const Eigen::Vector3d tangent(
-                    -std::sin(theta_curr),
-                     std::cos(theta_curr),
-                     0.0);
-                dC_world += std::max(r_h, desired_depth_) * d_theta * tangent;
-            }
-
-            const Eigen::Vector3d dC_cam = T.rotation().transpose() * dC_world;
-            v_arm[0] += K_SPHERE * dC_cam[0];
-            v_arm[1] += K_SPHERE * dC_cam[1];
-            v_arm[2] += K_SPHERE * dC_cam[2];
+            // 图像误差门控：目标越偏离画面中心，高度修正越让位给跟踪，避免追高度把目标跟丢
+            const double g = img_err / HEIGHT_IMG_GATE;
+            const double gate = 1.0 / (1.0 + g * g);
+            double vz = K_HEIGHT * (desired_height_ - T.translation().z());
+            vz = std::clamp(vz, -HEIGHT_VEL_MAX, HEIGHT_VEL_MAX) * gate;
+            // 世界系竖直速度 → 相机系，叠加到机械臂任务
+            const Eigen::Vector3d dC_cam = T.rotation().transpose() * Eigen::Vector3d(0.0, 0.0, vz);
+            v_arm[0] += dC_cam[0];
+            v_arm[1] += dC_cam[1];
+            v_arm[2] += dC_cam[2];
         }
 
         Eigen::Matrix<double, 6, 6> A_a = J_a * J_a.transpose();
@@ -453,11 +440,9 @@ private:
     bool has_feat_{false};
     rclcpp::Time last_feat_time_;
 
-    // ── 球坐标约束 ────────────────────────────────────────────────────────────
-    double desired_elevation_{0.5};     // rad，俯仰角（0=水平，π/2=正上方）
-    double desired_azimuth_{0.0};       // rad，方位角（0=+X 方向）
-    bool   constrain_elevation_{false};
-    bool   constrain_azimuth_{false};
+    // ── 拍摄高度约束 ──────────────────────────────────────────────────────────
+    double desired_height_{0.5};        // m，期望相机高度（arm_base 系 Z）
+    bool   constrain_height_{false};
 
     // ── ROS2 接口 ─────────────────────────────────────────────────────────────
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr     jsub_;

@@ -147,11 +147,9 @@ class App:
         self._desired_y     = tk.DoubleVar(value=0.0)
         self._desired_depth = tk.DoubleVar(value=0.3)
         self._status_var    = tk.StringVar(value='等待节点启动…')
-        # 球坐标约束（θ=方位角, φ=仰角）
-        self._sphere_el_en  = tk.BooleanVar(value=False)
-        self._sphere_az_en  = tk.BooleanVar(value=False)
-        self._sphere_el_deg = tk.DoubleVar(value=30.0)
-        self._sphere_az_deg = tk.DoubleVar(value=0.0)
+        # 拍摄高度约束（相机 arm_base 系 Z，m）
+        self._height_en  = tk.BooleanVar(value=False)
+        self._height_m   = tk.DoubleVar(value=0.55)
 
         self._setup_styles()
         self._build()
@@ -229,30 +227,22 @@ class App:
         ttk.Button(des, text='✔  应用', command=self._apply_desired).grid(
             row=len(fields), column=0, columnspan=2, pady=(6, 4), ipadx=8)
 
-        # ── 球坐标约束 ────────────────────────────────────────────────────────
+        # ── 拍摄高度 ──────────────────────────────────────────────────────────
         ttk.Separator(des, orient='horizontal').grid(
             row=len(fields)+1, column=0, columnspan=2, sticky='ew', padx=4, pady=(4, 2))
-        ttk.Label(des, text='球坐标约束', font=('', 9, 'bold')).grid(
+        ttk.Label(des, text='拍摄高度', font=('', 9, 'bold')).grid(
             row=len(fields)+2, column=0, columnspan=2, sticky='w', padx=6)
 
-        fr_el = tk.Frame(des)
-        fr_el.grid(row=len(fields)+3, column=0, columnspan=2, sticky='w', padx=4, pady=2)
-        ttk.Checkbutton(fr_el, text='φ 仰角(°)', variable=self._sphere_el_en,
-                        width=10).pack(side=tk.LEFT)
-        ttk.Spinbox(fr_el, from_=-89.0, to=89.0, increment=5.0,
-                    textvariable=self._sphere_el_deg, width=7,
-                    format='%.1f').pack(side=tk.LEFT, padx=4)
+        fr_h = tk.Frame(des)
+        fr_h.grid(row=len(fields)+3, column=0, columnspan=2, sticky='w', padx=4, pady=2)
+        ttk.Checkbutton(fr_h, text='相机高度(m)', variable=self._height_en,
+                        width=11).pack(side=tk.LEFT)
+        ttk.Spinbox(fr_h, from_=0.1, to=1.2, increment=0.02,
+                    textvariable=self._height_m, width=7,
+                    format='%.2f').pack(side=tk.LEFT, padx=4)
 
-        fr_az = tk.Frame(des)
-        fr_az.grid(row=len(fields)+4, column=0, columnspan=2, sticky='w', padx=4, pady=2)
-        ttk.Checkbutton(fr_az, text='θ 方位角(°)', variable=self._sphere_az_en,
-                        width=10).pack(side=tk.LEFT)
-        ttk.Spinbox(fr_az, from_=-180.0, to=180.0, increment=10.0,
-                    textvariable=self._sphere_az_deg, width=7,
-                    format='%.1f').pack(side=tk.LEFT, padx=4)
-
-        ttk.Button(des, text='✔  应用约束', command=self._apply_sphere).grid(
-            row=len(fields)+5, column=0, columnspan=2, pady=(4, 4), ipadx=8)
+        ttk.Button(des, text='✔  应用高度', command=self._apply_height).grid(
+            row=len(fields)+4, column=0, columnspan=2, pady=(4, 4), ipadx=8)
 
     def _build_cam_pose(self, parent):
         fr = ttk.LabelFrame(parent, text='相机末端位姿  (arm_base_link → camera_optical_frame)')
@@ -334,25 +324,20 @@ class App:
                 row=row_idx, column=5, padx=6)
             self._gw_vars[gim] = wv
 
-    # ── 球坐标约束推送 ────────────────────────────────────────────────────────
-    def _apply_sphere(self):
-        el_en = self._sphere_el_en.get()
-        az_en = self._sphere_az_en.get()
-        el_rad = math.radians(self._sphere_el_deg.get())
-        az_rad = math.radians(self._sphere_az_deg.get())
+    # ── 拍摄高度推送 ──────────────────────────────────────────────────────────
+    def _apply_height(self):
+        en = self._height_en.get()
+        h  = self._height_m.get()
         params = [
-            ('constrain_elevation', 'true' if el_en else 'false'),
-            ('constrain_azimuth',   'true' if az_en else 'false'),
-            ('desired_elevation',   f'{el_rad:.4f}'),
-            ('desired_azimuth',     f'{az_rad:.4f}'),
+            ('constrain_height', 'true' if en else 'false'),
+            ('desired_height',   f'{h:.4f}'),
         ]
         for param, val in params:
             subprocess.Popen(
                 ['ros2', 'param', 'set', VISP_NODE, param, val],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self._status_var.set(
-            f'球坐标约束 → 俯仰:{"启" if el_en else "停"}({self._sphere_el_deg.get():.0f}°)'
-            f'  方位:{"启" if az_en else "停"}({self._sphere_az_deg.get():.0f}°)')
+            f'拍摄高度 → {"启" if en else "停"}  目标相机Z={h:.2f} m')
 
     # ── 位置指令 ──────────────────────────────────────────────────────────────
     def _go_ready(self):
