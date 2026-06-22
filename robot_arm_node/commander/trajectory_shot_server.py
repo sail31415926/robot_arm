@@ -38,6 +38,7 @@ DEFAULT_POSITION_TOLERANCE_M     = 0.01   # 到位判定：位置容差（米）
 DEFAULT_ORIENTATION_TOLERANCE_DEG = 2.0  # 到位判定：姿态容差（度）
 DEFAULT_TIMEOUT_SEC = 60.0               # 运动超时（秒）
 FEEDBACK_RATE_HZ    = 10.0               # 反馈频率
+DWELL_AT_START_SEC  = 1.0                # 到达起始点后停顿时长（秒），停顿结束再执行运镜
 
 # 速度档位 → motion_executor 速度参数映射
 SPEED_PROFILES = {
@@ -94,6 +95,12 @@ class TrajectoryShotServer:
                                 progress_range=(0.0, 33.0 if goal.return_to_start else 50.0))
         if not r.success:
             return r
+        # 到达起始点：置位信号 → 停顿 → 复位信号，再执行轨迹
+        if not self._dwell_at_start(goal_handle, 'LINEAR'):
+            res = ArmTrajectoryShot.Result()
+            res.success     = False
+            res.exit_reason = 'cancelled'
+            return res
 
         # 步骤 2：移动到终止位姿（33 → 67% 或 50 → 100%）
         p2_end = 67.0 if goal.return_to_start else 100.0
@@ -158,6 +165,10 @@ class TrajectoryShotServer:
             radius=r0)
         if not r_ptp.success:
             return r_ptp
+        # 到达起始点：置位信号 → 停顿 → 复位信号，再执行轨道
+        if not self._dwell_at_start(goal_handle, 'ORBIT'):
+            result.exit_reason = 'cancelled'
+            return result
 
         # ── 步骤 2：Ruckig 1-DOF 球面轨道（起 → 终）─────────────────────────
         if _cancelled():
@@ -210,6 +221,34 @@ class TrajectoryShotServer:
             azimuth=goal.azimuth_start_deg,
             elevation=goal.elevation_start_deg,
             radius=r0)
+
+    # ── 到达起始点后的停顿 ────────────────────────────────────────────────────────
+    def _dwell_at_start(self, goal_handle, label: str = '') -> bool:
+        """到达运镜起始点后：置位 arm_at_pose_start → 停顿 DWELL_AT_START_SEC（期间可取消）
+        → 复位 arm_at_pose_start，再返回。
+
+        arm_at_pose_start 的 True 窗口 = 这段"停在起点等待"的时间；停顿结束即复位，
+        因此轨迹执行期间及到达目标后均为 False。
+
+        Returns:
+            True  正常结束停顿，可继续执行轨迹
+            False 停顿期间被取消（已发 stop，已复位信号）
+        """
+        self._status.set_at_pose_start(True)
+        self._logger.info(f'{label} 已到达起始点，停顿 {DWELL_AT_START_SEC:.1f}s 后执行运镜')
+
+        t_end     = time.time() + DWELL_AT_START_SEC
+        cancelled = False
+        while time.time() < t_end:
+            if goal_handle.is_cancel_requested:
+                self._motion.stop()
+                self._logger.info(f'{label} 起点停顿期间被取消')
+                cancelled = True
+                break
+            time.sleep(0.02)
+
+        self._status.set_at_pose_start(False)
+        return not cancelled
 
     # ── 共用：IK 移动 + 等待到位 ──────────────────────────────────────────────────
     def _move_and_wait(self, goal_handle, target: ArmPose, speed: dict,

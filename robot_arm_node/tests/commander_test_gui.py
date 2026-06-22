@@ -279,6 +279,11 @@ class App:
             ttk.Entry(row2, textvariable=v, width=11, state='readonly',
                       justify='center').pack(side=tk.LEFT, padx=(0, 8))
 
+        # 到位指示灯：到达目标 / 到达运镜起始点（绿=是，灰=否）
+        row3 = ttk.Frame(sf); row3.pack(fill=tk.X, pady=(4, 0))
+        self._led_at_target = self._make_led(row3, '到达目标')
+        self._led_at_start  = self._make_led(row3, '到达起点')
+
         # 控制按钮行
         btn_row = ttk.Frame(sf); btn_row.pack(fill=tk.X, pady=(6, 0))
         tk.Button(btn_row, text='■ 急  停', width=10, bg='#cc3333', fg='white',
@@ -295,6 +300,21 @@ class App:
                                       command=self._cmd_toggle_enable)
         self._enable_btn.pack(side=tk.LEFT, padx=4)
         self._servo_enabled = False
+
+    # ── 到位指示灯辅助 ───────────────────────────────────────────────────────────
+    @staticmethod
+    def _make_led(parent, text):
+        """创建一个布尔指示灯（绿=是 / 灰=否），返回可更新的 Label。"""
+        ttk.Label(parent, text=f'{text}:').pack(side=tk.LEFT, padx=(4, 1))
+        lbl = tk.Label(parent, text='否', width=6, relief='groove',
+                       bg='#bbbbbb', fg='white', font=('', 9, 'bold'))
+        lbl.pack(side=tk.LEFT, padx=(0, 12))
+        return lbl
+
+    @staticmethod
+    def _set_led(lbl, on: bool):
+        lbl.configure(text='是' if on else '否',
+                      bg='#2e9e3f' if on else '#bbbbbb')
 
     # ── ArmMoveToPose ─────────────────────────────────────────────────────────────
     def _build_mtp_panel(self, parent, pad):
@@ -602,6 +622,8 @@ class App:
             self._sv_error_code.set(ERR_NAMES.get(s.error_code, str(s.error_code)))
             self._sv_cmd_result.set(CMD_RESULT_NAMES.get(s.command_result,'?'))
             self._sv_is_moving.set('是' if s.is_moving else '否')
+            self._set_led(self._led_at_target, s.arm_at_target)
+            self._set_led(self._led_at_start,  s.arm_at_pose_start)
         elif t == 'fb_mtp':
             _, prog, pose = item
             self._log(f'… MTP {prog:5.1f}%  z={pose.z:.3f}m')

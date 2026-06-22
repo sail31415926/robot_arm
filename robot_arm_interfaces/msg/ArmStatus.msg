@@ -43,3 +43,7 @@ bool    is_moving
 
 # 机械臂是否已到达目标（|实际 - 目标| < 容差），到达 = true
 bool    arm_at_target
+
+# 机械臂是否已到达运镜起始点（直线/环绕运镜步骤1 到位 = true；
+# 每条新指令开始时复位为 false）
+bool    arm_at_pose_start

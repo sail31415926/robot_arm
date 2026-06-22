@@ -80,6 +80,7 @@ class StatusAggregator:
         self._current_pose_state   = ArmStatus.POSE_STATE_OBSERVE  # 默认
         self._error_code           = ArmStatus.ERR_NONE
         self._is_moving            = False   # 由 Commander 状态机维护，避免速度微分抖动
+        self._at_pose_start        = False   # 由运镜 server 维护：是否已到达运镜起始点
 
         self._state_lock = threading.Lock()
 
@@ -191,6 +192,16 @@ class StatusAggregator:
         with self._state_lock:
             self._is_moving = moving
 
+    @property
+    def at_pose_start(self) -> bool:
+        with self._state_lock:
+            return self._at_pose_start
+
+    def set_at_pose_start(self, at_start: bool):
+        """由运镜 server 在到达起始点时置 True，新指令开始时（Commander）复位 False。"""
+        with self._state_lock:
+            self._at_pose_start = at_start
+
     # ── 命令执行状态管理（由 ArmCommanderNode/action server 调用）─────────────────
     def set_command_state(self, command_id: int, result: int):
         """更新当前命令的执行状态。"""
@@ -234,4 +245,5 @@ class StatusAggregator:
         msg.arm_twist    = self.twist
         msg.is_moving    = self.is_moving
         msg.arm_at_target = not self.is_moving   # TODO: 改为基于目标位姿的比较
+        msg.arm_at_pose_start = self.at_pose_start
         return msg

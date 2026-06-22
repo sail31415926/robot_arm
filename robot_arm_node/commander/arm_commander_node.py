@@ -245,6 +245,7 @@ class ArmCommanderNode(Node):
 
         self.get_logger().info('MoveToPose goal 已接受，开始执行')
         self._transition(CommanderState.MOVING)
+        self.status.set_at_pose_start(False)   # 新指令开始，复位"到达起始点"信号
         self._cmd_counter += 1
         cmd_id = self._cmd_counter
         self.status.set_command_state(cmd_id, ArmStatus.RESULT_EXECUTING)
@@ -303,6 +304,7 @@ class ArmCommanderNode(Node):
             return ArmTrajectoryShot.Result()
 
         self._transition(CommanderState.MOVING)
+        self.status.set_at_pose_start(False)   # 新运镜开始，复位"到达起始点"信号
         self._cmd_counter += 1
         cmd_id = self._cmd_counter
         self.status.set_command_state(cmd_id, ArmStatus.RESULT_EXECUTING)

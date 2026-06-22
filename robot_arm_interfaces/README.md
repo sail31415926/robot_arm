@@ -64,7 +64,27 @@
 | 消息 | 方向 | 说明 |
 | --- | --- | --- |
 | `ArmFollowCommand` | Director → Commander | 末端速度跟随（`ArmTwist`），持续速度流（IBVS / 手动点动） |
-| `ArmStatus` | Commander → Director | 位姿、速度、运动状态、错误码、命令执行结果（10Hz 周期广播） |
+| `ArmStatus` | Commander → Director | 位姿、速度、运动状态、错误码、命令执行结果、到位标志（到达目标 / 到达运镜起始点）（10Hz 周期广播） |
+
+#### `ArmStatus` —— 状态广播（Commander → Director，10Hz）
+
+```text
+uint8    current_pose_state   # 当前语义姿态 STOWED=0 / OBSERVE=1 / SHOOTING=2
+uint8    error_code           # ERR_NONE=0 / ERR_LIMIT=1 / ERR_DRIVER=2 / ERR_TIMEOUT=3
+uint32   executing_command_id # 当前/最近命令 id（与 command_id 关联，0=上层不关心）
+uint8    command_result       # RESULT_NONE=0 / EXECUTING=1 / SUCCEEDED=2 / FAILED=3 / ABORTED=4
+ArmPose  arm_pose             # 末端当前位姿
+ArmTwist arm_twist            # 末端当前速度
+bool     is_moving            # 是否正在运动
+bool     arm_at_target        # 是否已到达目标点（|实际 - 目标| < 容差）
+bool     arm_at_pose_start    # 是否已到达运镜起始点（见下方说明）
+```
+
+- **`arm_at_target`**：到达目标点为 `true`。
+- **`arm_at_pose_start`**：运镜（LINEAR / ORBIT）PTP 到达起始点后置 `true`，并在起点
+  停顿 `DWELL_AT_START_SEC`（默认 1.0s）期间保持 `true`；停顿结束（开始执行轨迹）即复位
+  `false`，故轨迹执行期间与到达目标后均为 `false`。每条新指令开始时也复位 `false`。
+  消费者（Director / 录制节点）可据其上升沿在运镜起点触发录制等动作。
 
 ### Service（请求-应答）
 
@@ -140,14 +160,16 @@ Feedback:
 **MOTION_LINEAR 执行流程：**
 
 1. PTP 移动到 `linear_start_pose`（IK + JointTrajectory）
-2. PTP 移动到 `linear_end_pose`
-3. 若 `return_to_start`，返回 `linear_start_pose`
+2. 到位后在起点停顿 `DWELL_AT_START_SEC`（其间 `arm_at_pose_start=true`），停顿结束复位
+3. PTP 移动到 `linear_end_pose`
+4. 若 `return_to_start`，返回 `linear_start_pose`
 
 **MOTION_ORBIT 执行流程：**
 
 1. PTP 移动到起始球坐标（IK + JointTrajectory）
-2. **Ruckig 1-DOF** 球面轨道运动（插值 θ/φ/r → 批量 IK → 多路点 JointTrajectory）
-3. 若 `return_to_start`，Ruckig 原路返回起始球坐标
+2. 到位后在起点停顿 `DWELL_AT_START_SEC`（其间 `arm_at_pose_start=true`），停顿结束复位
+3. **Ruckig 1-DOF** 球面轨道运动（插值 θ/φ/r → 批量 IK → 多路点 JointTrajectory）
+4. 若 `return_to_start`，Ruckig 原路返回起始球坐标
 
 ## ROS Topic / Action / Service 汇总
 
