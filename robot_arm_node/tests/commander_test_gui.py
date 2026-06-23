@@ -279,10 +279,11 @@ class App:
             ttk.Entry(row2, textvariable=v, width=11, state='readonly',
                       justify='center').pack(side=tk.LEFT, padx=(0, 8))
 
-        # 到位指示灯：到达目标 / 到达运镜起始点（绿=是，灰=否）
+        # 到位指示灯：到达目标 / 到达运镜起始点 / 摄像头录制就绪（绿=是，灰=否）
         row3 = ttk.Frame(sf); row3.pack(fill=tk.X, pady=(4, 0))
-        self._led_at_target = self._make_led(row3, '到达目标')
-        self._led_at_start  = self._make_led(row3, '到达起点')
+        self._led_at_target     = self._make_led(row3, '到达目标')
+        self._led_at_start      = self._make_led(row3, '到达起点')
+        self._led_camera_ready  = self._make_led(row3, '摄像头就绪')
 
         # 控制按钮行
         btn_row = ttk.Frame(sf); btn_row.pack(fill=tk.X, pady=(6, 0))
@@ -622,8 +623,9 @@ class App:
             self._sv_error_code.set(ERR_NAMES.get(s.error_code, str(s.error_code)))
             self._sv_cmd_result.set(CMD_RESULT_NAMES.get(s.command_result,'?'))
             self._sv_is_moving.set('是' if s.is_moving else '否')
-            self._set_led(self._led_at_target, s.arm_at_target)
-            self._set_led(self._led_at_start,  s.arm_at_pose_start)
+            self._set_led(self._led_at_target,    s.arm_at_target)
+            self._set_led(self._led_at_start,     s.arm_at_pose_start)
+            self._set_led(self._led_camera_ready, s.camera_ready)
         elif t == 'fb_mtp':
             _, prog, pose = item
             self._log(f'… MTP {prog:5.1f}%  z={pose.z:.3f}m')

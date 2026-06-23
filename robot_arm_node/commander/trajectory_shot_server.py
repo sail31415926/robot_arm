@@ -235,6 +235,7 @@ class TrajectoryShotServer:
             False 停顿期间被取消（已发 stop，已复位信号）
         """
         self._status.set_at_pose_start(True)
+        self._status.set_camera_ready(True)
         self._logger.info(f'{label} 已到达起始点，停顿 {DWELL_AT_START_SEC:.1f}s 后执行运镜')
 
         t_end     = time.time() + DWELL_AT_START_SEC

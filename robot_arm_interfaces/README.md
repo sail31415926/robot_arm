@@ -64,7 +64,7 @@
 | 消息 | 方向 | 说明 |
 | --- | --- | --- |
 | `ArmFollowCommand` | Director → Commander | 末端速度跟随（`ArmTwist`），持续速度流（IBVS / 手动点动） |
-| `ArmStatus` | Commander → Director | 位姿、速度、运动状态、错误码、命令执行结果、到位标志（到达目标 / 到达运镜起始点）（10Hz 周期广播） |
+| `ArmStatus` | Commander → Director | 位姿、速度、运动状态、错误码、命令执行结果、到位标志（到达目标 / 到达运镜起始点 / 摄像头录制就绪）（10Hz 周期广播） |
 
 #### `ArmStatus` —— 状态广播（Commander → Director，10Hz）
 
@@ -78,6 +78,7 @@ ArmTwist arm_twist            # 末端当前速度
 bool     is_moving            # 是否正在运动
 bool     arm_at_target        # 是否已到达目标点（|实际 - 目标| < 容差）
 bool     arm_at_pose_start    # 是否已到达运镜起始点（见下方说明）
+bool     camera_ready         # 摄像头录制就绪（见下方说明）
 ```
 
 - **`arm_at_target`**：到达目标点为 `true`。
@@ -85,6 +86,21 @@ bool     arm_at_pose_start    # 是否已到达运镜起始点（见下方说明
   停顿 `DWELL_AT_START_SEC`（默认 1.0s）期间保持 `true`；停顿结束（开始执行轨迹）即复位
   `false`，故轨迹执行期间与到达目标后均为 `false`。每条新指令开始时也复位 `false`。
   消费者（Director / 录制节点）可据其上升沿在运镜起点触发录制等动作。
+- **`camera_ready`**：**摄像头录制就绪窗口**。运镜（LINEAR / ORBIT）PTP 到达起始点时与
+  `arm_at_pose_start` 同时置 `true`，但**不随停顿结束而复位**，而是持续保持 `true` 直到
+  整条轨迹执行结束（成功、取消或异常均会触发复位）。每条新 `ArmTrajectoryShot` 指令开始时
+  也复位 `false`。时序如下：
+
+  ```text
+  新 TrajectoryShot goal ──→ camera_ready = false（复位）
+  PTP 到达起始点        ──→ camera_ready = true（与 arm_at_pose_start 同时）
+    ├ 起点停顿 1s（arm_at_pose_start=true，camera_ready=true）
+    └ 停顿结束（arm_at_pose_start=false，camera_ready 保持 true）
+  轨迹运动中（LINEAR / ORBIT 运镜）── camera_ready = true
+  运镜结束（任何原因）  ──→ camera_ready = false
+  ```
+
+  Director / 摄像头录制节点应在 `camera_ready` 上升沿开始录制、下降沿停止录制。
 
 ### Service（请求-应答）
 
@@ -160,16 +176,18 @@ Feedback:
 **MOTION_LINEAR 执行流程：**
 
 1. PTP 移动到 `linear_start_pose`（IK + JointTrajectory）
-2. 到位后在起点停顿 `DWELL_AT_START_SEC`（其间 `arm_at_pose_start=true`），停顿结束复位
-3. PTP 移动到 `linear_end_pose`
+2. 到位后置 `arm_at_pose_start=true` / `camera_ready=true`，在起点停顿 `DWELL_AT_START_SEC`；停顿结束复位 `arm_at_pose_start=false`（`camera_ready` 保持 `true`）
+3. PTP 移动到 `linear_end_pose`（`camera_ready` 持续 `true`）
 4. 若 `return_to_start`，返回 `linear_start_pose`
+5. 轨迹结束（任何原因）→ `camera_ready=false`
 
 **MOTION_ORBIT 执行流程：**
 
 1. PTP 移动到起始球坐标（IK + JointTrajectory）
-2. 到位后在起点停顿 `DWELL_AT_START_SEC`（其间 `arm_at_pose_start=true`），停顿结束复位
-3. **Ruckig 1-DOF** 球面轨道运动（插值 θ/φ/r → 批量 IK → 多路点 JointTrajectory）
+2. 到位后置 `arm_at_pose_start=true` / `camera_ready=true`，在起点停顿 `DWELL_AT_START_SEC`；停顿结束复位 `arm_at_pose_start=false`（`camera_ready` 保持 `true`）
+3. **Ruckig 1-DOF** 球面轨道运动（插值 θ/φ/r → 批量 IK → 多路点 JointTrajectory，`camera_ready` 持续 `true`）
 4. 若 `return_to_start`，Ruckig 原路返回起始球坐标
+5. 轨迹结束（任何原因）→ `camera_ready=false`
 
 ## ROS Topic / Action / Service 汇总
 

@@ -47,3 +47,6 @@ bool    arm_at_target
 # 机械臂是否已到达运镜起始点（直线/环绕运镜步骤1 到位 = true；
 # 每条新指令开始时复位为 false）
 bool    arm_at_pose_start
+
+# 摄像头录制就绪：给定轨迹后机械臂到达起始点起、至运镜结束期间为 true，其余为 false
+bool    camera_ready

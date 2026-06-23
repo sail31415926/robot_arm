@@ -305,6 +305,7 @@ class ArmCommanderNode(Node):
 
         self._transition(CommanderState.MOVING)
         self.status.set_at_pose_start(False)   # 新运镜开始，复位"到达起始点"信号
+        self.status.set_camera_ready(False)    # 新运镜开始，复位摄像头就绪信号
         self._cmd_counter += 1
         cmd_id = self._cmd_counter
         self.status.set_command_state(cmd_id, ArmStatus.RESULT_EXECUTING)
@@ -337,6 +338,7 @@ class ArmCommanderNode(Node):
             self.status.set_error(ArmStatus.ERR_DRIVER)
             return ArmTrajectoryShot.Result()
         finally:
+            self.status.set_camera_ready(False)   # 运镜结束（任何原因），复位录制就绪信号
             with self._goal_lock:
                 self._active_goal = None
 
