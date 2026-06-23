@@ -58,9 +58,12 @@ static constexpr double DEFAULT_DESIRED_X     = 0.0;    // 期望图像 x（0=�
 static constexpr double DEFAULT_DESIRED_Y     = 0.0;    // 期望图像 y（0=中心）
 // 深度独立校正增益：Vz_cam = DEPTH_GAIN × log(Z/Z*)
 static constexpr double DEPTH_GAIN            = 0.5;
-// ViSP 自适应增益曲线：误差→0 时 lambda=4，误差大时 lambda=0.4
-static constexpr double LAMBDA_0              = 4.0;
-static constexpr double LAMBDA_INF            = 1.5;
+// ViSP 自适应增益曲线：误差→0 时 lambda=LAMBDA_0，误差大时 lambda=LAMBDA_INF。
+// 相机速度 v_c 正比于 lambda，跟踪滞后（稳态图像误差）≈ 反比于 lambda——这是跟踪
+// 速度的主旋钮。动目标主要由 LAMBDA_INF（大误差段增益）决定。云台速度上限 1 rad/s
+// 此档位下仅用约 5%，仍有大量余量，嫌慢可继续上调（注意实机过大会抖/超调）。
+static constexpr double LAMBDA_0              = 8.0;   // 原 4.0
+static constexpr double LAMBDA_INF            = 4.0;   // 原 1.5（追动目标最关键）
 static constexpr double LAMBDA_SLOPE          = 30.0;
 // 云台（J4-J6）基础权重（动态乘以涨价因子）
 static constexpr double W_GIMBAL              = 1.0;
