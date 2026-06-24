@@ -321,7 +321,11 @@ private:
         // ── ViSP 相机速度（图像居中，相机坐标系）───────────────────────────
         p_curr_.buildFrom(feat_x_, feat_y_, feat_z_);
         vpColVector vc_visp = task_.computeControlLaw();
-        if (control_depth_) vc_visp[2] += DEPTH_GAIN * depth_err;  // 深度保持（可选）
+        if (control_depth_) {
+            vc_visp[2] += DEPTH_GAIN * depth_err;
+        } else {
+            vc_visp[2] = 0.0;  // 关闭深度控制：清除 ViSP 交互矩阵产生的 Vz 分量
+        }
 
         Eigen::Matrix<double, 6, 1> v_c;
         for (int i = 0; i < 6; ++i) v_c[i] = vc_visp[i];
