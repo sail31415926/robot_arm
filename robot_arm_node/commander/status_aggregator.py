@@ -82,6 +82,9 @@ class StatusAggregator:
         self._is_moving            = False   # 由 Commander 状态机维护，避免速度微分抖动
         self._at_pose_start        = False   # 由运镜 server 维护：是否已到达运镜起始点
         self._camera_ready         = False   # 机械臂到达运镜起始点→运镜结束期间为 True
+        self._is_tracking          = False   # IBVS 跟随激活期间为 True
+        self._tracking_img_err     = 0.0     # 当前图像误差（归一化）
+        self._tracking_depth_err_m = 0.0     # 当前深度误差（m）
 
         self._state_lock = threading.Lock()
 
@@ -213,6 +216,13 @@ class StatusAggregator:
         with self._state_lock:
             self._camera_ready = ready
 
+    def set_tracking(self, tracking: bool, img_err: float, depth_err_m: float):
+        """由 TrackTargetServer 在跟随期间持续更新，退出时清零。"""
+        with self._state_lock:
+            self._is_tracking          = tracking
+            self._tracking_img_err     = img_err
+            self._tracking_depth_err_m = depth_err_m
+
     # ── 命令执行状态管理（由 ArmCommanderNode/action server 调用）─────────────────
     def set_command_state(self, command_id: int, result: int):
         """更新当前命令的执行状态。"""
@@ -258,4 +268,8 @@ class StatusAggregator:
         msg.arm_at_target = not self.is_moving   # TODO: 改为基于目标位姿的比较
         msg.arm_at_pose_start = self.at_pose_start
         msg.camera_ready      = self.camera_ready
+        with self._state_lock:
+            msg.is_tracking          = self._is_tracking
+            msg.tracking_img_err     = float(self._tracking_img_err)
+            msg.tracking_depth_err_m = float(self._tracking_depth_err_m)
         return msg

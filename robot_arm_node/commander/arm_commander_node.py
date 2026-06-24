@@ -48,12 +48,13 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 from std_srvs.srv import Trigger
 
-from robot_arm_interfaces.action import ArmMoveToPose, ArmTrajectoryShot
+from robot_arm_interfaces.action import ArmMoveToPose, ArmTrajectoryShot, ArmTrackTarget
 from robot_arm_interfaces.msg import ArmStatus
 from robot_arm_interfaces.srv import ArmStop, ArmEnable, ArmHoming, ArmResetError
 
 from commander.move_to_pose_server import MoveToPoseServer
 from commander.trajectory_shot_server import TrajectoryShotServer
+from commander.track_target_server import TrackTargetServer
 from commander.motion_executor import MotionExecutor
 from commander.status_aggregator import StatusAggregator
 
@@ -86,13 +87,14 @@ STATE_NAME = {v: k for k, v in CommanderState.__members__.items()}
 
 # ── 预定义姿态（可通过 ROS param 覆盖）─────────────────────────────────────────────
 # STOWED 收纳位 → 关节空间回零 [0,0,0,0,0,0]，不走 IK，无需 Cartesian 参数
-DEFAULT_POSE_OBSERVE = dict(x=0.1, y=0.00, z=0.8, roll=90.0, pitch=0.0, yaw=0.0)
+DEFAULT_POSE_OBSERVE = dict(x=0.1, y=0.00, z=0.75, roll=90.0, pitch=0.0, yaw=0.0)
 
 
 # ── 话题 / 动作名称常量 ───────────────────────────────────────────────────────────
 TOPIC_ARM_STATUS   = '/robot_arm/arm_status'
 ACTION_MOVE_TO_POSE   = '/robot_arm/move_to_pose'
 ACTION_TRAJECTORY_SHOT  = '/robot_arm/trajectory_shot'
+ACTION_TRACK_TARGET     = '/robot_arm/track_target'
 SERVICE_ARM_STOP        = '/robot_arm/stop'
 SERVICE_ARM_ENABLE      = '/robot_arm/enable'
 SERVICE_ARM_HOMING      = '/robot_arm/homing'
@@ -145,6 +147,7 @@ class ArmCommanderNode(Node):
         self.motion     = MotionExecutor(self)
         self.move_to_pose_srv    = MoveToPoseServer(self, self.motion, self.status)
         self.trajectory_shot_srv = TrajectoryShotServer(self, self.motion, self.status)
+        self.track_target_srv    = TrackTargetServer(self, self.status)
 
         # ── Action Servers ──────────────────────────────────────────────────────
         self._mtp_server = ActionServer(
@@ -153,11 +156,16 @@ class ArmCommanderNode(Node):
             cancel_callback  = self._on_mtp_cancel,
             callback_group   = self._cb_group,
         )
-        # ArmTrajectoryShot — 骨架预留
         self._em_server = ActionServer(
             self, ArmTrajectoryShot, ACTION_TRAJECTORY_SHOT,
             execute_callback = self._on_em_execute,
             cancel_callback  = self._on_em_cancel,
+            callback_group   = self._cb_group,
+        )
+        self._track_server = ActionServer(
+            self, ArmTrackTarget, ACTION_TRACK_TARGET,
+            execute_callback = self._on_track_execute,
+            cancel_callback  = self._on_track_cancel,
             callback_group   = self._cb_group,
         )
 
@@ -346,6 +354,57 @@ class ArmCommanderNode(Node):
         """取消请求回调：仅停止运动，状态转换由 execute 回调统一处理。"""
         self.get_logger().info('收到 TrajectoryShot 取消请求')
         self.motion.stop()
+        return CancelResponse.ACCEPT
+
+    # ── ArmTrackTarget Action Server ─────────────────────────────────────────────
+    def _on_track_execute(self, goal_handle):
+        """执行目标跟随：启动 IBVS，阻塞直到收敛 / 丢失 / 超时 / cancel。"""
+        goal = goal_handle.request
+        self.get_logger().info(
+            f'收到 TrackTarget goal: depth={goal.desired_depth:.2f}m '
+            f'hold={goal.hold_on_converge}')
+
+        if not self._is_idle():
+            self.get_logger().warn(f'拒绝 goal: 当前状态={self.state.name}，非空闲')
+            goal_handle.abort()
+            return ArmTrackTarget.Result()
+
+        self._transition(CommanderState.MOVING)
+        self._cmd_counter += 1
+        cmd_id = self._cmd_counter
+        self.status.set_command_state(cmd_id, ArmStatus.RESULT_EXECUTING)
+
+        with self._goal_lock:
+            self._active_goal = goal_handle
+
+        try:
+            result = self.track_target_srv.execute(goal_handle)
+            if result.exit_code == ArmTrackTarget.Result.EXIT_CANCELLED:
+                self._transition(CommanderState.STOPPED)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
+            elif result.success:
+                self._transition(CommanderState.REACHED)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_SUCCEEDED)
+            else:
+                self._transition(CommanderState.ERROR)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_FAILED)
+                self.status.set_error(ArmStatus.ERR_TIMEOUT)
+            return result
+        except Exception as e:
+            self.get_logger().error(f'TrackTarget 执行异常: {e}')
+            goal_handle.abort()
+            self._transition(CommanderState.ERROR)
+            self.status.set_command_state(cmd_id, ArmStatus.RESULT_FAILED)
+            self.status.set_error(ArmStatus.ERR_DRIVER)
+            return ArmTrackTarget.Result()
+        finally:
+            with self._goal_lock:
+                self._active_goal = None
+
+    def _on_track_cancel(self, cancel_request):  # noqa: ARG002
+        """取消请求回调：通知 TrackTargetServer 退出循环。"""
+        self.get_logger().info('收到 TrackTarget 取消请求')
+        self.track_target_srv.cancel()
         return CancelResponse.ACCEPT
 
     # ── ArmStop 服务（急停）──────────────────────────────────────────────────────

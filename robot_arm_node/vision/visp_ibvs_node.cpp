@@ -10,18 +10,33 @@
  *   - 零空间云台回中              N·(-K_null·Δq_gimbal) 保持云台居中
  *
  * 话题接口：
- *   订阅  /red_detector/feature   (geometry_msgs/PointStamped) x_norm, y_norm, depth
- *   订阅  /joint_states            (sensor_msgs/JointState)
+ *   订阅  <feature_topic>                   (geometry_msgs/PointStamped) x_norm, y_norm, depth
+ *         默认 /red_detector/feature，可通过参数或 launch remapping 切换到实机话题
+ *   订阅  /joint_states                     (sensor_msgs/JointState) 六轴关节位置
  *   发布  /arm_controller/joint_trajectory  (trajectory_msgs/JointTrajectory)
+ *         单点帧：positions = q_curr + q_dot×dt，velocities = q_dot，time = CTRL_DT
  *
- * 参数（desired_* 支持 ros2 param set 运行时修改，其余改后重编译）：
- *   robot_description  [string]  URDF XML，由 launch 文件传入
- *   desired_depth      [double]  期望保持距离（m），默认见 DEFAULT_DESIRED_DEPTH
- *   desired_x          [double]  期望图像位置 x（归一化），默认 0
- *   desired_y          [double]  期望图像位置 y（归一化），默认 0
+ * 下游执行：
+ *   J1-3  → arm_node（PV 模式）直接写电机速度（CANopen 0x60FF）
+ *   J4-6  → gimbal_controller（JTC open_loop）位置+速度前馈写云台硬件接口
  *
- * @version 2.0
- * @date 2026-06-16
+ * 参数：
+ *   robot_description  [string]  URDF XML，由 launch 传入（必填）
+ *   feature_topic      [string]  特征话题名，默认 /red_detector/feature
+ *                                切换实机：-p feature_topic:=/your_camera/feature
+ *                                或 launch remapping: /red_detector/feature → 实机话题
+ *   desired_depth      [double]  期望保持距离（m）             ← 支持 ros2 param set
+ *   desired_x          [double]  期望图像位置 x（归一化，0=中心）← 支持 ros2 param set
+ *   desired_y          [double]  期望图像位置 y（归一化，0=中心）← 支持 ros2 param set
+ *   desired_height     [double]  期望相机高度，arm_base 系 Z（m）← 支持 ros2 param set
+ *   constrain_height   [bool]    是否启用高度约束               ← 支持 ros2 param set
+ *   paused             [bool]    暂停 IBVS（手动调位时使用）     ← 支持 ros2 param set
+ *
+ * 启动：
+ *   ros2 launch robot_arm_bringup real.launch.py controller:=visp_ibvs
+ *
+ * @version 2.1
+ * @date 2026-06-23
  * @copyright Copyright (c) 2026 eMeet
  */
 
@@ -125,6 +140,9 @@ public:
         // desired_height = 期望相机高度（arm_base 系 Z，m），与 GUI 显示的相机 Z 同一坐标
         this->declare_parameter("desired_height",   0.5);    // m
         this->declare_parameter("constrain_height", false);
+        // 特征话题：仿真用 /red_detector/feature，实机换成实际发布者的话题名
+        // 也可在 launch 中用 remappings 重定向，无需修改此参数
+        this->declare_parameter("feature_topic", std::string("/red_detector/feature"));
 
         desired_depth_ = this->get_parameter("desired_depth").as_double();
         desired_x_     = this->get_parameter("desired_x").as_double();
@@ -168,9 +186,12 @@ public:
             "/joint_states", 10,
             [this](sensor_msgs::msg::JointState::SharedPtr m) { onJointState(m); });
 
+        const std::string feat_topic =
+            this->get_parameter("feature_topic").as_string();
         feat_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
-            "/red_detector/feature", 10,
+            feat_topic, 10,
             [this](geometry_msgs::msg::PointStamped::SharedPtr m) { onFeature(m); });
+        RCLCPP_INFO(get_logger(), "feature_topic: %s", feat_topic.c_str());
 
         traj_pub_ = create_publisher<trajectory_msgs::msg::JointTrajectory>(
             "/arm_controller/joint_trajectory", 10);

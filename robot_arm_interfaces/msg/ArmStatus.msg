@@ -50,3 +50,11 @@ bool    arm_at_pose_start
 
 # 摄像头录制就绪：给定轨迹后机械臂到达起始点起、至运镜结束期间为 true，其余为 false
 bool    camera_ready
+
+# ── 目标跟随状态（IBVS 运行期间有效）─────────────────────────
+# 是否正在执行视觉伺服跟随（ArmTrackTarget goal 活跃期间为 true）
+bool    is_tracking
+# 当前图像误差（归一化欧氏距离）；非跟随状态下为 0.0
+float32 tracking_img_err
+# 当前深度误差（m）；非跟随状态下为 0.0
+float32 tracking_depth_err_m

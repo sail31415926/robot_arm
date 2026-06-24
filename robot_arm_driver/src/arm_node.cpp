@@ -5,27 +5,60 @@
  * 将 3 个 CanopenMotorDriver 封装在同一节点内，向上暴露 ROS 2 标准接口：
  *
  *   订阅  /arm_controller/joint_trajectory   trajectory_msgs/JointTrajectory
- *   发布  /joint_states                       sensor_msgs/JointState  (Joint1~3)
+ *   发布  /joint_states                       sensor_msgs/JointState  (Joint1~3，含实际速度)
  *
- * 运动模式：由启动参数 motion_mode 选择
- *   "ip"（默认）— 插补位置模式，waypoints 间线性插补，PDO + SYNC 同步执行
- *   "pp"        — 轮廓位置模式，取最终 waypoint 为目标，驱动器内部生成速度轮廓
+ * ── 运动模式选择（arm.yaml: motion_mode）────────────────────────────────────────
  *
- * 服务：
- *   /arm_node/enable       — 使能所有关节
- *   /arm_node/disable      — 禁用所有关节
+ *   "ip"（默认）— 插补位置模式
+ *       上层发 JointTrajectory.positions，节点按 ip_period_ms 周期线性插补后以
+ *       PDO + SYNC 同步下发驱动器。适用于：Arm Commander 的 MoveToPose /
+ *       TrajectoryShot 等轨迹跟随任务（上层规划位置）。
+ *
+ *   "pp"        — 轮廓位置模式
+ *       上层发 JointTrajectory.positions（取最终点），驱动器内部生成梯形速度轮廓。
+ *       适用于：单点目标跳转、对平滑度要求低的场景。比 IP 实现简单，但无法
+ *       精确跟踪多路点轨迹。
+ *
+ *   "pv"        — 轮廓速度模式
+ *       上层发 JointTrajectory.velocities，节点直接透传给驱动器（0x60FF）。
+ *       适用于：IBVS 等实时速度闭环控制（上层计算速度而非位置）。
+ *       配合看门狗（pv_watchdog_ms）：超时无新指令则自动停零，防止断联飞车。
+ *
+ *   选择原则：
+ *     上层输出"目标位置" → 选 ip（多路点精确跟踪）或 pp（单点跳转）
+ *     上层输出"目标速度" → 选 pv（IBVS / 速度闭环）
+ *
+ * ── 切换方法 ─────────────────────────────────────────────────────────────────────
+ *
+ *   方法 1（推荐）：通过 real.launch.py 的 controller 参数自动推导
+ *     模式由 controller 自动映射，无需手动指定 motion_mode：
+ *       controller:=joint_position            → motion_mode = pp
+ *       controller:=ibvs_control              → motion_mode = pv
+ *       controller:=visp_ibvs                 → motion_mode = pv
+ *       controller:=cartesian_* / commander   → motion_mode = ip
+ *
+ *     示例：
+ *       ros2 launch robot_arm_bringup real.launch.py controller:=visp_ibvs
+ *
+ *   方法 2：命令行直接覆盖 motion_mode（调试用，绕过 launch 推导逻辑）
+ *     ros2 run robot_arm_driver arm_node \
+ *       --ros-args --params-file .../arm.yaml -p motion_mode:=pv
+ *
+ * ── 服务 ─────────────────────────────────────────────────────────────────────────
+ *   /arm_node/enable       — 使能所有关节（重新上电后自动按当前 motion_mode 切模式）
+ *   /arm_node/disable      — 禁用所有关节（PV 模式下先发停零再下电）
  *   /arm_node/recover      — 故障复位并重新使能
  *   /arm_node/set_home     — 将当前位置记为零点
  *
- * 启动方式：
+ * ── 启动方式 ─────────────────────────────────────────────────────────────────────
  *   ros2 launch robot_arm_bringup real.launch.py          # 随实物 launch 一键启动
  *   ros2 run robot_arm_driver arm_node \
  *     --ros-args --params-file install/robot_arm_driver/share/robot_arm_driver/config/arm.yaml
  *
  * 参数文件：robot_arm_driver/config/arm.yaml
  *
- * @version 3.0  (dual mode: IP / PP)
- * @date 2026-06-01
+ * @version 3.1  (triple mode: IP / PP / PV，joint_states 含真实速度)
+ * @date 2026-06-23
  * @copyright Copyright (c) 2026 EMEET
  */
 
@@ -74,6 +107,8 @@ public:
         pp_accel_                 = declare_parameter<double>("pp_accel", 5.0);
         pp_decel_                 = declare_parameter<double>("pp_decel", 5.0);
         motion_mode_              = declare_parameter<std::string>("motion_mode", "ip");
+        // PV 模式安全看门狗（ms）：超时无新速度指令则自动停零，防止断联飞车
+        pv_watchdog_ms_           = declare_parameter<int>("pv_watchdog_ms", 100);
         // 逐个关节使能之间的延时（ms）：错峰上电，降低三电机同时通电的瞬时涌流，
         // 避免共用供电/USB 的摄像头因电压跌落而掉线。设为 0 即恢复同时使能。
         enable_stagger_ms_        = declare_parameter<int>("enable_stagger_ms", 150);
@@ -134,6 +169,9 @@ public:
             if (motion_mode_ == "pp") {
                 if (!setAllPPMode())
                     RCLCPP_WARN(get_logger(), "部分关节 PP 模式切换失败");
+            } else if (motion_mode_ == "pv") {
+                if (!setAllPVMode())
+                    RCLCPP_WARN(get_logger(), "部分关节 PV 模式切换失败");
             } else {
                 if (!setAllIPMode())
                     RCLCPP_WARN(get_logger(), "部分关节 IP 模式切换失败");
@@ -170,7 +208,7 @@ public:
                 bool ok = true;
                 for (auto& d : drivers_) ok = d->nmtCommand(0x01) && ok;
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                if (ok) ok = (motion_mode_ == "pp") ? setAllPPMode() : setAllIPMode();
+                if (ok) ok = (motion_mode_ == "pp") ? setAllPPMode() : (motion_mode_ == "pv") ? setAllPVMode() : setAllIPMode();
                 res->success = ok;
                 res->message = ok ? "所有关节已使能" : "部分关节使能失败";
             });
@@ -196,7 +234,7 @@ public:
                     ok = d->nmtCommand(0x01) && ok;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                if (ok) ok = (motion_mode_ == "pp") ? setAllPPMode() : setAllIPMode();
+                if (ok) ok = (motion_mode_ == "pp") ? setAllPPMode() : (motion_mode_ == "pv") ? setAllPVMode() : setAllIPMode();
                 res->success = ok;
                 res->message = ok ? "故障复位并重新使能成功" : "复位后使能失败";
             });
@@ -268,14 +306,37 @@ private:
         return ok;
     }
 
+    bool setAllPVMode()
+    {
+        bool ok = true;
+        for (size_t i = 0; i < n_; ++i) {
+            if (i > 0 && enable_stagger_ms_ > 0)
+                std::this_thread::sleep_for(std::chrono::milliseconds(enable_stagger_ms_));
+            ok = drivers_[i]->enable() && ok;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        for (size_t i = 0; i < n_; ++i) {
+            uint32_t a = converters_[i].radToAccPP(pp_accel_);
+            uint32_t d = converters_[i].radToAccPP(pp_decel_);
+            ok = drivers_[i]->setProfileVelocityMode(a, d) && ok;
+        }
+        return ok;
+    }
+
     void stopExecution()
     {
         if (ip_timer_)   { ip_timer_->cancel();   ip_timer_.reset(); }
         if (done_timer_) { done_timer_->cancel(); done_timer_.reset(); }
+        if (pv_wd_timer_){ pv_wd_timer_->cancel(); pv_wd_timer_.reset(); }
         pending_ = JointTrajectory{};
         ip_elapsed_ = 0.0;
         ip_total_dur_ = 0.0;
         ip_seg_idx_ = 0;
+
+        // PV 模式：立即停零，防止断联飞车
+        if (motion_mode_ == "pv") {
+            for (auto& d : drivers_) d->setTargetVelocity(0);
+        }
     }
 
     void abortActiveGoal(const std::string& reason)
@@ -378,7 +439,33 @@ private:
             }
         }
 
-        if (motion_mode_ == "pp") {
+        if (motion_mode_ == "pv") {
+            // PV 模式：直接取第一个路径点的速度下发，不做位置插补
+            // IBVS 每帧发单点轨迹（pt.velocities = q_dot），此处直接透传给驱动器
+            if (!pending_.points.empty()) {
+                const auto& pt = pending_.points.front();
+                for (size_t j = 0; j < n_; ++j) {
+                    auto it = arm_joint_map_.find(j);
+                    if (it == arm_joint_map_.end()) continue;
+                    size_t k = it->second;
+                    double vel_rad = (k < pt.velocities.size()) ? pt.velocities[k] : 0.0;
+                    drivers_[j]->setTargetVelocity(converters_[j].radToVelPPSigned(vel_rad));
+                }
+            }
+            // 看门狗：超时无新指令则停零（防止 IBVS 崩溃后飞车）
+            if (pv_wd_timer_) { pv_wd_timer_->cancel(); pv_wd_timer_.reset(); }
+            pv_wd_timer_ = create_wall_timer(
+                std::chrono::milliseconds(pv_watchdog_ms_),
+                [this]() {
+                    RCLCPP_WARN(get_logger(), "PV 看门狗超时，发送停零");
+                    for (auto& d : drivers_) d->setTargetVelocity(0);
+                    // 只 cancel，不在回调内 reset 自己（避免在回调中析构 shared_ptr 自身）
+                    // cleanup 由下一次 onTrajectory / stopExecution 负责
+                    if (pv_wd_timer_) pv_wd_timer_->cancel();
+                });
+            return;  // PV 不走后续 PP/IP 逻辑
+
+        } else if (motion_mode_ == "pp") {
             // PP 模式：取最终 waypoint，按距离/时间动态设轮廓速度，非阻塞触发
             const auto& last_pt = pending_.points.back();
             double total_dur = last_pt.time_from_start.sec +
@@ -519,13 +606,15 @@ private:
         js.header.stamp = now();
         js.name.resize(n_);
         js.position.resize(n_);
-        js.velocity.resize(n_, 0.0);
+        js.velocity.resize(n_);
         js.effort.resize(n_, 0.0);
 
         for (size_t i = 0; i < n_; ++i) {
             js.name[i]     = joint_names_[i];
             js.position[i] = converters_[i].ppToRad(
                 drivers_[i]->getPosition() - home_offsets_[i]);
+            // 读取编码器实际速度（0x606C），供 IBVS 闭环与状态聚合器使用
+            js.velocity[i] = converters_[i].ppToRadS(drivers_[i]->getVelocity());
         }
         js_pub_->publish(js);
     }
@@ -535,6 +624,7 @@ private:
     size_t n_{3};
     int    ip_period_ms_{10};
     int    enable_stagger_ms_{150};
+    int    pv_watchdog_ms_{100};
     double pp_accel_{5.0};
     double pp_decel_{5.0};
     std::string motion_mode_{"ip"};
@@ -552,7 +642,7 @@ private:
                                          srv_recover_, srv_set_home_;
     rclcpp_action::Server<FollowJointTraj>::SharedPtr action_server_;
     std::shared_ptr<GoalHandleFTJ> active_goal_;
-    rclcpp::TimerBase::SharedPtr  fb_fast_timer_, hb_timer_, ip_timer_, done_timer_;
+    rclcpp::TimerBase::SharedPtr  fb_fast_timer_, hb_timer_, ip_timer_, done_timer_, pv_wd_timer_;
 
     // 执行状态（IP 插补 / PP 目标发送共用）
     JointTrajectory pending_;

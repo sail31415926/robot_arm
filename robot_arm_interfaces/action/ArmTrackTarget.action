@@ -1,0 +1,57 @@
+# ArmTrackTarget.action
+# 目标视觉跟随：启动 IBVS 对图像中的目标持续伺服跟踪
+#
+# 发送方：Director（上层）
+# 接收方：Arm Commander（arm_commander 节点）
+#
+# 使用语义：
+#   send_goal   → 启动跟随（arm_node 切 PV 模式，IBVS 开始输出速度指令）
+#   cancel_goal → 关闭跟随（IBVS 挂起，arm 保持当前位置）
+#
+# 自动退出条件（无需上层 cancel）：
+#   EXIT_FEATURE_LOST — 特征丢失超过 FEATURE_TIMEOUT（0.5s）
+#   EXIT_TIMEOUT      — 达到 total_timeout_sec
+#   EXIT_CONVERGED    — hold_on_converge=false 且误差收敛到阈值内
+#
+# exit_reason: "converged" | "feature_lost" | "timeout" | "cancelled" | "error"
+
+# ─── 退出码常量 ──────────────────────────────────────────────────────────────
+uint8 EXIT_CONVERGED    = 0   # 误差收敛（hold_on_converge=false 时自动返回）
+uint8 EXIT_FEATURE_LOST = 1   # 特征丢失超时
+uint8 EXIT_TIMEOUT      = 2   # 达到 total_timeout_sec
+uint8 EXIT_CANCELLED    = 3   # 上层 cancel
+uint8 EXIT_ERROR        = 4   # 内部错误
+
+# ─── Goal（send_goal = 启动跟随）────────────────────────────────────────────
+float32 desired_depth          # 期望保持距离（m），0.0 = 沿用节点默认值
+float32 desired_x              # 期望图像 x（归一化，0.0 = 画面中心）
+float32 desired_y              # 期望图像 y（归一化，0.0 = 画面中心）
+
+bool    constrain_height       # 是否锁定相机高度（J1-J3 负责升降）
+float32 desired_height         # 期望相机高度，arm_base 系 Z（m）
+                               # constrain_height=false 时忽略
+
+# hold_on_converge = true  → 收敛后继续保持跟随，等待上层 cancel
+#                            适合：持续跟踪运动目标、录像跟拍
+# hold_on_converge = false → 收敛后自动 succeed 并退出
+#                            适合：对准静止目标后触发拍摄
+bool    hold_on_converge
+
+float32 total_timeout_sec      # 总超时（s），0.0 = 永不超时
+
+---
+# ─── Result（cancel_goal 或自动退出时返回）──────────────────────────────────
+bool    success                # cancel 与 converged 均视为 true，lost/timeout/error 为 false
+uint8   exit_code              # 取值为上方 EXIT_* 常量
+string  exit_reason
+float32 final_img_err          # 退出时图像误差（归一化欧氏距离）
+float32 final_depth_err_m      # 退出时深度误差（m）
+ArmPose final_pose             # 退出时末端位姿
+
+---
+# ─── Feedback（10 Hz，跟随期间持续发布）──────────────────────────────────────
+float32 img_err                # 当前图像误差（归一化欧氏距离）
+float32 depth_err_m            # 当前深度误差（m）
+float32 elapsed_sec            # 已跟随时长（s）
+bool    is_converged           # 误差是否在收敛阈值内
+ArmPose current_pose           # 当前末端位姿

@@ -149,9 +149,15 @@ def generate_launch_description():
         package='robot_arm_driver', executable='arm_node',
         name='arm_node', output='screen',
         parameters=[arm_yaml, {
-            'motion_mode': PythonExpression(
-                ["'pp' if '", ctrl, "' == 'joint_position' else 'ip'"]
-            )
+            # controller → motion_mode 映射规则：
+            #   joint_position              → pp（单点目标跳转）
+            #   ibvs_control / visp_ibvs    → pv（速度闭环，直接透传 velocities）
+            #   其余（cartesian_* / commander / spherical_orbit）→ ip（位置轨迹插补）
+            'motion_mode': PythonExpression([
+                "'pp' if '", ctrl, "' == 'joint_position' else "
+                "'pv' if '", ctrl, "' in ('ibvs_control', 'visp_ibvs') else "
+                "'ip'"
+            ])
         }],
     )
 

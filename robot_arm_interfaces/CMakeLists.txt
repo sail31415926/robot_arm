@@ -17,6 +17,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ArmStop.srv"
   "action/ArmMoveToPose.action"
   "action/ArmTrajectoryShot.action"
+  "action/ArmTrackTarget.action"
   DEPENDENCIES std_msgs action_msgs
 )
 
