@@ -343,7 +343,7 @@ def generate_launch_description():
                  output='screen',
                  parameters=[{'robot_description': rd,
                                'use_sim_time': False,
-                               'perception_topic': '/perception/report'}],
+                               'perception_topic': '/ros2_algo_vision/report'}],
                  condition=is_visp_ibvs),
             Node(package='robot_arm_node', executable='visp_ibvs_gui',
                  output='screen',

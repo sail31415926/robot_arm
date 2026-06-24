@@ -71,7 +71,7 @@ namespace pin = pinocchio;
 
 // ── 可调参数 ──────────────────────────────────────────────────────────────────
 // desired_* 三项同时作为 ROS2 参数（ros2 param set 运行时修改）
-static constexpr double DEFAULT_DESIRED_DEPTH = 0.3;    // 期望距离（m）
+static constexpr double DEFAULT_DESIRED_DEPTH = 0.5;    // 期望距离（m）
 static constexpr double DEFAULT_DESIRED_X     = 0.0;    // 期望图像 x（0=中心）
 static constexpr double DEFAULT_DESIRED_Y     = 0.0;    // 期望图像 y（0=中心）
 // 深度独立校正增益：Vz_cam = DEPTH_GAIN × log(Z/Z*)
@@ -139,6 +139,7 @@ public:
         this->declare_parameter("desired_x",         DEFAULT_DESIRED_X);
         this->declare_parameter("desired_y",         DEFAULT_DESIRED_Y);
         this->declare_parameter("paused",            false);
+        this->declare_parameter("control_depth",     false);
         // 拍摄高度约束参数（GUI 可调，ros2 param set 运行时修改）
         // desired_height = 期望相机高度（arm_base 系 Z，m），与 GUI 显示的相机 Z 同一坐标
         this->declare_parameter("desired_height",   0.5);    // m
@@ -161,6 +162,7 @@ public:
                     else if (p.get_name() == "desired_x")            desired_x_           = p.as_double();
                     else if (p.get_name() == "desired_y")            desired_y_           = p.as_double();
                     else if (p.get_name() == "paused")               paused_              = p.as_bool();
+                    else if (p.get_name() == "control_depth")        control_depth_       = p.as_bool();
                     else if (p.get_name() == "desired_height")       desired_height_      = p.as_double();
                     else if (p.get_name() == "constrain_height")     constrain_height_    = p.as_bool();
                 }
@@ -277,7 +279,6 @@ private:
         const ros2_algo_vision_interfaces::msg::PerceptionReport::SharedPtr msg)
     {
         const auto& s = msg->subject;
-        if (s.track_state != "tracking") return;
         if (!std::isfinite(s.depth) || s.depth <= 0.0f) return;
         feat_x_ = static_cast<double>(s.bbox.cx);
         feat_y_ = static_cast<double>(s.bbox.cy);
@@ -312,7 +313,7 @@ private:
         const double depth_err = std::log(feat_z_ / desired_depth_);
         const double img_err   = std::hypot(feat_x_ - desired_x_, feat_y_ - desired_y_);
 
-        if (img_err < IMG_STOP_TH && std::abs(depth_err) < DEPTH_STOP_TH) {
+        if (img_err < IMG_STOP_TH && (!control_depth_ || std::abs(depth_err) < DEPTH_STOP_TH)) {
             publishStop();
             return;
         }
@@ -320,7 +321,7 @@ private:
         // ── ViSP 相机速度（图像居中，相机坐标系）───────────────────────────
         p_curr_.buildFrom(feat_x_, feat_y_, feat_z_);
         vpColVector vc_visp = task_.computeControlLaw();
-        vc_visp[2] += DEPTH_GAIN * depth_err;   // 独立深度校正（平移，走机械臂残差）
+        if (control_depth_) vc_visp[2] += DEPTH_GAIN * depth_err;  // 深度保持（可选）
 
         Eigen::Matrix<double, 6, 1> v_c;
         for (int i = 0; i < 6; ++i) v_c[i] = vc_visp[i];
@@ -494,6 +495,7 @@ private:
     Eigen::VectorXd pin_q_;         // Pinocchio 配置向量（用于 FK/Jacobian）
     bool paused_{false};
     bool q_valid_{false};
+    bool control_depth_{false};
 
     double feat_x_{0.0}, feat_y_{0.0}, feat_z_{0.5};
     bool has_feat_{false};
