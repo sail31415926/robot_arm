@@ -294,16 +294,27 @@ bool CanopenMotorDriver::moveToPosition(int32_t pos, bool relative,
     uint16_t cw = 0x003Fu;
     if (relative) cw |= 0x0040u;
     if (!writeSDOu16(0x6040u, 0, cw)) return false;
-    if (!waitStatusWord(0x1000u, 0x1000u, 500)) return false;
+    // bit12（Setpoint Acknowledge）：部分驱动器不严格实现，等待但不强制成功
+    waitStatusWord(0x1000u, 0x1000u, 100);
     cw &= ~0x0010u;
     if (!writeSDOu16(0x6040u, 0, cw)) return false;
     return wait_done ? waitStatusWord(0x0400u, 0x0400u, timeout_ms) : true;
 }
 
 bool CanopenMotorDriver::setProfileVelocityMode(uint32_t accel, uint32_t decel) {
-    return writeSDOu8 (0x6060u, 0, 0x03u) &&
-           writeSDOu32(0x6083u, 0, accel)  &&
-           writeSDOu32(0x6084u, 0, decel);
+    // 从 Operation Enabled 退回 Ready-to-Switch-On，再写模式寄存器，最后重新使能
+    // 部分驱动器在 Operation Enabled 时拒绝修改 0x6060，必须先 Shutdown
+    if (!writeSDOu16(0x6040u, 0, 0x0006u)) return false;  // Shutdown
+    if (!waitStatusWord(0x006Fu, 0x0021u, 2000)) return false;
+    bool mode_ok = writeSDOu8 (0x6060u, 0, 0x03u) &&
+                   writeSDOu32(0x6083u, 0, accel)  &&
+                   writeSDOu32(0x6084u, 0, decel);
+    // 无论模式写入是否成功，都重新使能，避免电机停在 Ready-to-Switch-On
+    if (!writeSDOu16(0x6040u, 0, 0x0007u)) return false;  // Switch On
+    if (!waitStatusWord(0x006Fu, 0x0023u, 2000)) return false;
+    if (!writeSDOu16(0x6040u, 0, 0x000Fu)) return false;  // Enable Operation
+    if (!waitStatusWord(0x006Fu, 0x0027u, 2000)) return false;
+    return mode_ok;
 }
 
 bool CanopenMotorDriver::setTargetVelocity(int32_t vel_pps) {

@@ -24,6 +24,13 @@
  *       适用于：IBVS 等实时速度闭环控制（上层计算速度而非位置）。
  *       配合看门狗（pv_watchdog_ms）：超时无新指令则自动停零，防止断联飞车。
  *
+ *   ros2 run robot_arm_driver arm_node --ros-args \
+      --params-file ~/E7009_ws/install/robot_arm_driver/share/robot_arm_driver/config/arm.yaml \
+      -p motion_mode:=pv
+ * 
+ * 
+ * 
+ * 
  *   选择原则：
  *     上层输出"目标位置" → 选 ip（多路点精确跟踪）或 pp（单点跳转）
  *     上层输出"目标速度" → 选 pv（IBVS / 速度闭环）
@@ -245,6 +252,32 @@ public:
                     home_offsets_[i] = drivers_[i]->getPosition();
                 res->success = true;
                 res->message = "当前位置已记为各关节零点";
+            });
+
+        // 运行时模式切换（停止当前执行后重新使能到目标模式）
+        srv_ip_mode_ = create_service<Trigger>("~/ip_mode",
+            [this](Trigger::Request::ConstSharedPtr, Trigger::Response::SharedPtr res) {
+                stopExecution(); abortActiveGoal("mode switch to ip");
+                motion_mode_ = "ip";
+                bool ok = setAllIPMode();
+                res->success = ok;
+                res->message = ok ? "已切换到 IP（插补位置）模式" : "IP 模式切换失败";
+            });
+        srv_pp_mode_ = create_service<Trigger>("~/pp_mode",
+            [this](Trigger::Request::ConstSharedPtr, Trigger::Response::SharedPtr res) {
+                stopExecution(); abortActiveGoal("mode switch to pp");
+                motion_mode_ = "pp";
+                bool ok = setAllPPMode();
+                res->success = ok;
+                res->message = ok ? "已切换到 PP（轮廓位置）模式" : "PP 模式切换失败";
+            });
+        srv_pv_mode_ = create_service<Trigger>("~/pv_mode",
+            [this](Trigger::Request::ConstSharedPtr, Trigger::Response::SharedPtr res) {
+                stopExecution(); abortActiveGoal("mode switch to pv");
+                motion_mode_ = "pv";
+                bool ok = setAllPVMode();
+                res->success = ok;
+                res->message = ok ? "已切换到 PV（轮廓速度）模式" : "PV 模式切换失败";
             });
 
         // ── 反馈定时器 ────────────────────────────────────────────────────────
@@ -639,7 +672,8 @@ private:
     rclcpp::Publisher<JointTrajectory>::SharedPtr          camera_traj_pub_;
     rclcpp::Subscription<JointTrajectory>::SharedPtr       traj_sub_;
     rclcpp::Service<Trigger>::SharedPtr  srv_enable_, srv_disable_,
-                                         srv_recover_, srv_set_home_;
+                                         srv_recover_, srv_set_home_,
+                                         srv_ip_mode_, srv_pp_mode_, srv_pv_mode_;
     rclcpp_action::Server<FollowJointTraj>::SharedPtr action_server_;
     std::shared_ptr<GoalHandleFTJ> active_goal_;
     rclcpp::TimerBase::SharedPtr  fb_fast_timer_, hb_timer_, ip_timer_, done_timer_, pv_wd_timer_;

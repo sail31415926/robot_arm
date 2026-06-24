@@ -105,6 +105,7 @@ find_package(pinocchio QUIET)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
+find_package(ros2_algo_vision_interfaces QUIET)
 
 if(VISP_FOUND AND pinocchio_FOUND)
   add_executable(visp_ibvs_node vision/visp_ibvs_node.cpp)
@@ -112,8 +113,16 @@ if(VISP_FOUND AND pinocchio_FOUND)
   target_include_directories(visp_ibvs_node PRIVATE
     ${VISP_INCLUDE_DIRS}
     ${pinocchio_INCLUDE_DIRS})
-  ament_target_dependencies(visp_ibvs_node
-    rclcpp geometry_msgs sensor_msgs trajectory_msgs)
+  if(ros2_algo_vision_interfaces_FOUND)
+    target_compile_definitions(visp_ibvs_node PRIVATE HAS_PERCEPTION_REPORT)
+    ament_target_dependencies(visp_ibvs_node
+      rclcpp geometry_msgs sensor_msgs trajectory_msgs ros2_algo_vision_interfaces)
+    message(STATUS "ros2_algo_vision_interfaces found — PerceptionReport support enabled")
+  else()
+    ament_target_dependencies(visp_ibvs_node
+      rclcpp geometry_msgs sensor_msgs trajectory_msgs)
+    message(STATUS "ros2_algo_vision_interfaces not found — PerceptionReport support disabled")
+  endif()
   target_link_libraries(visp_ibvs_node ${VISP_LIBRARIES} pinocchio::pinocchio)
   install(TARGETS visp_ibvs_node DESTINATION lib/${PROJECT_NAME})
   message(STATUS "ViSP (${VISP_VERSION}) + Pinocchio found — visp_ibvs_node will be built")

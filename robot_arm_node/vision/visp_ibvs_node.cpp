@@ -45,6 +45,9 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
+#ifdef HAS_PERCEPTION_REPORT
+#include <ros2_algo_vision_interfaces/msg/perception_report.hpp>
+#endif
 
 #include <visp/vpServo.h>
 #include <visp/vpFeaturePoint.h>
@@ -142,7 +145,8 @@ public:
         this->declare_parameter("constrain_height", false);
         // 特征话题：仿真用 /red_detector/feature，实机换成实际发布者的话题名
         // 也可在 launch 中用 remappings 重定向，无需修改此参数
-        this->declare_parameter("feature_topic", std::string("/red_detector/feature"));
+        this->declare_parameter("feature_topic",     std::string("/red_detector/feature"));
+        this->declare_parameter("perception_topic",  std::string(""));
 
         desired_depth_ = this->get_parameter("desired_depth").as_double();
         desired_x_     = this->get_parameter("desired_x").as_double();
@@ -188,10 +192,26 @@ public:
 
         const std::string feat_topic =
             this->get_parameter("feature_topic").as_string();
+        const std::string perception_topic =
+            this->get_parameter("perception_topic").as_string();
+
+        // 两路输入同时订阅，互不排斥，哪路有数据就用哪路更新特征
         feat_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
             feat_topic, 10,
             [this](geometry_msgs::msg::PointStamped::SharedPtr m) { onFeature(m); });
         RCLCPP_INFO(get_logger(), "feature_topic: %s", feat_topic.c_str());
+
+#ifdef HAS_PERCEPTION_REPORT
+        if (!perception_topic.empty()) {
+            perception_sub_ = create_subscription<
+                ros2_algo_vision_interfaces::msg::PerceptionReport>(
+                perception_topic, 10,
+                [this](ros2_algo_vision_interfaces::msg::PerceptionReport::SharedPtr m) {
+                    onPerceptionReport(m);
+                });
+            RCLCPP_INFO(get_logger(), "perception_topic: %s", perception_topic.c_str());
+        }
+#endif
 
         traj_pub_ = create_publisher<trajectory_msgs::msg::JointTrajectory>(
             "/arm_controller/joint_trajectory", 10);
@@ -251,6 +271,21 @@ private:
         last_feat_time_ = now();
         has_feat_ = true;
     }
+
+#ifdef HAS_PERCEPTION_REPORT
+    void onPerceptionReport(
+        const ros2_algo_vision_interfaces::msg::PerceptionReport::SharedPtr msg)
+    {
+        const auto& s = msg->subject;
+        if (s.track_state != "tracking") return;
+        if (!std::isfinite(s.depth) || s.depth <= 0.0f) return;
+        feat_x_ = static_cast<double>(s.bbox.cx);
+        feat_y_ = static_cast<double>(s.bbox.cy);
+        feat_z_ = static_cast<double>(s.depth);
+        last_feat_time_ = now();
+        has_feat_ = true;
+    }
+#endif
 
     void onJointState(const sensor_msgs::msg::JointState::SharedPtr msg)
     {
@@ -471,6 +506,10 @@ private:
     // ── ROS2 接口 ─────────────────────────────────────────────────────────────
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr     jsub_;
     rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr feat_sub_;
+#ifdef HAS_PERCEPTION_REPORT
+    rclcpp::Subscription<
+        ros2_algo_vision_interfaces::msg::PerceptionReport>::SharedPtr perception_sub_;
+#endif
     rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr traj_pub_;
     rclcpp::TimerBase::SharedPtr ctrl_timer_;
 };
