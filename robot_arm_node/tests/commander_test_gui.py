@@ -470,7 +470,7 @@ class App:
         cf.pack(fill=tk.X, pady=(0, 6))
         center_row = ttk.Frame(cf); center_row.pack(fill=tk.X)
         self._tss_orb_center = {}
-        for k, dflt in [('ox', 0.60), ('oy', 0.00), ('oz', 0.50)]:
+        for k, dflt in [('ox', 0.60), ('oy', -0.12), ('oz', 0.47)]:
             ttk.Label(center_row, text=f'{k}(m):').pack(side=tk.LEFT, padx=(4, 1))
             v = tk.DoubleVar(value=dflt)
             self._tss_orb_center[k] = v
@@ -504,8 +504,8 @@ class App:
                     side=tk.LEFT, padx=(0, 8))
             return vars_
 
-        self._tss_orb_start = sphere_row(tab, '起始球坐标', -30.0, -10., 0.45)
-        self._tss_orb_end   = sphere_row(tab, '终止球坐标',  30.0,  30., 0.20)
+        self._tss_orb_start = sphere_row(tab, '起始球坐标', -30.0, 10., 0.30)
+        self._tss_orb_end   = sphere_row(tab, '终止球坐标',  30.0, 10., 0.30)
 
     def _send_tss(self, nb):
         tab_idx = nb.index(nb.select())
