@@ -23,6 +23,7 @@
 """
 
 import math
+import time
 import threading
 import queue
 
@@ -53,6 +54,8 @@ EEF_LINK       = 'tool0'
 BASE_FRAME     = 'arm_base_link'
 
 STREAM_DT    = 0.01     # s，Ruckig 内部步长（100Hz）
+IK_SAMPLE_DT = 0.03     # s，IK 采样步长：每 ~30ms 取一个路点喂 IK，下游控制器插值（降低 IK 点数）
+IK_DECIMATE  = max(1, round(IK_SAMPLE_DT / STREAM_DT))   # =3，球面轨道路点数 ÷3
 IK_TIMEOUT_S = 0.05     # 单次 IK 超时
 
 # 默认运动限制
@@ -401,7 +404,9 @@ class MotionExecutor:
         Returns:
             (joint_list | None, error_code)
         """
-        if not self._ik_client.wait_for_service(timeout_sec=0.1):
+        # 服务可用性由 solve_and_send 在批量开始时检查一次；此处仅做廉价的本地就绪判断，
+        # 避免每个路点都阻塞式 wait_for_service（上千点时这是显著开销）。
+        if not self._ik_client.service_is_ready():
             return None, -1
 
         ps = PoseStamped()
@@ -442,6 +447,21 @@ class MotionExecutor:
                        resp.solution.joint_state.position))
         return [n2p.get(n, 0.0) for n in JOINT_NAMES], MoveItErrorCodes.SUCCESS
 
+    # ── 路点降采样（减少 IK 求解次数）───────────────────────────────────────────────
+    @staticmethod
+    def _decimate(all_pts: list, k: int) -> list:
+        """对 Ruckig 100Hz 路点降采样：每 k 个取 1 个，并始终保留首/末点。
+
+        下游 joint_trajectory_controller 会在路点之间做插值，因此降采样只减少需要
+        求解 IK 的点数（k=3 → IK 调用数 ÷3），不改变轨迹的起止位姿与总时长。
+        """
+        if k <= 1 or len(all_pts) <= 2:
+            return all_pts
+        sampled = all_pts[::k]
+        if sampled[-1] is not all_pts[-1]:
+            sampled.append(all_pts[-1])
+        return sampled
+
     # ── 批量 IK + JointTrajectory 下发（从 spherical_orbit_controller 提取）─────────
     def solve_and_send(self, all_pts: list, cancel_event: threading.Event = None) -> bool:
         """对轨迹点列表批量求 IK，计算关节速度，下发 JointTrajectory。
@@ -455,6 +475,16 @@ class MotionExecutor:
         """
         if not all_pts:
             return False
+
+        # 服务可用性只在批量开始检查一次（之后逐点用廉价的 service_is_ready）
+        if not self._ik_client.wait_for_service(timeout_sec=1.0):
+            self._logger.error('solve_and_send: /compute_ik 服务不可用')
+            return False
+
+        # 降采样：100Hz 路点 → 每 IK_DECIMATE 个取 1 个，IK 求解次数随之下降
+        n_raw   = len(all_pts)
+        all_pts = self._decimate(all_pts, IK_DECIMATE)
+        t_plan0 = time.time()
 
         with self._joint_lock:
             seed = [self._joint_positions[n] for n in JOINT_NAMES]
@@ -516,7 +546,8 @@ class MotionExecutor:
             msg.points.append(pt)
 
         self._traj_pub.publish(msg)
-        self._logger.info(f'solve_and_send: 下发 {n} 个路点，时长={joint_t[-1]:.2f}s')
+        self._logger.info(f'solve_and_send: 下发 {n} 个路点（原 {n_raw}，降采样 1/{IK_DECIMATE}），'
+                          f'时长={joint_t[-1]:.2f}s，IK 规划耗时={(time.time()-t_plan0)*1000:.0f}ms')
         return True
 
     # ── 球面轨道规划（Ruckig 1-DOF，从 spherical_orbit_controller 提取）─────────────
