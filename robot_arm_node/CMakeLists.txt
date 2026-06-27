@@ -68,6 +68,7 @@ install(PROGRAMS
   commander/__init__.py
   commander/move_to_pose_server.py
   commander/trajectory_shot_server.py
+  commander/track_target_server.py
   commander/motion_executor.py
   commander/status_aggregator.py
   DESTINATION lib/${PROJECT_NAME}/commander
