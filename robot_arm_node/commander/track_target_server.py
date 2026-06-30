@@ -166,6 +166,14 @@ class TrackTargetServer:
             now     = time.time()
             elapsed = now - t_start
 
+            # 急停检测（commander 进入 STOPPED）：立即退出，清理段会 paused=True 停 IBVS
+            if self._node.is_stopped():
+                self._logger.info('目标跟随期间被急停，退出')
+                result.exit_code   = ArmTrackTarget.Result.EXIT_ERROR
+                result.exit_reason = 'stopped'
+                result.success     = False
+                break
+
             # 取消检测
             if goal_handle.is_cancel_requested or self._cancel_flag.is_set():
                 self._logger.info('目标跟随被取消')

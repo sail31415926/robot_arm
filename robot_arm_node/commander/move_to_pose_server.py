@@ -141,6 +141,10 @@ class MoveToPoseServer:
         result    = ArmMoveToPose.Result()
 
         while time.time() - t_start < DEFAULT_TIMEOUT_SEC:
+            if self._node.is_stopped():          # 被急停：运动已停，立即退出（commander 保持 STOPPED）
+                result.exit_reason = 'stopped'
+                self._logger.info('STOWED 执行期间被急停，中止')
+                break
             if goal_handle.is_cancel_requested:
                 self._motion.stop()
                 result.exit_reason = 'cancelled'
@@ -196,6 +200,10 @@ class MoveToPoseServer:
         total_duration = max(dist_xyz / max(speed['v_pos'], 1e-6), 0.5)
 
         while time.time() - t_start < DEFAULT_TIMEOUT_SEC:
+            if self._node.is_stopped():          # 被急停：运动已停，立即退出（commander 保持 STOPPED）
+                result.exit_reason = 'stopped'
+                self._logger.info('MoveToPose 执行期间被急停，中止等待')
+                break
             if goal_handle.is_cancel_requested:
                 self._motion.stop()
                 result.exit_reason = 'cancelled'

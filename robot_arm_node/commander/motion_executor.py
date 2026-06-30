@@ -212,6 +212,11 @@ class MotionExecutor:
             sec=int(duration), nanosec=int((duration % 1) * 1e9))
 
         msg.points = [pt0, pt1]
+        # 急停在 IK 期间发生时，绝不再下发轨迹（否则会把已停住的机械臂重新开动）
+        if self._node.is_stopped():
+            self._logger.info('plan_and_execute: 急停生效，放弃下发轨迹')
+            return {'success': False, 'exit_reason': 'stopped',
+                    'actual_pose': start_pose, 'error_code': 0}
         self._traj_pub.publish(msg)
 
         self._logger.info(f'JointTrajectory 已下发 (duration={duration:.2f}s)')
@@ -496,8 +501,8 @@ class MotionExecutor:
                   -31:'NO_IK_SOLUTION', -1:'TIMEOUT'}
 
         for idx, (t_pt, wx, wy, wz, qx, qy, qz, qw) in enumerate(all_pts):
-            if cancel_event and cancel_event.is_set():
-                self._logger.info('solve_and_send: 中止（cancel_event）')
+            if (cancel_event and cancel_event.is_set()) or self._node.is_stopped():
+                self._logger.info('solve_and_send: 中止（cancel / 急停）')
                 return False
 
             sol, err = self._ik_sync_with_seed(wx, wy, wz, qx, qy, qz, qw, seed)
@@ -545,6 +550,10 @@ class MotionExecutor:
                                           nanosec=ns % 1_000_000_000)
             msg.points.append(pt)
 
+        # 批量 IK 期间若已急停，放弃下发整条轨迹
+        if self._node.is_stopped():
+            self._logger.info('solve_and_send: 急停生效，放弃下发轨迹')
+            return False
         self._traj_pub.publish(msg)
         self._logger.info(f'solve_and_send: 下发 {n} 个路点（原 {n_raw}，降采样 1/{IK_DECIMATE}），'
                           f'时长={joint_t[-1]:.2f}s，IK 规划耗时={(time.time()-t_plan0)*1000:.0f}ms')
@@ -592,7 +601,7 @@ class MotionExecutor:
 
         all_pts = []; t_acc = 0.
         while True:
-            if cancel_event and cancel_event.is_set():
+            if (cancel_event and cancel_event.is_set()) or self._node.is_stopped():
                 return False
             res = otg.update(inp, out); t_acc += STREAM_DT
             s = max(0., min(1., out.new_position[0]))

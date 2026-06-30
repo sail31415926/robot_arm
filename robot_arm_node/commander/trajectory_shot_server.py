@@ -151,7 +151,8 @@ class TrajectoryShotServer:
         result    = ArmTrajectoryShot.Result()
 
         def _cancelled():
-            return goal_handle.is_cancel_requested
+            # 用户取消或急停（commander 进入 STOPPED）均视为应中止
+            return goal_handle.is_cancel_requested or self._node.is_stopped()
 
         # ── 步骤 1：PTP 移到起始球坐标 ──────────────────────────────────────
         start_pose = self._sphere_to_pose(
@@ -241,6 +242,10 @@ class TrajectoryShotServer:
         t_end     = time.time() + DWELL_AT_START_SEC
         cancelled = False
         while time.time() < t_end:
+            if self._node.is_stopped():
+                self._logger.info(f'{label} 起点停顿期间被急停')
+                cancelled = True
+                break
             if goal_handle.is_cancel_requested:
                 self._motion.stop()
                 self._logger.info(f'{label} 起点停顿期间被取消')
@@ -285,6 +290,10 @@ class TrajectoryShotServer:
         total_dur = max(dist_xyz / max(speed['v_pos'], 1e-6), 0.5)
 
         while time.time() - t_start < DEFAULT_TIMEOUT_SEC:
+            if self._node.is_stopped():          # 被急停：运动已停，立即退出
+                result.exit_reason = 'stopped'
+                self._logger.info(f'{label} 执行期间被急停，中止')
+                break
             if goal_handle.is_cancel_requested:
                 self._motion.stop()
                 result.exit_reason = 'cancelled'
@@ -331,6 +340,10 @@ class TrajectoryShotServer:
         p_lo, p_hi = progress_range
 
         while time.time() - t_start < DEFAULT_TIMEOUT_SEC:
+            if self._node.is_stopped():          # 被急停：运动已停，立即退出
+                result.exit_reason = 'stopped'
+                self._logger.info(f'{label} 执行期间被急停，中止')
+                break
             if goal_handle.is_cancel_requested:
                 self._motion.stop()
                 result.exit_reason = 'cancelled'

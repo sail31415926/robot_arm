@@ -63,23 +63,44 @@ from commander.status_aggregator import StatusAggregator
 class CommanderState(IntEnum):
     """Arm Commander 高层状态。
 
-    状态转换图：
-                ┌──────────────────────────────────┐
-                │                                  │
-        ┌───────┴────────┐                         │
-        ▼                │                         │
-    IDLE ──(goal)──→ MOVING ──(done)──→ REACHED ───┘
-     │                 │  │                    (reset / new goal)
-     │                 │  ├──(cancel)──→ STOPPED ──→ IDLE
-     │                 │  └──(timeout)─→ ERROR ────→ IDLE
-     │                 │       (driver_err)
-     └──(stop)──→ STOPPED ──→ IDLE
+    设计要点：
+      - 用户主动取消 (cancel) 是"优雅中止"：直接回 IDLE，可立即接受下一条指令。
+      - 急停 (ArmStop) 是"异常中断"：立即中止在执行的 goal 并进入 STOPPED，必须经
+        reset_error 才能恢复（执行线程检测到 STOPPED 即退出循环、运动引擎停止下发轨迹）。
+      - STOPPED / ERROR 是两个"需显式清错"的状态，恢复出口统一为 reset_error。
+
+    状态转换图（主流程 + MOVING 退出分支）：
+
+        IDLE ──(goal/homing)──► MOVING ──(到达 done)──► REACHED
+         ▲                        │                        │
+         │                        │  MOVING 退出分支：       └─(新指令/回零)─► MOVING
+         │                        ├─ 用户取消 cancel    ──► IDLE     ✦直接回 IDLE
+         ├────────────────────────┼─ 目标不可达 unreach ──► IDLE
+         │                        ├─ 回零完成 homing    ──► IDLE
+         │                        ├─ 急停 ArmStop       ──► STOPPED ─┐
+         │                        └─ 超时/驱动异常 error ──► ERROR ───┤
+         └──────────────── 清错复位 reset_error ◄────────────────────┘
+
+    完整状态转换表：
+      当前状态   事件                       目标状态
+      ────────  ─────────────────────────  ────────
+      IDLE      收到 goal / 回零 homing      MOVING
+      REACHED   收到 goal / 回零 homing      MOVING    （REACHED 同属"空闲可接指令"态）
+      MOVING    到达目标 done               REACHED
+      MOVING    用户取消 cancel          ✦  IDLE       （本次改动：原为 STOPPED）
+      MOVING    目标不可达 (IK 无解)         IDLE
+      MOVING    回零完成 homing             IDLE
+      MOVING    急停 ArmStop               STOPPED
+      MOVING    超时 / 驱动异常 / 异常       ERROR
+      STOPPED   清错复位 reset_error        IDLE
+      ERROR     清错复位 reset_error        IDLE
+    注：非空闲状态（MOVING/STOPPED/ERROR）收到 goal 会被拒绝 (abort)，不改变状态。
     """
-    IDLE      = 0   # 空闲，等待指令
+    IDLE      = 0   # 空闲，等待指令（取消 / 不可达 / 回零完成后回到此态）
     MOVING    = 1   # 执行运动中
-    REACHED   = 2   # 已到达目标（等待下一指令或复位）
-    STOPPED   = 3   # 已急停
-    ERROR     = 4   # 故障（需清错）
+    REACHED   = 2   # 已到达目标（等待下一指令或复位；同属可接指令态）
+    STOPPED   = 3   # 已急停（异常中断，需 reset_error 恢复）
+    ERROR     = 4   # 故障（超时 / 驱动异常，需 reset_error 清错）
 
 
 STATE_NAME = {v: k for k, v in CommanderState.__members__.items()}
@@ -233,6 +254,10 @@ class ArmCommanderNode(Node):
         """是否可接受新指令。"""
         return self.state in (CommanderState.IDLE, CommanderState.REACHED)
 
+    def is_stopped(self) -> bool:
+        """是否处于急停态。供执行线程 / 运动引擎判断是否应立即中止当前 goal 并停止下发轨迹。"""
+        return self.state == CommanderState.STOPPED
+
     # ── ArmMoveToPose Action Server ───────────────────────────────────────────────
     def _on_mtp_execute(self, goal_handle):
         """执行 ArmMoveToPose goal（在专用线程中调用，可阻塞）。
@@ -264,14 +289,26 @@ class ArmCommanderNode(Node):
 
         try:
             result = self.move_to_pose_srv.execute(goal_handle)
+            if self.is_stopped():
+                # 执行期间被急停：状态已由 ArmStop 置 STOPPED，保持不变，仅终止本 goal
+                self.get_logger().info('MoveToPose 执行期间被急停，goal 终止，状态保持 STOPPED')
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
+                goal_handle.abort()
+                return result
             if result.success:
                 self._transition(CommanderState.REACHED)
                 self.status.set_command_state(cmd_id, ArmStatus.RESULT_SUCCEEDED)
                 goal_handle.succeed()
             elif result.exit_reason == 'cancelled':
-                self._transition(CommanderState.STOPPED)
+                # 用户主动取消：优雅中止，直接回 IDLE（可立即接受下一条指令）。
+                # 急停场景已在上方 is_stopped() 提前返回，此处必为普通取消。
+                self._transition(CommanderState.IDLE)
                 self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
                 goal_handle.canceled()
+            elif result.exit_reason == 'stopped':
+                # 急停后又被 reset 的极少见竞态：goal 失败终止，状态不再变更
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
+                goal_handle.abort()
             elif result.exit_reason == 'unreachable':
                 self.get_logger().warn('目标不可达（IK 无解），拒绝本次 goal，恢复空闲')
                 self._transition(CommanderState.IDLE)
@@ -324,14 +361,26 @@ class ArmCommanderNode(Node):
 
         try:
             result = self.trajectory_shot_srv.execute(goal_handle)
+            if self.is_stopped():
+                # 执行期间被急停：状态保持 STOPPED，仅终止本 goal
+                self.get_logger().info('TrajectoryShot 执行期间被急停，goal 终止，状态保持 STOPPED')
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
+                goal_handle.abort()
+                return result
             if result.success:
                 self._transition(CommanderState.REACHED)
                 self.status.set_command_state(cmd_id, ArmStatus.RESULT_SUCCEEDED)
                 goal_handle.succeed()
             elif result.exit_reason == 'cancelled':
-                self._transition(CommanderState.STOPPED)
+                # 用户主动取消：优雅中止，直接回 IDLE（可立即接受下一条指令）。
+                # 急停场景已在上方 is_stopped() 提前返回，此处必为普通取消。
+                self._transition(CommanderState.IDLE)
                 self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
                 goal_handle.canceled()
+            elif result.exit_reason == 'stopped':
+                # 急停后又被 reset 的极少见竞态：goal 失败终止，状态不再变更
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
+                goal_handle.abort()
             else:
                 self._transition(CommanderState.ERROR)
                 self.status.set_command_state(cmd_id, ArmStatus.RESULT_FAILED)
@@ -379,8 +428,18 @@ class ArmCommanderNode(Node):
 
         try:
             result = self.track_target_srv.execute(goal_handle)
+            if self.is_stopped():
+                # 执行期间被急停：状态保持 STOPPED（goal_handle 已由 server 终结）
+                self.get_logger().info('TrackTarget 执行期间被急停，状态保持 STOPPED')
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
+                return result
             if result.exit_code == ArmTrackTarget.Result.EXIT_CANCELLED:
-                self._transition(CommanderState.STOPPED)
+                # 用户主动取消：优雅中止，直接回 IDLE（goal_handle 已在 server 内 canceled()）。
+                # 急停场景已在上方 is_stopped() 提前返回，此处必为普通取消。
+                self._transition(CommanderState.IDLE)
+                self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
+            elif result.exit_reason == 'stopped':
+                # 急停后又被 reset 的极少见竞态：状态不再变更
                 self.status.set_command_state(cmd_id, ArmStatus.RESULT_ABORTED)
             elif result.success:
                 self._transition(CommanderState.REACHED)
@@ -477,10 +536,19 @@ class ArmCommanderNode(Node):
 
         deadline = time.time() + HOMING_DURATION + 2.0
         while time.time() < deadline:
+            if self.is_stopped():          # 回零途中被急停：立即停止等待
+                break
             joints = self.motion.get_current_joints()
             if max(abs(j) for j in joints) < 0.05:
                 break
             time.sleep(0.05)
+
+        if self.is_stopped():
+            # 急停打断回零：状态保持 STOPPED，待 reset_error 恢复，不强制回 IDLE
+            response.success = False
+            response.message = '回零途中被急停，已中止'
+            self.get_logger().warn(f'ArmHoming: {response.message}')
+            return response
 
         self._transition(CommanderState.IDLE)
         self.status.set_pose_state(ArmStatus.POSE_STATE_STOWED)
