@@ -1,0 +1,64 @@
+/**
+ * @file trajectory.hpp
+ * @brief motion 层轨迹下发（C++）—— 降采样 + 关节速度 + JointTrajectory 构建 + 批量 IK 下发
+ *
+ * 对应 Python arm_motion/trajectory.py 的 decimate / build_joint_trajectory / solve_and_send：
+ *   decimate               100Hz 路点降采样（每 k 取 1，保留首末点），减少 IK 求解次数
+ *   build_joint_trajectory 关节序列 + 时间序列 → JointTrajectory（中央差分算速度，端点零）
+ *   solve_and_send         路点批量 IK（种子延续 / 首帧零种子重试 / 失败沿用上帧）→ 发布
+ * 依赖注入（seed / stop_check），无 StatusAggregator / is_stopped 硬耦合。
+ *
+ * @version 1.0
+ * @date 2026-07-01
+ * @copyright Copyright (c) 2026 eMeet
+ */
+#pragma once
+
+#include <functional>
+#include <string>
+#include <vector>
+
+#include <builtin_interfaces/msg/time.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <trajectory_msgs/msg/joint_trajectory.hpp>
+
+#include "robot_arm_node/motion/constants.hpp"    // JOINT_NAMES 等默认值
+#include "robot_arm_node/motion/kinematics.hpp"   // GetPositionIK / solve_ik / make_pose_stamped
+#include "robot_arm_node/motion/planning.hpp"     // Waypoint
+
+namespace robot_arm_node::motion
+{
+
+// 100Hz 路点降采样：每 k 个取 1，始终保留首/末点（不改起止位姿与总时长）
+std::vector<Waypoint> decimate(const std::vector<Waypoint> & pts, int k);
+
+// 由关节位置序列 + 时间序列构建 JointTrajectory（中央差分算速度，端点为零）
+trajectory_msgs::msg::JointTrajectory build_joint_trajectory(
+    const std::vector<std::vector<double>> & joint_pos,
+    const std::vector<double> & joint_t,
+    const std::vector<std::string> & joint_names,
+    const builtin_interfaces::msg::Time & stamp);
+
+// 批量 IK + JointTrajectory 下发（对应 Python solve_and_send）。
+//   路点降采样 → 逐点 IK（种子延续，首帧失败零种子重试，失败沿用上帧）
+//   → 中央差分算关节速度 → 构建并发布 JointTrajectory。
+// 依赖注入、无状态：seed 由调用方提供，stop_check 由调用方注入（急停 / 取消合成一个判据）。
+//   node    仅用于 get_clock()（时间戳），不读其它状态。
+//   逐点 IK 阻塞等 future，须由 MultiThreadedExecutor 的执行线程调用（见 kinematics.hpp）。
+// 返回 true 表示成功下发，false 表示失败 / 中止。
+bool solve_and_send(
+    rclcpp::Node & node,
+    const rclcpp::Client<GetPositionIK>::SharedPtr & ik_client,
+    const rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr & traj_pub,
+    const std::vector<Waypoint> & all_pts,
+    const std::vector<double> & seed,
+    const std::vector<std::string> & joint_names = JOINT_NAMES,
+    const std::string & group = PLANNING_GROUP,
+    const std::string & eef_link = EEF_LINK,
+    const std::string & base_frame = BASE_FRAME,
+    int decimate_k = IK_DECIMATE,
+    double ik_timeout_s = IK_TIMEOUT_S,
+    const std::function<bool()> & stop_check = nullptr,
+    rclcpp::Logger logger = rclcpp::get_logger("arm_motion"));
+
+}  // namespace robot_arm_node::motion

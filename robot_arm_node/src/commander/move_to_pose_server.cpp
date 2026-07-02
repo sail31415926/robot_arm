@@ -1,0 +1,168 @@
+/**
+ * @file move_to_pose_server.cpp
+ * @brief MoveToPoseServer 实现 —— STOWED 关节回零 / OBSERVE·SHOOTING Cartesian
+ *
+ * execute 按 target_pose_state 分派：STOWED→go_to_joints + 关节到位等待；OBSERVE/SHOOTING
+ * →resolve_target→plan_and_execute→wait_arrival（进度分段支持 return_to_start）。
+ *
+ * @version 1.0
+ * @date 2026-07-01
+ * @copyright Copyright (c) 2026 eMeet
+ */
+#include "robot_arm_node/commander/move_to_pose_server.hpp"
+
+#include <cmath>
+
+#include <robot_arm_interfaces/msg/arm_status.hpp>
+
+#include "robot_arm_node/commander/motion_policy.hpp"
+
+namespace robot_arm_node::commander
+{
+
+using ArmStatus = robot_arm_interfaces::msg::ArmStatus;
+
+namespace
+{
+constexpr double DEFAULT_TIMEOUT_SEC = 30.0;
+constexpr double FEEDBACK_RATE_HZ    = 10.0;
+const std::vector<double> STOWED_JOINTS(6, 0.0);
+constexpr double STOWED_DURATION_SEC = 2.0;
+}  // namespace
+
+MoveToPoseServer::MoveToPoseServer(rclcpp::Node & node, MotionExecutor & motion,
+                                   state::StatusAggregator & status, ExecutionMonitor & monitor,
+                                   std::function<ArmPose()> observe_pose)
+: node_(node), logger_(node.get_logger()), motion_(motion), status_(status),
+  monitor_(monitor), observe_pose_(std::move(observe_pose))
+{
+}
+
+MoveToPoseServer::Action::Result MoveToPoseServer::execute(const std::shared_ptr<GoalHandle> & gh)
+{
+  const auto goal  = gh->get_goal();
+  const Speed & speed = speed_profile(goal->transition_speed);
+
+  // STOWED：关节空间回零（不走 IK，不支持 return_to_start）
+  if (goal->target_pose_state == Action::Goal::POSE_STATE_STOWED) {
+    return execute_stowed(gh);
+  }
+
+  // OBSERVE / SHOOTING：Cartesian 目标 → IK → JointTrajectory
+  const ArmPose start_pose = status_.pose();   // 出发位姿（用于 return_to_start）
+
+  auto target_opt = resolve_target(*goal);
+  if (!target_opt) {
+    Action::Result r;
+    r.success = false; r.exit_reason = "unreachable"; r.error_code = ArmStatus::ERR_LIMIT;
+    return r;
+  }
+  const ArmPose target = *target_opt;
+  RCLCPP_INFO(logger_, "MoveToPose 目标: x=%.3f y=%.3f z=%.3f R=%.1f P=%.1f Y=%.1f",
+              target.x, target.y, target.z, target.roll, target.pitch, target.yaw);
+
+  auto exec_result = motion_.plan_and_execute(target, speed);
+  if (!exec_result.success) {
+    Action::Result r;
+    r.success = false; r.exit_reason = exec_result.exit_reason;
+    r.error_code = ArmStatus::ERR_DRIVER; r.actual_pose = status_.pose();
+    return r;
+  }
+
+  // 等待到位（去程：0→50% if return_to_start 否则 0→100%）
+  auto result = wait_arrival(gh, target, speed, 0.0, goal->return_to_start ? 50.0 : 100.0);
+  if (!result.success || !goal->return_to_start) return result;
+
+  // return_to_start：原路返回出发位姿
+  RCLCPP_INFO(logger_, "return_to_start: 返回出发位姿");
+  auto exec_back = motion_.plan_and_execute(start_pose, speed);
+  if (!exec_back.success) {
+    result.success = false; result.exit_reason = "error"; result.error_code = ArmStatus::ERR_DRIVER;
+    return result;
+  }
+  return wait_arrival(gh, start_pose, speed, 50.0, 100.0);
+}
+
+MoveToPoseServer::Action::Result MoveToPoseServer::execute_stowed(const std::shared_ptr<GoalHandle> & gh)
+{
+  RCLCPP_INFO(logger_, "STOWED: 全关节回零");
+  motion_.go_to_joints(STOWED_JOINTS, STOWED_DURATION_SEC);
+
+  ExecutionMonitor::WaitParams p;
+  p.arrived = [this]() { return is_at_joints(motion_.get_current_joints(), STOWED_JOINTS); };
+  p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
+  p.on_feedback = [this, gh](double /*elapsed*/) {
+    // 反馈基于关节接近度（非 elapsed 比例）
+    const auto current = motion_.get_current_joints();
+    double max_err = 0.0;
+    for (size_t i = 0; i < STOWED_JOINTS.size(); ++i)
+      max_err = std::max(max_err, std::fabs(current[i] - STOWED_JOINTS[i]));
+    const double progress = std::max(0.0, 100.0 - max_err / 0.1 * 100.0);
+    auto fb = std::make_shared<Action::Feedback>();
+    fb->progress_percent = static_cast<float>(std::min(progress, 99.9));
+    fb->current_pose     = status_.pose();
+    gh->publish_feedback(fb);
+  };
+  p.timeout_sec = DEFAULT_TIMEOUT_SEC;
+  p.feedback_hz = FEEDBACK_RATE_HZ;
+  p.label = "STOWED ";
+  const auto outcome = monitor_.wait_until(p);
+
+  Action::Result r;
+  r.success     = is_reached(outcome);
+  r.exit_reason = r.success ? "reached" :
+                  (outcome == WaitOutcome::STOPPED ? "stopped" :
+                   outcome == WaitOutcome::CANCELLED ? "cancelled" : "timeout");
+  r.error_code  = r.success ? ArmStatus::ERR_NONE : ArmStatus::ERR_TIMEOUT;
+  r.actual_pose = status_.pose();
+  return r;
+}
+
+MoveToPoseServer::Action::Result MoveToPoseServer::wait_arrival(
+    const std::shared_ptr<GoalHandle> & gh, const ArmPose & target,
+    const Speed & speed, double p_lo, double p_hi)
+{
+  const ArmPose cur = status_.pose();
+  const double dist = std::sqrt(std::pow(target.x - cur.x, 2) +
+                                std::pow(target.y - cur.y, 2) +
+                                std::pow(target.z - cur.z, 2));
+  const double total_dur = std::max(dist / std::max(speed.v_pos, 1e-6), 0.5);
+
+  ExecutionMonitor::WaitParams p;
+  p.arrived = [this, target]() { return is_at_pose(status_.pose(), target); };
+  p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
+  p.on_feedback = [this, gh, p_lo, p_hi, total_dur](double elapsed) {
+    const double ratio = std::min(elapsed / std::max(total_dur, 1e-6), 0.999);
+    auto fb = std::make_shared<Action::Feedback>();
+    fb->progress_percent = static_cast<float>(p_lo + ratio * (p_hi - p_lo));
+    fb->current_pose     = status_.pose();
+    gh->publish_feedback(fb);
+  };
+  p.timeout_sec = DEFAULT_TIMEOUT_SEC;
+  p.feedback_hz = FEEDBACK_RATE_HZ;
+  p.label = "MoveToPose ";
+  const auto outcome = monitor_.wait_until(p);
+
+  Action::Result r;
+  r.success     = is_reached(outcome);
+  r.exit_reason = r.success ? "reached" :
+                  (outcome == WaitOutcome::STOPPED ? "stopped" :
+                   outcome == WaitOutcome::CANCELLED ? "cancelled" : "timeout");
+  r.error_code  = r.success ? ArmStatus::ERR_NONE : ArmStatus::ERR_TIMEOUT;
+  r.actual_pose = status_.pose();
+  return r;
+}
+
+std::optional<ArmPose> MoveToPoseServer::resolve_target(const Action::Goal & goal)
+{
+  if (goal.target_pose_state == Action::Goal::POSE_STATE_OBSERVE) {
+    return observe_pose_();
+  }
+  if (goal.target_pose_state == Action::Goal::POSE_STATE_SHOOTING) {
+    return goal.target_pose;   // 绝对位姿，直接使用
+  }
+  RCLCPP_ERROR(logger_, "非法 target_pose_state: %d", goal.target_pose_state);
+  return std::nullopt;
+}
+
+}  // namespace robot_arm_node::commander
