@@ -1,8 +1,14 @@
 """
 @file gazebo.launch.py
-@brief eMeetArm_models 机械臂 Gazebo 仿真启动文件
-@version 1.4
-@date 2026-06-09
+@brief bringup 的 Gazebo 后端 —— 只管 Gazebo 底座，上层栈复用共享工厂
+@version 1.5
+@date 2026-07-01
+
+@note  本文件是整机启动的 gazebo 后端（统一入口见 bringup.launch.py，backend:=gazebo）。
+       职责限于「底座」：gzserver/gzclient + spawn_entity + gazebo_ros2_control 起 6 轴控制器 +
+       Gazebo 环境/世界。上层栈（controller GUI / servo / commander / ibvs / visp / 安全预移动）
+       的节点定义复用 launch/_arm_launch_common.py，与 mujoco/real 共用一份，避免各写一遍。
+       move_group 仍走本包 moveit.launch.py（含 rviz），为 gazebo 特有。
 
 @details 启动以下节点：
          - gzserver：物理仿真服务端（无 GPU 渲染，避免双窗口）
@@ -17,8 +23,6 @@
            cartesian_trajectory  → cartesian_trajectory_gui    (Ruckig 点到点 + 环绕，批量 IK)
            spherical_orbit       → spherical_orbit_gui         (球面坐标环绕运镜)
            cartesian_velocity    → cartesian_velocity_gui      (笛卡尔速度接口，手动点动，MoveIt Servo)
-           ibvs_control          → cartesian_velocity_gui + red_box_detector
-                                   + ibvs_control_node          (红色方块 IBVS 闭环，Python 版)
            visp_ibvs_control     → cartesian_velocity_gui + red_box_detector
                                    + visp_ibvs_node             (红色方块 IBVS 闭环，ViSP C++ 版)
            commander             → arm_commander_node          (Arm Commander 中间层)
@@ -33,10 +37,8 @@
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_trajectory                                        # Ruckig 点到点+环绕
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=spherical_orbit                                             # 球面轨道运镜
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_velocity                                          # 笛卡尔速度（手动点动）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control                                                # 红色方块 IBVS（Python 版）
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=visp_ibvs_control                                          # 红色方块 IBVS（ViSP C++ 版，默认世界）
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=visp_ibvs_control world:=ibvs_tracking_test                 # 红色方块 IBVS（U 形桌+圆周移动方块，推荐跟踪测试）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control      world:=ibvs_tracking_test                 # 红色方块 IBVS（Python 版 + 跟踪测试世界）
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander                                                   # Arm Commander 中间层（含 GUI）
            ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander gui:=false                                        # Arm Commander 中间层（无 GUI）
 
@@ -48,6 +50,8 @@
 """
 
 import os
+import sys
+
 import xacro
 import yaml
 from ament_index_python.packages import get_package_share_directory
@@ -61,6 +65,10 @@ from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
+
+# 上层栈节点工厂（与 mujoco/real 共用同一份定义）
+sys.path.insert(0, os.path.dirname(__file__))
+import _arm_launch_common as common   # noqa: E402
 
 
 def _load_yaml(path):
@@ -106,7 +114,7 @@ def generate_launch_description():
         default_value='joint_position',
         description=('控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
                      'cartesian_trajectory | spherical_orbit | cartesian_velocity | '
-                     'ibvs_control | visp_ibvs_control | commander'),
+                     'visp_ibvs_control | commander'),
     )
     gui_arg = DeclareLaunchArgument(
         'gui', default_value='true',
@@ -122,22 +130,12 @@ def generate_launch_description():
     world_name = LaunchConfiguration('world')
     world_file = PathJoinSubstitution([worlds_dir, [world_name, '.world']])
 
-    def controller_node(mode_name, exe_name):
-        """根据 controller 参数条件启动对应节点"""
-        return Node(
-            package='robot_arm_node',
-            executable=exe_name,
-            output='screen',
-            condition=IfCondition(
-                PythonExpression(["'", ctrl, "' == '", mode_name, "'"])),
-        )
-
-    joint_position_ctrl    = controller_node('joint_position',        'joint_position_gui')
-    cartesian_moveit_ctrl  = controller_node('cartesian_moveit',      'cartesian_moveit_gui')
-    realtime_ik_ctrl       = controller_node('cartesian_realtime_ik', 'cartesian_realtime_ik_gui')
-    trajectory_ctrl        = controller_node('cartesian_trajectory',  'cartesian_trajectory_gui')
-    spherical_orbit_ctrl   = controller_node('spherical_orbit',       'spherical_orbit_gui')
-    velocity_ctrl          = controller_node('cartesian_velocity',    'cartesian_velocity_gui')
+    joint_position_ctrl    = common.gui_node(ctrl, 'joint_position',        'joint_position_gui')
+    cartesian_moveit_ctrl  = common.gui_node(ctrl, 'cartesian_moveit',      'cartesian_moveit_gui')
+    realtime_ik_ctrl       = common.gui_node(ctrl, 'cartesian_realtime_ik', 'cartesian_realtime_ik_gui')
+    trajectory_ctrl        = common.gui_node(ctrl, 'cartesian_trajectory',  'cartesian_trajectory_gui')
+    spherical_orbit_ctrl   = common.gui_node(ctrl, 'spherical_orbit',       'spherical_orbit_gui')
+    velocity_ctrl          = common.gui_node(ctrl, 'cartesian_velocity',    'cartesian_velocity_gui')
 
     # ── commander 模式 ─────────────────────────────────────────────────────────
     is_commander = IfCondition(PythonExpression(["'", ctrl, "' == 'commander'"]))
@@ -146,22 +144,7 @@ def generate_launch_description():
     # 它们是纯 ROS 客户端/服务端，启动后会自动等待底层资源就绪
     commander_start = TimerAction(
         period=5.0,
-        actions=[
-            Node(
-                package='robot_arm_node',
-                executable='arm_commander_node',
-                output='screen',
-                parameters=[{'use_sim_time': True}],
-            ),
-            Node(
-                package='robot_arm_node',
-                executable='commander_test_gui',
-                output='screen',
-                condition=IfCondition(PythonExpression(
-                    ["'", ctrl, "' == 'commander' and '", gui, "' == 'true'"]
-                )),
-            ),
-        ],
+        actions=common.commander_nodes(ctrl, gui, use_sim_time=True),
         condition=is_commander,
     )
     # ── MoveIt（需要 IK 的控制方式，含 commander）─────────────────────────────
@@ -180,7 +163,6 @@ def generate_launch_description():
 
     # ── MoveIt Servo 条件（cartesian_velocity / ibvs_control）────────────────────
     is_velocity      = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
-    is_ibvs_control  = IfCondition(PythonExpression(["'", ctrl, "' == 'ibvs_control'"]))
     is_visp_ibvs     = IfCondition(PythonExpression(["'", ctrl, "' == 'visp_ibvs_control'"]))
     def make_servo_node(condition, check_collisions=True):
         # ibvs/velocity 模式无 move_group，禁用碰撞检测避免 run_duration 超时
@@ -206,64 +188,24 @@ def generate_launch_description():
     # visp_ibvs_control：Pinocchio 加权 Jacobian，直接发 JointTrajectory，无需 Servo
     visp_ibvs_start_after_pose = TimerAction(
         period=4.0,
-        actions=[
-            Node(package='robot_arm_node', executable='red_box_detector',
-                 output='screen',
-                 parameters=[{'use_sim_time': True}],
-                 condition=is_visp_ibvs),
-            Node(package='robot_arm_node', executable='visp_ibvs_node',
-                 output='screen',
-                 parameters=[{'robot_description': robot_description,
-                               'use_sim_time': True,
-                               'control_depth': False}],
-                 condition=is_visp_ibvs),
-            Node(package='robot_arm_node', executable='visp_ibvs_gui',
-                 output='screen',
-                 condition=is_visp_ibvs),
-        ],
+        actions=common.visp_nodes(ctrl, 'visp_ibvs_control',
+                                  robot_description=robot_description,
+                                  use_sim_time=True, control_depth=False),
         condition=is_visp_ibvs,
     )
 
     # ── 安全姿态预移动（全零关节是运动学奇异点，servo 启动前须先移走）──────────
     # commander 模式不需要预移动，由上层自行决定初始姿态
     needs_safe_pose = IfCondition(
-        PythonExpression(["'", ctrl, "' in ['cartesian_velocity','ibvs_control']"])
+        PythonExpression(["'", ctrl, "' in ['cartesian_velocity']"])
     )
-    move_to_safe_pose = ExecuteProcess(
-        cmd=[
-            'ros2', 'topic', 'pub', '--once',
-            '/arm_controller/joint_trajectory',
-            'trajectory_msgs/msg/JointTrajectory',
-            ('{joint_names: [Joint1,Joint2,Joint3,Joint4,Joint5,Joint6], '
-             'points: [{positions: [0.0, 1.0, -1.5, 0.0, 0.3, 0.0], '
-             'time_from_start: {sec: 3, nanosec: 0}}]}'),
-        ],
-        output='screen',
-        condition=needs_safe_pose,
-    )
+    move_to_safe_pose = common.safe_pose_action(needs_safe_pose)
 
     velocity_start_after_pose = TimerAction(
         period=4.0,
         actions=[make_servo_node(is_velocity, check_collisions=False),
                  velocity_ctrl],
         condition=is_velocity,
-    )
-
-    # ibvs_control：servo + velocity controller + 检测节点 + IBVS 控制器
-    ibvs_control_start_after_pose = TimerAction(
-        period=4.0,
-        actions=[
-            make_servo_node(is_ibvs_control, check_collisions=False),
-            Node(package='robot_arm_node', executable='cartesian_velocity_gui',
-                 output='screen', condition=is_ibvs_control),
-            Node(package='robot_arm_node', executable='red_box_detector',
-                 output='screen',
-                 parameters=[{'use_sim_time': True}],
-                 condition=is_ibvs_control),
-            Node(package='robot_arm_node', executable='ibvs_control_node',
-                 output='screen', condition=is_ibvs_control),
-        ],
-        condition=is_ibvs_control,
     )
 
     # ── ibvs_tracking_test 世界：红色方块圆周运动 cmd_vel 发布 ────────────────
@@ -337,7 +279,7 @@ def generate_launch_description():
             os.path.join(bringup_share, 'launch', 'camera_view.launch.py')
         ),
         condition=IfCondition(
-            PythonExpression(["'", ctrl, "' not in ['ibvs_control','visp_ibvs_control']"])
+            PythonExpression(["'", ctrl, "' not in ['visp_ibvs_control']"])
         ),
     )
 
@@ -371,7 +313,6 @@ def generate_launch_description():
                 on_exit=[joint_position_ctrl, cartesian_moveit_ctrl, realtime_ik_ctrl,
                          move_to_safe_pose,
                          velocity_start_after_pose,
-                         ibvs_control_start_after_pose,
                          visp_ibvs_start_after_pose,
                          trajectory_ctrl, spherical_orbit_ctrl],
             )
