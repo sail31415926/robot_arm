@@ -1,3 +1,8 @@
+# ⚠️ LEGACY / 过渡件：本配置仅供 arm_node（已被 ArmHardwareInterface 取代）使用。
+#    HAL 化后各参数迁入 URDF <ros2_control> 硬件参数（见 arm.urdf.xacro 的 backend=real 块）。
+#    待实物 CAN 验证 ArmHardwareInterface 通过、real.launch 切到 HAL（PR-4）后，本文件随
+#    arm_node 一并删除。详见 docs/PR1-ArmHardwareInterface实现规格.md §十三。
+#
 # arm_node 参数配置
 # 机械臂三关节整体节点，对外接口：JointTrajectory / joint_states
 # motion_mode 由 real.launch.py 根据 controller 参数覆盖（slider→pp，其余→ip）

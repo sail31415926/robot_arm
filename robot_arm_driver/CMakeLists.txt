@@ -8,6 +8,12 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+find_package(hardware_interface REQUIRED)
+find_package(pluginlib REQUIRED)
+find_package(yaml-cpp REQUIRED)
+find_package(controller_manager_msgs REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -18,8 +24,31 @@ find_package(control_msgs REQUIRED)
 include_directories(include)
 
 # ── CANopen 驱动库（SocketCAN，无外部依赖）──────────────────────────────────
+# PIC 开启：静态库要链进 ros2_control 硬件插件（SHARED），否则报 -fPIC 错误
 add_library(canopen_motor_driver src/canopen_motor_driver.cpp)
 target_include_directories(canopen_motor_driver PUBLIC include)
+set_target_properties(canopen_motor_driver PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# ── ros2_control 硬件插件：ArmHardwareInterface（J1-3, CANopen）──────────────
+add_library(arm_hardware_interface SHARED src/arm_hardware_interface.cpp)
+target_include_directories(arm_hardware_interface PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(arm_hardware_interface canopen_motor_driver yaml-cpp)
+ament_target_dependencies(arm_hardware_interface
+  hardware_interface
+  pluginlib
+  rclcpp
+  rclcpp_lifecycle
+)
+pluginlib_export_plugin_description_file(hardware_interface arm_hardware_plugin.xml)
+
+# ── arm_driver_services（使能/复位伴生服务节点，Trigger → controller_manager）──
+add_executable(arm_driver_services src/arm_driver_services.cpp)
+ament_target_dependencies(arm_driver_services
+  rclcpp std_srvs controller_manager_msgs lifecycle_msgs)
+install(TARGETS arm_driver_services DESTINATION lib/${PROJECT_NAME})
 
 # ── arm_motor_node ────────────────────────────────────────────────────────────
 add_executable(arm_motor_node src/arm_motor_node.cpp)
@@ -58,5 +87,18 @@ install(PROGRAMS scripts/motor_state_control_gui.py
 install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
+
+# ── ros2_control 硬件插件安装与导出 ──────────────────────────────────────────
+install(TARGETS arm_hardware_interface
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+install(FILES arm_hardware_plugin.xml DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY include/ DESTINATION include)
+
+ament_export_include_directories(include)
+ament_export_libraries(arm_hardware_interface)
+ament_export_dependencies(hardware_interface pluginlib rclcpp rclcpp_lifecycle)
 
 ament_package()

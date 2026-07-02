@@ -2,6 +2,13 @@
  * @file arm_node.cpp
  * @brief 三关节机械臂整体节点（对外标准 JointTrajectory / joint_states 接口）
  *
+ * ⚠️ LEGACY / 过渡件：本节点已被 ros2_control 硬件插件 ArmHardwareInterface
+ *    （robot_arm_driver/arm_hardware_interface.cpp）取代——后者把这里的 CANopen 逻辑
+ *    重挂到 ros2_control 生命周期，让臂 J1-3 由标准 JointTrajectoryController 驱动。
+ *    本文件暂作**实物回退路径**保留；待 ArmHardwareInterface 通过实物 CAN 验证、且
+ *    real.launch 切到 HAL（见 PR-4）后删除。详见
+ *    docs/PR1-ArmHardwareInterface实现规格.md §十三。
+ *
  * 将 3 个 CanopenMotorDriver 封装在同一节点内，向上暴露 ROS 2 标准接口：
  *
  *   订阅  /arm_controller/joint_trajectory   trajectory_msgs/JointTrajectory
