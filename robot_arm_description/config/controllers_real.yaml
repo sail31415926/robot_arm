@@ -1,0 +1,32 @@
+# controllers_real.yaml
+# 实物 ros2_control 控制器配置：臂 J1-3 走 ArmHardwareInterface（CANopen）。
+# 与 controllers.yaml（Gazebo 6 轴版）区分：本文件用于 PR-1 的 test_arm_hw.launch。
+# 云台 J4-6（gimbal_controller）在 PR-3（云台并网）时加入同一 controller_manager。
+
+controller_manager:
+  ros__parameters:
+    update_rate: 100   # 与 ip_period_ms=10 对齐（100Hz write 周期发一个插补点）
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+arm_controller:
+  ros__parameters:
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
+    command_interfaces:
+      - position
+      - velocity
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 50.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    open_loop_control: false               # 有真实反馈（后台 50Hz 轮询）
+    allow_nonzero_velocity_at_trajectory_end: true
