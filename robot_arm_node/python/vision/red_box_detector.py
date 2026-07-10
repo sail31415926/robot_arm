@@ -17,13 +17,13 @@
         → 发布 /red_detector/image 供 rqt 查看
 
   运行方式：
-      ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control  # 随仿真一起启动
+      ros2 launch robot_arm_gazebo gazebo.launch.py controller:=ibvs_control  # 随仿真一起启动
       ros2 launch robot_arm_bringup red_box_detect.launch.py                   # 单独启动（纯检测）
       ros2 run robot_arm_node red_box_detector --ros-args -p show_window:=false  # headless
 
 用法：
   ros2 run robot_arm_node red_box_detector
-  ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control
+  ros2 launch robot_arm_gazebo gazebo.launch.py controller:=ibvs_control
   ros2 launch robot_arm_bringup red_box_detect.launch.py
 
 @copyright Copyright (c) 2026 eMeet

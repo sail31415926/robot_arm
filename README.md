@@ -5,285 +5,188 @@
 | 项目属性 | 详情 |
 | :--- | :--- |
 | **项目名称** | eMeet Robot Arm ROS 2 Package |
-| **版本** | v1.3.0 |
-| **发布日期** | 2026-06-11 09:10 |
-| **支持平台** | Ubuntu 22.04 LTS |
-| **ROS 2 版本** | Humble |
-| **设备兼容** | eMeet 机械臂（6 轴：Joint1-3 CANopen + Joint4-6 相机云台） |
-| **编程语言** | C++ / Python / MATLAB |
+| **版本** | v1.4.0 |
+| **发布日期** | 2026-07-07 |
+| **支持平台** | Ubuntu 22.04 LTS · ROS 2 Humble · Python 3.10 |
+| **设备** | eMeet 6 轴机械臂（Joint1-3 CANopen + Joint4-6 相机云台 HID） |
+| **语言** | C++ / Python / MATLAB |
 
 ---
 
 ## 包结构
 
-```bash
-src/E7009/robot_arm/
-├── robot_arm_interfaces/       # 自定义消息 / 服务 / 动作定义
-│   ├── msg/                    #   ArmStatus、ArmPose、ArmTwist 等
-│   ├── srv/                    #   ArmEnable、ArmHoming、ArmStop 等
-│   └── action/                 #   ArmMoveToPose、ArmTrajectoryShot
-│
-├── robot_arm_description/      # 机械臂静态模型资源
-│   ├── urdf/                   #   eMeetArm_models.urdf（6-DOF）
-│   ├── srdf/                   #   碰撞组、规划组定义
-│   ├── xml/                    #   eMeetArm.xml（MuJoCo MJCF）
-│   ├── meshes/                 #   base_link + Link1-6.STL
-│   ├── config/                 #   controllers / joint_limits / kinematics（pick_ik）
-│   └── rviz/                   #   URDF 可视化 / MoveIt 配置
-│
-├── robot_arm_driver/           # C++ CANopen 硬件驱动（Joint1–3）
-│   ├── include/                #   CiA402 驱动器头文件
-│   ├── src/                    #   arm_node / arm_motor_node / CANopenLinux
-│   ├── config/                 #   arm.yaml / motors.yaml
-│   └── scripts/                #   motor_test_gui.py（PyQt5）
-│
-├── robot_arm_node/             # Python 应用层控制节点
-│   └── scripts/
-│       ├── controllers/        #   8 种控制模式节点（joint / cartesian / orbit / ibvs…）
-│       ├── gui/                #   各控制模式对应 GUI（PyQt5 / tkinter）
-│       ├── vision/             #   红框检测、IBVS 视觉伺服
-│       ├── simulation/         #   MuJoCo ↔ ROS 2 桥接节点
-│       ├── commander/          #   Arm Commander 中间层（状态机、Action Server）
-│       └── tools/              #   轨迹桥接、工具函数
-│
-├── robot_arm_bringup/          # 启动入口 & 仿真资源
-│   ├── launch/                 #   display / motor / real / gazebo / mujoco / moveit
-│   ├── config/moveit/          #   OMPL / Servo / 控制器映射配置
-│   └── sim/                    #   Gazebo world、ArUco 模型、MuJoCo 资源
-│
-└── robot_arm_matlab/           # MATLAB 离线分析工具箱
-    └── eMeetArm_models/        #   Simscape Multibody 导出的 ROS 2 包
+```text
+robot_arm/
+├── robot_arm_interfaces/    # 自定义 msg / srv / action（ArmStatus、ArmMoveToPose、ArmTrajectoryShot…）
+├── robot_arm_description/   # URDF / SRDF / MJCF / mesh / RViz / kinematics（pick_ik）配置
+├── robot_arm_driver/        # C++ CANopen 驱动（J1-3）：arm_node（独立节点）+ ArmHardwareInterface（ros2_control 插件）
+├── robot_arm_node/          # 应用层：C++ 产品栈（commander / motion / vision）+ Python 调试控制器 / GUI / 工具
+├── robot_arm_bringup/       # 统一启动入口（bringup/real/moveit launch）+ MoveIt 配置 + 三后端共享上层栈定义
+├── robot_arm_gazebo/        # Gazebo 仿真后端：gazebo.launch.py + worlds / models 资产
+├── robot_arm_mujoco/        # MuJoCo 仿真后端：mujoco.launch.py + mujoco_node 仿真桥
+└── robot_arm_matlab/        # MATLAB 离线分析工具箱（Simscape 导出）
 ```
 
 ---
 
 ## 快速启动
 
-### URDF 可视化
+三种运行环境共用同一套接口，均以 `controller:=<模式>` 选控制方式（模式见下表，默认 `joint_position`）：
 
 ```bash
-ros2 launch robot_arm_bringup display.launch.py
+ros2 launch robot_arm_bringup display.launch.py    # 仅 RViz 显示 URDF
+ros2 launch robot_arm_gazebo gazebo.launch.py     # Gazebo 仿真
+ros2 launch robot_arm_mujoco mujoco.launch.py     # MuJoCo 仿真
+ros2 launch robot_arm_bringup real.launch.py       # 实物（arm_node + 云台 + MoveIt + 视频流）
+ros2 launch robot_arm_bringup moveit.launch.py     # 单独 move_group + RViz
+ros2 launch robot_arm_bringup motor.launch.py      # 仅底层电机控制（不含 MoveIt）
 ```
 
-### Gazebo 仿真
-
 ```bash
-# 默认（关节滑块模式）
-ros2 launch robot_arm_bringup gazebo.launch.py
-
-# 指定控制模式
-ros2 launch robot_arm_bringup gazebo.launch.py controller:=joint_position        # 关节滑块
-ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_moveit      # MoveIt 笛卡尔直线
-ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_realtime_ik # 滑块即时 IK
-ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_trajectory  # Ruckig 点到点 + 环绕
-ros2 launch robot_arm_bringup gazebo.launch.py controller:=spherical_orbit       # 球面轨道运镜
-ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_velocity    # 笛卡尔速度点动
-ros2 launch robot_arm_bringup gazebo.launch.py controller:=ibvs_control          # 红色方块 IBVS 闭环
-ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander             # Arm Commander 中间层
-```
-
-### MuJoCo 仿真
-
-```bash
-ros2 launch robot_arm_bringup mujoco.launch.py
-ros2 launch robot_arm_bringup mujoco.launch.py controller:=cartesian_moveit
-```
-
-### 真实硬件
-
-```bash
-# 一键启动（arm_node + ros2_control + MoveIt + GUI + 视频流）
-ros2 launch robot_arm_bringup real.launch.py
-
-# 指定控制模式（支持全部 8 种，同 Gazebo）
-ros2 launch robot_arm_bringup real.launch.py controller:=spherical_orbit
-ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_trajectory
-
-# 指定相机型号（默认 auto）
-ros2 launch robot_arm_bringup real.launch.py camera_type:=pixy
-
-# 仅启动底层电机控制（不含 MoveIt）
-ros2 launch robot_arm_bringup motor.launch.py
-```
-
-### MoveIt2 运动规划
-
-```bash
-# 独立启动 move_group + RViz
-ros2 launch robot_arm_bringup moveit.launch.py
-
-# 配合仿真使用
-ros2 launch robot_arm_bringup moveit.launch.py use_sim_time:=true
-```
-
-### 测试工具
-
-```bash
-ros2 launch robot_arm_bringup test_ros.launch.py
-ros2 run robot_arm_driver motor_test_gui
-
-# Arm Commander 功能测试（需分两个终端）
-ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander
-ros2 run robot_arm_node commander_test_gui
+# 选控制模式 / 相机型号（示例）
+ros2 launch robot_arm_gazebo gazebo.launch.py controller:=spherical_orbit
+ros2 launch robot_arm_bringup real.launch.py   controller:=commander      # 中间层（默认含测试 GUI）
+ros2 launch robot_arm_bringup real.launch.py   camera_type:=pixy          # 相机型号（默认 auto）
 ```
 
 ---
 
 ## 控制模式一览
 
-| 模式参数 | 控制节点 | 控制机制 | GUI | 支持环境 |
-| :--- | :--- | :--- | :---: | :--- |
-| `joint_position` | `controllers/joint_position_controller_node.py` | 直接发布 JointTrajectory | PyQt5 滑块 | Gazebo / MuJoCo / 实物 |
-| `cartesian_moveit` | `controllers/cartesian_moveit_controller_node.py` | MoveIt `compute_cartesian_path` | tkinter | Gazebo / MuJoCo / 实物 |
-| `cartesian_realtime_ik` | `controllers/cartesian_realtime_ik_controller_node.py` | 实时 IK（`/compute_ik`）→ JointTrajectory | tkinter | Gazebo / MuJoCo / 实物 |
-| `cartesian_trajectory` | `controllers/cartesian_trajectory_controller_node.py` | Ruckig OTG → 批量 IK → JointTrajectory | tkinter | Gazebo / MuJoCo / 实物 |
-| `spherical_orbit` | `controllers/spherical_orbit_controller_node.py` | Ruckig 球面轨迹 → IK → JointTrajectory（相机始终对中） | tkinter | Gazebo / MuJoCo / 实物 |
-| `cartesian_velocity` | `controllers/cartesian_velocity_controller_node.py` | TwistStamped → MoveIt Servo / MuJoCo DLS | tkinter 点动 | Gazebo / MuJoCo |
-| `ibvs_control` | `vision/ibvs_control_node.py` + `vision/red_box_detector.py` | IBVS 视觉闭环 → TwistStamped | — | Gazebo |
-| `commander` | `commander/arm_commander_node.py` | ArmMoveToPose / ArmTrajectoryShot Action Server | commander_test_gui | Gazebo / MuJoCo / 实物 |
+| 模式 `controller:=` | 节点 | 机制 | 环境 |
+| :--- | :--- | :--- | :--- |
+| `joint_position` | `joint_position_controller_node` (py) | 直接发 JointTrajectory | Gazebo / MuJoCo / 实物 |
+| `cartesian_moveit` | `cartesian_moveit_controller_node` (py) | MoveIt `compute_cartesian_path` | Gazebo / MuJoCo / 实物 |
+| `cartesian_realtime_ik` | `cartesian_realtime_ik_controller_node` (py) | 实时 IK（`/compute_ik`） | Gazebo / MuJoCo / 实物 |
+| `cartesian_trajectory` | `cartesian_trajectory_controller_node` (py) | Ruckig OTG → 批量 IK | Gazebo / MuJoCo / 实物 |
+| `spherical_orbit` | `spherical_orbit_controller_node` (py) | Ruckig 球面轨迹（相机始终对中） | Gazebo / MuJoCo / 实物 |
+| `cartesian_velocity` | `cartesian_velocity_controller_node` (py) | TwistStamped → MoveIt Servo / MuJoCo DLS | Gazebo / MuJoCo |
+| `visp_ibvs_control`¹ | `visp_ibvs_node` (C++) + `red_box_detector` (py) | ViSP + Pinocchio 视觉闭环 | Gazebo / 实物 |
+| `commander` | `arm_commander_node` (C++) | 状态机 + 3 Action（见下节） | Gazebo / MuJoCo / 实物 |
+
+> 前 6 种为 Python 调试模式（节点被 GUI 进程内 import，故保留 Python）；`commander`（产品中间层）与 `visp_ibvs_control`（视觉伺服）为 C++ 产品栈。
+> ¹ 实物后端该模式参数名为 `visp_ibvs`（见 `real.launch.py`）。
 
 ---
 
 ## 架构说明
 
-### 包职责分层
+整体设计的核心：**所有上层节点把命令汇聚到一条命令总线，所有后端把状态汇聚到一条反馈总线**。
+Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制逻辑对「跑仿真还是跑实物」无感。
+
+### 层级跨框架图
+
+纵向是抽象层级（L0→L4），横向标注每层用到的框架；两条总线横穿所有框架，是解耦上层与后端的关键。
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│  Director / 上层应用（外部调用方）                             │
-├──────────────────────────────────────────────────────────────┤
-│  commander/  — Arm Commander 中间层                           │
-│              ArmMoveToPose / ArmTrajectoryShot Action Server  │
-│              状态机（IDLE / MOVING / REACHED / ERROR）         │
-├──────────────────────────────────────────────────────────────┤
-│  controllers/ + vision/  — 控制模式节点 & IBVS 视觉伺服       │
-├──────────────────────────────────────────────────────────────┤
-│  robot_arm_interfaces  — 自定义消息 / 服务 / 动作定义          │
-├──────────────────────────────────────────────────────────────┤
-│  robot_arm_driver  — C++ 硬件驱动（arm_node / CAN）           │
-├──────────────────────────────────────────────────────────────┤
-│  Linux SocketCAN（can0）                                      │
-└──────────────────────────────────────────────────────────────┘
-  robot_arm_description  — URDF / SRDF / mesh / RViz（静态资源）
-  robot_arm_bringup      — launch / MoveIt config / sim（启动入口）
-  robot_arm_matlab       — MATLAB 离线分析工具
+═══════════════════════════════════════════════════════════════════════════════════
+ L4 应用/指挥层           外部业务 Director（下发拍摄/姿态任务、读状态）
+                          └ commander_test_gui —— 测试用 Director（走 ROS Action）
+───────────────────────────────────────────────────────────────────────────────────
+ L3 产品中间层            arm_commander_node (C++)  单一状态机 IDLE/MOVING/REACHED/…
+   [ROS2 Action/Srv/Topic]  ├ move_to_pose_server     姿态切换（关节 / IK 目标）
+                            ├ trajectory_shot_server  直线 / 球面运镜（Ruckig OTG）
+                            ├ track_target_server     视觉跟随（转调 visp 节点）
+                            ├ execution_monitor       到位 / 超时判定
+                            └ status_aggregator       10 Hz 汇聚 /robot_arm/arm_status
+───────────────────────────────────────────────────────────────────────────────────
+ L2 运动生成层  [MoveIt]        move_group   /compute_ik · /compute_cartesian_path
+                [MoveIt Servo]  servo_node   TwistStamped → 关节增量
+                [ROS2 / py]     controllers ×6  joint / cartesian_* / spherical_orbit
+                [ViSP+Pinocchio]visp_ibvs_node (C++)  IBVS 视觉闭环
+                                └ red_box_detector  图像 → /red_detector/feature
+═══════════════════════════════════════════════════════════════════════════════════
+   ▼ 命令总线  /arm_controller/joint_trajectory            (trajectory_msgs/JointTrajectory)
+              /arm_controller/follow_joint_trajectory     (Action，MoveIt 执行轨迹用)
+   ▲ 反馈总线  /joint_states                               (sensor_msgs/JointState, 6 轴)
+═══════════════════════════════════════════════════════════════════════════════════
+ L1 控制/后端层（三选一，总线接口一致，上层无感切换）
+   [Gazebo]  gazebo_ros2_control → arm_controller (JTC, 6 轴) → 物理仿真
+   [MuJoCo]  mujoco_node (py 桥)   订阅轨迹 / Servo，回填 joint_states + 相机图像
+   [Real]    arm_node (C++)  J1-3 → CANopen；并转发 J4-6 → /gimbal_controller/…
+             ros2_control + CameraHardwareInterface  J4-6 相机云台（HID）
+───────────────────────────────────────────────────────────────────────────────────
+ L0 物理/驱动     Gazebo 物理引擎   │   MuJoCo 物理   │   SocketCAN can0 + 云台 HID/V4L2
+═══════════════════════════════════════════════════════════════════════════════════
 ```
+
+> **实物 J1-3 驱动路径（唯一）：** ros2_control HAL —— `canopen_ros2_control/RobotSystem`
+> （ros2_canopen，CiA402/SocketCAN，总线配置见 `robot_arm_driver/arm_driver/config/canopen/bus.yml`）
+> + `arm_controller`(JTC) + 伴生 `arm_driver_services`；`real.launch.py` 单 controller_manager 管全 6 轴。
+> 驱动层自测：`ros2 launch robot_arm_driver test_arm.launch.py`（mock/vcan 假从站/真机三合一，
+> 详见 docs/ros2_canopen迁移.md）。旧 `arm_node`（自研 CANopenLinux 栈）已于 2026-07 下线。
 
 ### 关节划分
 
-| 关节 | 驱动方式 | 控制器 |
-| :--- | :--- | :--- |
-| Joint1–Joint3 | RB200-CA CANopen 电机（SocketCAN） | `arm_node`（JointTrajectory Action Server） |
-| Joint4–Joint6 | HID 相机云台（`robot_gimbal` 包） | `ros2_control` / `robot_gimbal_driver/CameraHardwareInterface` |
+实物为单 controller_manager + 单 `arm_controller`(JTC) claim 全 6 轴（跨两个硬件组件），
+命令入口与 Gazebo/MuJoCo 完全一致：`/arm_controller/joint_trajectory`（支持部分关节轨迹）。
 
-> **实物启动说明：** `real.launch.py` 同时启动 `robot_camera_node`（`robot_gimbal_node` 包）提供视频流，该节点仅占用 V4L2，与 ros2_control HID 接口无冲突。
+| 关节 | 驱动（硬件组件） | 反馈来源 | 命令入口 |
+| :--- | :--- | :--- | :--- |
+| Joint1–3 | `canopen_ros2_control/RobotSystem`（ros2_canopen，CiA402/SocketCAN） | `joint_state_broadcaster` → `/joint_states` | `/arm_controller/joint_trajectory` |
+| Joint4–6 | HID 相机云台（`robot_gimbal_driver/CameraHardwareInterface`） | `joint_state_broadcaster` → `/joint_states` | `/arm_controller/joint_trajectory`（同一控制器） |
 
-### 核心话题 & 动作
+### 各节点职责与数据传输
 
-| 名称 | 类型 | 用途 |
-| :--- | :--- | :--- |
-| `/joint_states` | `sensor_msgs/JointState` | 关节状态反馈 |
-| `/arm_controller/joint_trajectory` | `trajectory_msgs/JointTrajectory` | 轨迹命令输入 |
-| `/arm_controller/follow_joint_trajectory` | `control_msgs/FollowJointTrajectory` Action | MoveIt 轨迹执行 |
-| `/gimbal_controller/joint_trajectory` | `trajectory_msgs/JointTrajectory` | 相机云台命令 |
-| `/camera/image_raw/compressed` | `sensor_msgs/CompressedImage` | 相机视频流（来自 robot_gimbal_node） |
-| `/servo_node/delta_twist_cmds` | `geometry_msgs/TwistStamped` | MoveIt Servo 速度输入 |
-| `/arm_vel_cmd` | `geometry_msgs/TwistStamped` | IBVS / 速度控制指令输入 |
-| `/robot_arm/arm_status` | `robot_arm_interfaces/ArmStatus` | Commander 状态反馈（10 Hz） |
-| `/robot_arm/arm_move_to_pose` | `robot_arm_interfaces/ArmMoveToPose` Action | 单点位移指令（Commander） |
-| `/robot_arm/arm_trajectory_shot` | `robot_arm_interfaces/ArmTrajectoryShot` Action | 多段运镜轨迹指令（Commander） |
-| `/compute_ik` | `moveit_msgs/GetPositionIK` Service | 逆运动学求解 |
-| `/compute_cartesian_path` | `moveit_msgs/GetCartesianPath` Service | 笛卡尔路径规划 |
-| `/execute_trajectory` | `moveit_msgs/ExecuteTrajectory` Action | 轨迹执行 |
+| 节点（可执行） | 包·语言 | 职责 | 关键输入 → 输出 |
+| :--- | :--- | :--- | :--- |
+| `arm_commander_node` | robot_arm_node · C++ | 产品中间层状态机，把「拍摄/姿态」意图翻译成轨迹 | `/robot_arm/{move_to_pose,trajectory_shot,track_target}` Action、`/joint_states`、`/compute_ik` → `/arm_controller/joint_trajectory`、`/robot_arm/arm_status` |
+| `controllers ×6` | robot_arm_node · py | 调试控制：关节滑块 / 笛卡尔 / 实时 IK / Ruckig 点到点 / 球面运镜 / 速度点动 | GUI 滑块、`/joint_states`、`/compute_ik`·`/compute_cartesian_path` → `/arm_controller/joint_trajectory`（`cartesian_velocity` 改发 `/servo_node/delta_twist_cmds`） |
+| `visp_ibvs_node` | robot_arm_node · C++ | ViSP+Pinocchio 图像伺服，加权 Jacobian 直接算关节速度 | `/red_detector/feature`（或外部 `perception_topic`）、`/joint_states` → `/arm_controller/joint_trajectory` |
+| `red_box_detector` | robot_arm_node · py | OpenCV 红块检测，产出归一化像素特征 + 深度 | `/camera/camera_sensor/image_raw` → `/red_detector/feature`、`/red_detector/image` |
+| `mujoco_node` | robot_arm_mujoco · py | MuJoCo 仿真桥：物理步进 + 相机渲染 | `/arm_controller/joint_trajectory`、`/servo_node/delta_twist_cmds` → `/joint_states`、`/camera/camera_sensor/image_raw` |
+| `move_group` | MoveIt | 运动规划 / IK / 笛卡尔路径 | 规划请求 → `/compute_ik`、`/compute_cartesian_path` 服务；`/arm_controller/follow_joint_trajectory` 执行 |
+| `servo_node` | MoveIt Servo | 实时笛卡尔速度 → 关节增量 | `/servo_node/delta_twist_cmds` → `/arm_controller/joint_trajectory` |
+| `ros2_control_node` + `arm_controller`(JTC) | controller_manager · C++ | 【实物】单 CM 管全 6 轴：J1-3 CANopen（RobotSystem，position→IP 模式）+ J4-6 云台 HID（CameraHardwareInterface） | `/arm_controller/joint_trajectory`、`/arm_controller/follow_joint_trajectory` Action → CAN/HID + `/joint_states`(6 轴) |
+| `arm_driver_services` | robot_arm_driver · C++ | 【实物】使能/失能/故障恢复服务（转发 controller_manager 硬件组件状态） | `/arm_node/{enable,disable,recover}`(Trigger) → CM 组件 active↔inactive |
+| `arm_controller` (JTC) | Gazebo / ros2_control | 【Gazebo】6 轴关节轨迹控制器驱动仿真模型 | `/arm_controller/joint_trajectory` → 物理 + `/joint_states` |
+| `robot_camera_node` | robot_gimbal_node · C++ | 【实物】V4L2 视频流（仅占 V4L2，与 HID 不冲突） | 相机 → `/camera/image_raw/compressed` |
+| `robot_state_publisher` | ROS 2 | URDF + 关节角 → TF 树 | `/joint_states` → `/tf` |
+
+### 数据流（三条链路）
+
+- **命令下行**：上层节点（controllers / commander / visp / servo）统一发 `/arm_controller/joint_trajectory`；后端（Gazebo `arm_controller` / MuJoCo `mujoco_node` / 实物 `arm_controller`(单 CM 全 6 轴)）择一消费。MoveIt 规划结果走 `/arm_controller/follow_joint_trajectory` Action。
+- **状态上行**：后端统一回填 `/joint_states`（6 轴，实物由单 `joint_state_broadcaster` 汇聚两个硬件组件）→ 供上层闭环、`robot_state_publisher` 出 TF、commander 汇聚成 `/robot_arm/arm_status`（10 Hz）。
+- **视觉闭环**：相机图像（仿真 `/camera/camera_sensor/image_raw`，实物 `/camera/image_raw/compressed`）→ `red_box_detector` → `/red_detector/feature`（`geometry_msgs/PointStamped`，x/y 为归一化像素、z 为深度）→ `visp_ibvs_node` → 命令总线。
 
 ---
 
 ## 主要依赖
 
-依赖分三层：**系统基础** → **ROS 2（apt）** → **Python（pip / venv）**。
-ROS 包由 `source /opt/ros/humble/setup.bash` 提供；Python 第三方库装在
-`--system-site-packages` 的 venv 中，叠加在系统 ROS 之上。
+**系统基础**：Ubuntu 22.04 + ROS 2 Humble + Python 3.10；`colcon` / `ament_cmake` 编译（接口包用 `rosidl`）；C++ 驱动基于内核 SocketCAN + 随包编译的 CANopen 协议栈。
 
-### 系统基础
+**ROS 2（apt，不进 venv）**：`rclcpp` / `rclpy` / `rclcpp_action`、消息包（`sensor_msgs` `geometry_msgs` `trajectory_msgs` `control_msgs` `moveit_msgs` 等）、`ros-humble-moveit` + `pick_ik`、`ros2_control` / `ros2_controllers`、`gazebo_ros` / `gazebo_ros2_control`、`cv_bridge` / `image_transport`、`tf2_ros` / `tf-transformations`、`robot_state_publisher` / `xacro`、`robot_gimbal_driver`（云台插件）、`python3-tk`。
 
-| 项目 | 要求 |
-| :--- | :--- |
-| OS | Ubuntu 22.04 LTS |
-| ROS 2 | Humble |
-| Python | 3.10 |
-| 编译 | `colcon` + `ament_cmake`；接口包用 `rosidl` |
-| C++ 驱动底层 | SocketCAN（内核自带）+ 随包编译的 `robot_arm_driver/src/CANopenLinux/` 协议栈 |
+**Python（pip，见 [`requirements.txt`](requirements.txt)）** —— 核心运行依赖：
 
-### ROS 2 依赖（apt，不进 venv）
+| 依赖 | 版本 | 用途 |
+| :--- | :--- | :--- |
+| `numpy` | 1.26.4（**必须 <2**） | 数值计算（全包） |
+| `PyYAML` | 5.4.1 | 配置读取 |
+| `ruckig` | 0.17.3 | 在线轨迹生成（jerk-limited OTG） |
+| `opencv-python-headless` | 4.13.0.92 | 视觉 / IBVS / 红盒检测 |
+| `PyQt5` | 5.15.11 | 电机测试 / 滑块 GUI |
 
-| 依赖 | 用途 |
-| :--- | :--- |
-| `rclcpp` / `rclpy` / `rclcpp_action` | ROS 2 客户端库 |
-| 消息：`sensor_msgs` `std_msgs` `std_srvs` `geometry_msgs` `trajectory_msgs` `control_msgs` `diagnostic_msgs` `moveit_msgs` | 接口/通信 |
-| `ros-humble-moveit`（`moveit_core` / `moveit_ros_planning`） | 运动规划与 MoveIt 集成 |
-| `pick_ik` | IK 求解器 |
-| `ros2_control` / `ros2_controllers` | 控制器管理（Gazebo / 实物） |
-| `gazebo_ros` / `gazebo_ros2_control` | Gazebo ↔ ROS 2 桥接 |
-| `cv_bridge` / `image_transport` | 图像采集与处理 |
-| `tf2_ros` / `ros-humble-tf-transformations` / `message_filters` | TF 变换与消息同步 |
-| `robot_state_publisher` / `xacro` | 模型发布 |
-| `launch` / `launch_ros` / `ament_index_python` | 启动系统 |
-| `robot_gimbal_driver` | 相机云台 ros2_control 插件（Joint4-6） |
-| `python3-tk`（apt） | tkinter GUI 框架 |
-
-### Python 依赖（pip，见 [`requirements.txt`](requirements.txt)）
-
-已按实际 `import` 精简：`scipy` / `matplotlib` / `pinocchio` 在 robot_arm 中
-无任何引用，**不需要**（它们存在于共享 venv 仅因别的项目）。
-
-**核心运行依赖**（机械臂控制 / 视觉 / GUI 必需）：
-
-| 依赖 | 版本 | 用途 | 子包 |
-| :--- | :--- | :--- | :--- |
-| `numpy` | 1.26.4（**必须 <2**） | 数值计算 | 全部 |
-| `PyYAML` | 5.4.1 | 配置读取 | node |
-| `ruckig` | 0.17.3 | 在线轨迹生成（jerk-limited OTG） | node |
-| `opencv-python-headless` | 4.13.0.92 | `cv2` 视觉 / IBVS / 红盒检测 | node |
-| `PyQt5` | 5.15.11 | 电机测试 / 滑块控制 GUI | driver / node |
-
-**可选依赖**（按需安装；不跑对应功能可不装）：
-
-| 依赖 | 版本 | 用途 | 子包 |
-| :--- | :--- | :--- | :--- |
-| `mujoco` | 3.8.1 | MuJoCo 仿真（只跑实物/Gazebo 可不装） | node |
-| `gymnasium` | 1.0.0 | RL 环境 | rl |
-| `stable-baselines3` | 2.4.1 | SAC 训练 | rl |
-| `tensorboard` | 2.20.0 | 训练日志 | rl |
-| `torch` | 2.12.0（默认 CPU 版） | RL 后端 | rl |
+> 可选：`mujoco` 3.8.1（跑 MuJoCo 仿真时）；RL 训练（`robot_arm_rl`）另需 `gymnasium` / `stable-baselines3` / `torch`(CPU) / `tensorboard`。
+> `scipy` / `matplotlib` / `pinocchio` 在本包无 `import`，无需安装（存在于共享 venv 仅因别的项目）。
 
 ---
 
 ## 环境配置
 
-提供一键脚本，自动创建 `--system-site-packages` 的 venv 并安装上表的 pip 依赖：
+一键脚本创建 `--system-site-packages` 的 venv 并装齐 pip 依赖（source ROS → 建/复用 venv → 装 CPU 版 `torch` + `requirements.txt` → 校验可 import 且 `numpy<2`）。apt 前置依赖（moveit / ros2_control / gazebo 等）需自行装好，脚本只检查不安装。
 
 ```bash
-# 默认在工作区根目录使用 .venv（复用现有共享 venv）
 bash src/E7009/robot_arm/setup_venv.sh
-
-# 可选：指定 venv 路径 / ROS setup
-VENV_DIR=/path/to/venv ROS_SETUP=/opt/ros/humble/setup.bash \
-  bash src/E7009/robot_arm/setup_venv.sh
+# 可选指定路径：VENV_DIR=/path/to/venv ROS_SETUP=/opt/ros/humble/setup.bash bash .../setup_venv.sh
 ```
 
-脚本会：source ROS Humble → 创建/复用 venv（带 `--system-site-packages`，
-保证 `rclpy` 等可用）→ 安装 CPU 版 `torch` + `requirements.txt` → 校验关键库
-可 import 并强制检查 `numpy<2`。apt 前置依赖（moveit / tf-transformations /
-ros2-control / gazebo 等）需提前装好，脚本只检查不自动安装。
-
-> 注：`torch` 默认装 CPU 版以复现已验证环境；如需 GPU，改用对应 CUDA 轮子。
-
-使用环境时（每个新终端）：
+每个新终端：
 
 ```bash
 source /opt/ros/humble/setup.bash
 source .venv/bin/activate
-source install/setup.bash   # 编译后才能用本工作区的包
+source install/setup.bash   # 编译后
 ```
 
 ---
@@ -294,7 +197,7 @@ source install/setup.bash   # 编译后才能用本工作区的包
 # 编译所有机械臂相关包
 colcon build --symlink-install --packages-select \
   robot_arm_interfaces robot_arm_driver robot_arm_description \
-  robot_arm_bringup robot_arm_node
+  robot_arm_bringup robot_arm_node robot_arm_gazebo robot_arm_mujoco
 
 # 生效
 source install/setup.bash
@@ -304,39 +207,22 @@ source install/setup.bash
 
 ## Arm Commander 接口参考
 
-Arm Commander 是机械臂的中间层状态机，对外暴露两个 Action 接口：
-`ArmMoveToPose`（单点位移）和 `ArmTrajectoryShot`（多段运镜轨迹）。
+Arm Commander（`controller:=commander`）是中间层状态机，对外暴露 3 个 Action —— `ArmMoveToPose`（姿态切换）、`ArmTrajectoryShot`（运镜轨迹）、`ArmTrackTarget`（视觉跟随），4 个 Service（`enable` / `stop` / `reset_error` / `homing`），并以 10 Hz 发布 `/robot_arm/arm_status`。
 
-### 前置条件
+### 启动与基础控制
 
 ```bash
-# 终端 1：启动 commander 模式
 ros2 launch robot_arm_bringup real.launch.py controller:=commander
-
-# 终端 2：使能伺服
 ros2 service call /robot_arm/enable robot_arm_interfaces/srv/ArmEnable "{enable: true}"
+ros2 topic echo  /robot_arm/arm_status --once      # 确认 error_code=0
 
-# 确认状态正常（error_code 应为 0）
-ros2 topic echo /robot_arm/arm_status --once
-```
-
-### 状态监控与基础控制
-
-```bash
-# 实时状态
-ros2 topic echo /robot_arm/arm_status
-
-# 使能 / 下电
-ros2 service call /robot_arm/enable robot_arm_interfaces/srv/ArmEnable "{enable: true}"
-ros2 service call /robot_arm/enable robot_arm_interfaces/srv/ArmEnable "{enable: false}"
-
-# 急停 / 清除故障 / 回零
+# 急停 / 清故障 / 回零
 ros2 service call /robot_arm/stop        robot_arm_interfaces/srv/ArmStop {}
 ros2 service call /robot_arm/reset_error robot_arm_interfaces/srv/ArmResetError {}
 ros2 service call /robot_arm/homing      robot_arm_interfaces/srv/ArmHoming {}
 ```
 
-`arm_status` 字段说明：
+`arm_status` 字段：
 
 | 字段 | 含义 | 枚举值 |
 | :--- | :--- | :--- |
@@ -347,74 +233,34 @@ ros2 service call /robot_arm/homing      robot_arm_interfaces/srv/ArmHoming {}
 
 ### ArmMoveToPose — 姿态切换
 
-接口：`/robot_arm/move_to_pose`，速度枚举：`transition_speed` — 0=SLOW  1=NORMAL  2=FAST
+`/robot_arm/move_to_pose`；`target_pose_state`: 0=STOWED 1=OBSERVE 2=SHOOTING，`transition_speed`: 0=SLOW 1=NORMAL 2=FAST。SHOOTING 需给 `target_pose`（XYZ 单位 m，RPY 单位 °）；任意命令加 `return_to_start: true` 执行完自动回起点。
 
 ```bash
-# STOWED 收纳位
-ros2 action send_goal /robot_arm/move_to_pose \
-  robot_arm_interfaces/action/ArmMoveToPose \
-  "{target_pose_state: 0, transition_speed: 1, return_to_start: false}"
-
-# OBSERVE 观察位
-ros2 action send_goal /robot_arm/move_to_pose \
-  robot_arm_interfaces/action/ArmMoveToPose \
-  "{target_pose_state: 1, transition_speed: 1, return_to_start: false}"
-
-# SHOOTING 自定义拍摄位（XYZ 单位：m；Roll/Pitch/Yaw 单位：°）
-ros2 action send_goal /robot_arm/move_to_pose \
-  robot_arm_interfaces/action/ArmMoveToPose \
+ros2 action send_goal /robot_arm/move_to_pose robot_arm_interfaces/action/ArmMoveToPose \
   "{target_pose_state: 2, transition_speed: 1, return_to_start: false,
-    target_pose: {x: 0.30, y: 0.00, z: 0.50, roll: 90.0, pitch: 10.0, yaw: 0.0}}"
-
-# 到位后自动返回起点
-ros2 action send_goal /robot_arm/move_to_pose \
-  robot_arm_interfaces/action/ArmMoveToPose \
-  "{target_pose_state: 1, transition_speed: 1, return_to_start: true}"
+    target_pose: {x: 0.30, y: 0.0, z: 0.50, roll: 90.0, pitch: 10.0, yaw: 0.0}}"
 ```
 
 ### ArmTrajectoryShot — 轨迹运镜
 
-接口：`/robot_arm/trajectory_shot`，运动类型：`motion_type` — 0=LINEAR  1=ORBIT
+`/robot_arm/trajectory_shot`；`motion_type`: 0=LINEAR（直线）1=ORBIT（球面环绕，末端始终朝向球心）。
 
 ```bash
-# 直线运镜 LINEAR：从起始位姿平滑运动到终止位姿
-ros2 action send_goal /robot_arm/trajectory_shot \
-  robot_arm_interfaces/action/ArmTrajectoryShot \
+# LINEAR：起→止位姿平滑直线
+ros2 action send_goal /robot_arm/trajectory_shot robot_arm_interfaces/action/ArmTrajectoryShot \
   "{motion_type: 0, transition_speed: 1, return_to_start: false,
     linear_start_pose: {x: 0.30, y: 0.0, z: 0.60, roll: 90.0, pitch: 0.0, yaw: 0.0},
     linear_end_pose:   {x: 0.30, y: 0.0, z: 0.40, roll: 90.0, pitch: 0.0, yaw: 0.0}}"
 
-# 球面环绕运镜 ORBIT：末端始终朝向球心
-ros2 action send_goal /robot_arm/trajectory_shot \
-  robot_arm_interfaces/action/ArmTrajectoryShot \
+# ORBIT：绕球心环绕（起止半径不同即变焦距）
+ros2 action send_goal /robot_arm/trajectory_shot robot_arm_interfaces/action/ArmTrajectoryShot \
   "{motion_type: 1, transition_speed: 1, return_to_start: false,
-    orbit_center_x: 0.60, orbit_center_y: 0.00, orbit_center_z: 0.50,
+    orbit_center_x: 0.60, orbit_center_y: 0.0, orbit_center_z: 0.50,
     azimuth_start_deg: -30.0, elevation_start_deg: -10.0, radius_start_m: 0.45,
     azimuth_end_deg:    30.0, elevation_end_deg:   30.0,  radius_end_m:   0.20}"
 ```
 
-ORBIT 参数说明：
-
-| 参数 | 含义 | 单位 |
-| :--- | :--- | :--- |
-| `orbit_center_x/y/z` | 被摄主体位置（球心） | m |
-| `azimuth_start/end_deg` | 起止水平方位角 | ° |
-| `elevation_start/end_deg` | 起止俯仰角 | ° |
-| `radius_start/end_m` | 起止半径（可实现变焦距效果） | m |
-
-`return_to_start: true` 可加入任意轨迹命令，执行完毕后自动返回起点。
-
-### 推荐测试顺序
-
-```text
-使能伺服 → echo arm_status 确认 error_code=0
-  → MTP OBSERVE（验证基本运动）
-  → MTP SHOOTING（验证 IK 和自定义位姿）
-  → TSS LINEAR（验证直线插值）
-  → TSS ORBIT（验证 Ruckig 环绕）
-  → 急停测试
-  → 下电
-```
+> ORBIT 参数：`orbit_center_*`=球心/被摄主体（m），`azimuth/elevation_*_deg`=起止方位角/俯仰角（°），`radius_*_m`=起止半径（m）。
 
 ### 常见问题
 

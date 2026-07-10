@@ -16,17 +16,24 @@
                ibvs_control | visp_ibvs(_control) | commander
   gui          true/false，是否起 GUI（backend=gazebo/real 生效）
   world        Gazebo 世界名，不含 .world（仅 backend=gazebo 生效）
+  log_level    第三方底座节点（rviz2/move_group/servo/spawner/rsp 等）日志级别，
+               默认 warn 降噪；调试时 log_level:=info 恢复。自家业务节点恒为 info。
+               完整日志始终落 ~/.ros/log/<run>/launch.log。
 
-分层结构（PR-4）：
+分层结构（PR-4，2026-07-10 起仿真后端拆为独立包）：
   bringup.launch.py              ← 本文件：按 backend 分发、透传参数，别的什么都不做
-    └─ {gazebo,mujoco,real}.launch.py   ← 各后端只管「底座」：仿真器/实物驱动 + 起该后端的控制器
-         └─ _arm_launch_common.py       ← 三后端共用的「上层栈」节点定义：
-                                            controller GUI / move_group / servo / commander /
-                                            ibvs / visp / 安全预移动
+    ├─ robot_arm_gazebo/launch/gazebo.launch.py   ← Gazebo 底座（含 worlds/models 资产）
+    ├─ robot_arm_mujoco/launch/mujoco.launch.py   ← MuJoCo 底座（含 mujoco_node 仿真桥）
+    └─ 本包 launch/real.launch.py                 ← 实物底座
+         └─ _arm_launch_common.py（本包）         ← 三后端共用的「上层栈」节点定义：
+                                                     controller GUI / move_group / servo /
+                                                     commander / ibvs / visp / 安全预移动
   上层只写一份、由三后端复用，从源头消除「三处各抄一遍 → 必然漂移」。
 
 参数按各后端声明的项透传（未声明的不透传，避免 launch 报未知参数）：
-  backend=gazebo → controller, gui, world      backend=mujoco → controller      backend=real → controller, gui
+  backend=gazebo → controller, gui, world, log_level
+  backend=mujoco → controller, log_level
+  backend=real   → controller, gui, log_level
 
 @copyright Copyright (c) 2026 eMeet
 """
@@ -42,9 +49,6 @@ from launch.substitutions import LaunchConfiguration, PythonExpression
 
 
 def generate_launch_description():
-    launch_dir = os.path.join(
-        get_package_share_directory('robot_arm_bringup'), 'launch')
-
     backend_arg = DeclareLaunchArgument(
         'backend', default_value='gazebo',
         description='后端: gazebo（默认，sim 主路）| mujoco | real（实物）')
@@ -59,32 +63,39 @@ def generate_launch_description():
     world_arg = DeclareLaunchArgument(
         'world', default_value='emeet_arm',
         description='Gazebo 世界名，不含 .world（仅 backend=gazebo 生效）: emeet_arm | ibvs_tracking_test')
+    log_level_arg = DeclareLaunchArgument(
+        'log_level', default_value='warn',
+        description='第三方底座节点日志级别，默认 warn 降噪，调试时设 info（透传后端）')
 
     backend    = LaunchConfiguration('backend')
     controller = LaunchConfiguration('controller')
     gui        = LaunchConfiguration('gui')
     world      = LaunchConfiguration('world')
+    log_level  = LaunchConfiguration('log_level')
 
     def _is_backend(name):
         return IfCondition(PythonExpression(["'", backend, "' == '", name, "'"]))
 
-    def _include(filename, launch_arguments, name):
+    def _include(package, filename, launch_arguments, name):
         return IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(os.path.join(launch_dir, filename)),
+            PythonLaunchDescriptionSource(os.path.join(
+                get_package_share_directory(package), 'launch', filename)),
             launch_arguments=launch_arguments,
             condition=_is_backend(name))
 
-    gazebo = _include('gazebo.launch.py',
-                      {'controller': controller, 'gui': gui, 'world': world}.items(),
+    gazebo = _include('robot_arm_gazebo', 'gazebo.launch.py',
+                      {'controller': controller, 'gui': gui, 'world': world,
+                       'log_level': log_level}.items(),
                       'gazebo')
-    mujoco = _include('mujoco.launch.py',
-                      {'controller': controller}.items(),
+    mujoco = _include('robot_arm_mujoco', 'mujoco.launch.py',
+                      {'controller': controller, 'log_level': log_level}.items(),
                       'mujoco')
-    real   = _include('real.launch.py',
-                      {'controller': controller, 'gui': gui}.items(),
+    real   = _include('robot_arm_bringup', 'real.launch.py',
+                      {'controller': controller, 'gui': gui,
+                       'log_level': log_level}.items(),
                       'real')
 
     return LaunchDescription([
-        backend_arg, controller_arg, gui_arg, world_arg,
+        backend_arg, controller_arg, gui_arg, world_arg, log_level_arg,
         gazebo, mujoco, real,
     ])

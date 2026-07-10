@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_arm_mujoco</name>
+  <version>1.0.0</version>
+  <description>MuJoCo simulation backend for eMeet robotic arm (mujoco_node bridge, launch)</description>
+  <maintainer email="support@emeet.com">EMEET Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 复用 robot_arm_bringup 的 _arm_launch_common.py / camera_view.launch.py /
+       config/moveit（bringup 反向 include 本包 launch，但为避免循环依赖，只声明本方向）。
+       MJCF 模型 xml/eMeetArm.xml 在 robot_arm_description。
+       python 的 mujoco 库走 pip（见 robot_arm/requirements.txt），不在 rosdep 声明。 -->
+  <exec_depend>robot_arm_bringup</exec_depend>
+  <exec_depend>robot_arm_description</exec_depend>
+  <exec_depend>robot_arm_node</exec_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>xacro</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

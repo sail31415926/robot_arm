@@ -15,8 +15,8 @@
 
 用法：
   ros2 run robot_arm_node cartesian_moveit_gui
-  ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian
-  ros2 launch robot_arm_bringup mujoco.launch.py controller:=cartesian
+  ros2 launch robot_arm_gazebo gazebo.launch.py controller:=cartesian
+  ros2 launch robot_arm_mujoco mujoco.launch.py controller:=cartesian
   ros2 launch robot_arm_bringup real.launch.py   controller:=cartesian
 
 @copyright Copyright (c) 2026 eMeet

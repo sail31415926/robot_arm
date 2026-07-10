@@ -15,8 +15,8 @@
 
 用法：
   ros2 run robot_arm_node cartesian_realtime_ik_gui
-  ros2 launch robot_arm_bringup gazebo.launch.py controller:=realtime
-  ros2 launch robot_arm_bringup mujoco.launch.py controller:=realtime
+  ros2 launch robot_arm_gazebo gazebo.launch.py controller:=realtime
+  ros2 launch robot_arm_mujoco mujoco.launch.py controller:=realtime
   ros2 launch robot_arm_bringup real.launch.py   controller:=realtime
 
 @copyright Copyright (c) 2026 eMeet

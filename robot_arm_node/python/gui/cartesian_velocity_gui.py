@@ -11,8 +11,8 @@
 
 用法：
   ros2 run robot_arm_node cartesian_velocity_gui
-  ros2 launch robot_arm_bringup gazebo.launch.py controller:=velocity
-  ros2 launch robot_arm_bringup mujoco.launch.py controller:=velocity
+  ros2 launch robot_arm_gazebo gazebo.launch.py controller:=velocity
+  ros2 launch robot_arm_mujoco mujoco.launch.py controller:=velocity
 
 @copyright Copyright (c) 2026 eMeet
 """

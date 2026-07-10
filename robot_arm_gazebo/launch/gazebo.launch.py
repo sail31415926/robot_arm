@@ -1,14 +1,16 @@
 """
 @file gazebo.launch.py
-@brief bringup 的 Gazebo 后端 —— 只管 Gazebo 底座，上层栈复用共享工厂
-@version 1.5
-@date 2026-07-01
+@brief Gazebo 后端底座（robot_arm_gazebo 包）—— 上层栈复用 bringup 共享工厂
+@version 1.6
+@date 2026-07-10
 
-@note  本文件是整机启动的 gazebo 后端（统一入口见 bringup.launch.py，backend:=gazebo）。
+@note  本文件是整机启动的 gazebo 后端（统一入口见 robot_arm_bringup 的 bringup.launch.py，
+       backend:=gazebo）。v1.6 起从 robot_arm_bringup 拆出独立包 robot_arm_gazebo，
+       世界/模型资产随本包安装（worlds/ models/）。
        职责限于「底座」：gzserver/gzclient + spawn_entity + gazebo_ros2_control 起 6 轴控制器 +
        Gazebo 环境/世界。上层栈（controller GUI / servo / commander / ibvs / visp / 安全预移动）
-       的节点定义复用 launch/_arm_launch_common.py，与 mujoco/real 共用一份，避免各写一遍。
-       move_group 仍走本包 moveit.launch.py（含 rviz），为 gazebo 特有。
+       的节点定义复用 robot_arm_bringup 的 launch/_arm_launch_common.py，与 mujoco/real 共用一份。
+       move_group 走 robot_arm_bringup 的 moveit.launch.py（含 rviz）。
 
 @details 启动以下节点：
          - gzserver：物理仿真服务端（无 GPU 渲染，避免双窗口）
@@ -30,17 +32,17 @@
          MoveIt 由本文件自动 include，无需额外启动 moveit.launch.py。
 
          示例：
-           ros2 launch robot_arm_bringup gazebo.launch.py                                                                         # 默认 joint_position
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=joint_position                                              # 关节滑块
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_moveit                                            # MoveIt 笛卡尔直线
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_realtime_ik                                       # 滑块即时 IK
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_trajectory                                        # Ruckig 点到点+环绕
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=spherical_orbit                                             # 球面轨道运镜
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=cartesian_velocity                                          # 笛卡尔速度（手动点动）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=visp_ibvs_control                                          # 红色方块 IBVS（ViSP C++ 版，默认世界）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=visp_ibvs_control world:=ibvs_tracking_test                 # 红色方块 IBVS（U 形桌+圆周移动方块，推荐跟踪测试）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander                                                   # Arm Commander 中间层（含 GUI）
-           ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander gui:=false                                        # Arm Commander 中间层（无 GUI）
+           ros2 launch robot_arm_gazebo gazebo.launch.py                                                                          # 默认 joint_position
+           ros2 launch robot_arm_gazebo gazebo.launch.py controller:=joint_position                                               # 关节滑块
+           ros2 launch robot_arm_gazebo gazebo.launch.py controller:=cartesian_moveit                                             # MoveIt 笛卡尔直线
+           ros2 launch robot_arm_gazebo gazebo.launch.py controller:=cartesian_realtime_ik                                        # 滑块即时 IK
+           ros2 launch robot_arm_gazebo gazebo.launch.py controller:=cartesian_trajectory                                         # Ruckig 点到点+环绕
+           ros2 launch robot_arm_gazebo gazebo.launch.py controller:=spherical_orbit                                              # 球面轨道运镜
+           ros2 launch robot_arm_gazebo gazebo.launch.py controller:=cartesian_velocity                                           # 笛卡尔速度（手动点动）
+           ros2 launch robot_arm_gazebo gazebo.launch.py controller:=visp_ibvs_control                                           # 红色方块 IBVS（ViSP C++ 版，默认世界）
+           ros2 launch robot_arm_gazebo gazebo.launch.py controller:=visp_ibvs_control world:=ibvs_tracking_test                  # 红色方块 IBVS（U 形桌+圆周移动方块，推荐跟踪测试）
+           ros2 launch robot_arm_gazebo gazebo.launch.py controller:=commander                                                    # Arm Commander 中间层（含 GUI）
+           ros2 launch robot_arm_gazebo gazebo.launch.py controller:=commander gui:=false                                         # Arm Commander 中间层（无 GUI）
 
          world 参数（默认 emeet_arm）：
            world:=emeet_arm            → 标准工作台场景（默认）
@@ -66,8 +68,9 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 
-# 上层栈节点工厂（与 mujoco/real 共用同一份定义）
-sys.path.insert(0, os.path.dirname(__file__))
+# 上层栈节点工厂（在 robot_arm_bringup/launch 下，与 mujoco/real 共用同一份定义）
+sys.path.insert(0, os.path.join(
+    get_package_share_directory('robot_arm_bringup'), 'launch'))
 import _arm_launch_common as common   # noqa: E402
 
 
@@ -79,11 +82,12 @@ def _load_yaml(path):
 def generate_launch_description():
     desc_share       = get_package_share_directory('robot_arm_description')
     bringup_share    = get_package_share_directory('robot_arm_bringup')
+    gazebo_share     = get_package_share_directory('robot_arm_gazebo')
     arm_share_parent = os.path.dirname(desc_share)   # Gazebo 解析 package://robot_arm_description/... 需要
     moveit_cfg       = os.path.join(bringup_share, 'config', 'moveit')
     xacro_path        = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
     controllers_yaml_path = os.path.join(desc_share, 'config', 'controllers.yaml')
-    worlds_dir    = os.path.join(bringup_share, 'sim', 'gazebo', 'worlds')
+    worlds_dir    = os.path.join(gazebo_share, 'worlds')
     gazebo_ros_share = get_package_share_directory('gazebo_ros')
 
     robot_description = xacro.process_file(
@@ -122,12 +126,19 @@ def generate_launch_description():
     )
     world_arg = DeclareLaunchArgument(
         'world', default_value='emeet_arm',
-        description='世界文件名（不含 .world 后缀），位于 sim/gazebo/worlds/ 下。'
+        description='世界文件名（不含 .world 后缀），位于 robot_arm_gazebo/worlds/ 下。'
                     '示例: emeet_arm | ibvs_tracking_test',
+    )
+    log_level_arg = DeclareLaunchArgument(
+        'log_level', default_value='warn',
+        description='第三方底座节点（rviz2/move_group/servo/spawner/rsp 等）日志级别，'
+                    '默认 warn 降噪，调试时设 info；自家业务节点不受影响',
     )
     ctrl       = LaunchConfiguration('controller')
     gui        = LaunchConfiguration('gui')
     world_name = LaunchConfiguration('world')
+    log_level  = LaunchConfiguration('log_level')
+    base_log   = common.log_args(log_level)   # 第三方底座节点统一追加
     world_file = PathJoinSubstitution([worlds_dir, [world_name, '.world']])
 
     joint_position_ctrl    = common.gui_node(ctrl, 'joint_position',        'joint_position_gui')
@@ -157,7 +168,8 @@ def generate_launch_description():
     moveit_launch_path = os.path.join(bringup_share, 'launch', 'moveit.launch.py')
     moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(moveit_launch_path),
-        launch_arguments={'use_sim_time': 'true', 'rviz': 'true'}.items(),
+        launch_arguments={'use_sim_time': 'true', 'rviz': 'true',
+                          'log_level': log_level}.items(),
         condition=needs_moveit,
     )
 
@@ -173,6 +185,7 @@ def generate_launch_description():
             executable='servo_node_main',
             name='servo_node',
             output='screen',
+            arguments=base_log,
             parameters=[
                 servo_params,
                 {'robot_description': robot_description,
@@ -252,32 +265,34 @@ def generate_launch_description():
         executable='robot_state_publisher',
         name='robot_state_publisher',
         output='screen',
+        arguments=base_log,
         parameters=[{'robot_description': robot_description, 'use_sim_time': True}],
     )
 
     spawn_entity = Node(
         package='gazebo_ros',
         executable='spawn_entity.py',
-        arguments=['-topic', 'robot_description', '-entity', 'eMeetArm'],
+        arguments=['-topic', 'robot_description', '-entity', 'eMeetArm'] + base_log,
         output='screen',
     )
 
     joint_state_broadcaster_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['joint_state_broadcaster', '--controller-manager-timeout', '30'],
+        arguments=['joint_state_broadcaster', '--controller-manager-timeout', '30'] + base_log,
     )
 
     arm_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['arm_controller', '--controller-manager-timeout', '30'],
+        arguments=['arm_controller', '--controller-manager-timeout', '30'] + base_log,
     )
 
     camera_view = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(bringup_share, 'launch', 'camera_view.launch.py')
         ),
+        launch_arguments={'log_level': log_level}.items(),
         condition=IfCondition(
             PythonExpression(["'", ctrl, "' not in ['visp_ibvs_control']"])
         ),
@@ -287,11 +302,12 @@ def generate_launch_description():
         controller_arg,
         gui_arg,
         world_arg,
+        log_level_arg,
         SetEnvironmentVariable('GAZEBO_MODEL_DATABASE_URI', ''),
         SetEnvironmentVariable(
             name='GAZEBO_MODEL_PATH',
             value=(arm_share_parent
-                   + ':' + os.path.join(bringup_share, 'sim', 'gazebo', 'models')
+                   + ':' + os.path.join(gazebo_share, 'models')
                    + ':/usr/share/gazebo-11/models'),
         ),
         gzserver,

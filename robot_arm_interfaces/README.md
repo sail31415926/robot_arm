@@ -38,9 +38,52 @@
 
 - **运动类（action / topic）** 走 Director ↔ Arm Commander（需要 IK / 规划）。
 - **运维类（service）** 由 Director 直达 Driver（上电 / 回零 / 清错是硬件操作）。
-- **ArmStop** 同时作用于 Commander（软停 + 状态复位）。
+- **ArmStop** 作用于 Commander（软停，MOVING → STOPPED）；**ArmResetError** 在透传驱动层
+  recover 的同时，把 Commander 从 ERROR / STOPPED 复位回 IDLE。
 - Arm Commander 向下用关节级标准消息（`JointTrajectory`），
   向上把驱动反馈（`JointState` / TF2）合成为语义级 `ArmStatus`。
+
+## Commander 状态机
+
+Arm Commander 内部维护一个五态状态机（`CommanderState`），决定是否接受新 goal、
+以及 `ArmStatus.is_moving` / `command_result` 的取值：
+
+| 状态 | 值 | 含义 |
+| --- | --- | --- |
+| `IDLE` | 0 | 空闲，可接受新 goal |
+| `MOVING` | 1 | 正在执行 goal（MoveToPose / TrajectoryShot / TrackTarget），`is_moving=true` |
+| `REACHED` | 2 | 上一条 goal 成功到位；等同空闲，可直接接受新 goal |
+| `STOPPED` | 3 | 被 `ArmStop` 急停；拒绝新 goal，需 `ArmResetError` 复位 |
+| `ERROR` | 4 | 执行失败（超时 / 驱动故障 / 异常）；拒绝新 goal，需 `ArmResetError` 复位 |
+
+```text
+                 goal 接受              成功
+  IDLE / REACHED ─────────▶ MOVING ──────────▶ REACHED（视同空闲）
+       ▲  ▲                  │ │
+       │  │  取消（各 action） │ │
+       │  │  IK 无解（仅 MoveToPose）
+       │  └──────────────────┘ │
+       │                       ├── ArmStop ───▶ STOPPED ──┐
+       │                       └── 失败/异常 ──▶ ERROR ────┤
+       └───────────────── ArmResetError ──────────────────┘
+```
+
+转换规则（与代码一一对应，见 `arm_commander_node.cpp`）：
+
+- **接受 goal**：仅当状态为 `IDLE` 或 `REACHED`（两者都算"空闲"）；否则直接 abort 该 goal。
+  三个 action 共用此规则，同一时刻最多一条 goal 在执行。
+- **MOVING → REACHED**：goal 成功完成，`command_result = SUCCEEDED`。
+- **MOVING → IDLE**：goal 被上层取消（`exit_reason="cancelled"`），或 **MoveToPose** 目标
+  IK 无解（`exit_reason="unreachable"`）；`command_result = ABORTED`。
+  注意：**TrajectoryShot 的起始点 IK 无解不走此分支**——`"unreachable"` 会落入
+  失败分支转 ERROR（`error_code=ERR_DRIVER`），需 `ArmResetError` 复位。
+- **MOVING → STOPPED**：执行期间收到 `ArmStop`（软停轨迹 + goal abort，
+  `command_result = ABORTED`）。非 MOVING 状态下调用 `ArmStop` 为空操作（应答"无需急停"）。
+- **MOVING → ERROR**：执行失败（超时 / 限位 / 驱动故障）或抛异常；
+  `command_result = FAILED`，同时置 `ArmStatus.error_code`。
+- **STOPPED / ERROR → IDLE**：仅由 `ArmResetError` 触发 —— 先透传驱动层 recover，
+  再复位 Commander 状态、清 `error_code`、`command_result` 回 `RESULT_NONE`。
+  在其余状态下调用 `ArmResetError` 只透传驱动层 recover，不改变 Commander 状态。
 
 ## 通信模式选择原则
 
@@ -108,8 +151,8 @@ bool     camera_ready         # 摄像头录制就绪（见下方说明）
 | --- | --- | --- |
 | `ArmEnable` | Director → Driver | 伺服上电 / 下电 |
 | `ArmHoming` | Director → Driver | 回零（阻塞，回零结束后应答） |
-| `ArmResetError` | Director → Driver | 清除驱动层故障 |
-| `ArmStop` | Director → Commander | 软件急停（MOVING → STOPPED）；或复位（ERROR/STOPPED → IDLE） |
+| `ArmResetError` | Director → Commander → Driver | 清除驱动层故障，并复位 Commander 状态机（ERROR/STOPPED → IDLE） |
+| `ArmStop` | Director → Commander | 软件急停（MOVING → STOPPED）；非运动状态下为空操作 |
 
 > `ArmEnable` / `ArmHoming` / `ArmResetError` 为运维直通接口，由 Commander 透传到 Driver，不经过轨迹规划层。
 
@@ -225,7 +268,7 @@ Feedback:
 
 ```bash
 # Gazebo 仿真 + Arm Commander + 调试 GUI（一键）
-ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander
+ros2 launch robot_arm_gazebo gazebo.launch.py controller:=commander
 
 # 单独启动 Commander（配合已有仿真）
 ros2 run robot_arm_node arm_commander_node

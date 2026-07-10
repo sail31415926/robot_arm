@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_arm_gazebo</name>
+  <version>1.0.0</version>
+  <description>Gazebo simulation backend for eMeet robotic arm (worlds, models, launch)</description>
+  <maintainer email="support@emeet.com">EMEET Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 复用 robot_arm_bringup 的 _arm_launch_common.py / moveit.launch.py /
+       camera_view.launch.py / config/moveit（bringup 反向 include 本包 launch，
+       但为避免循环依赖，只声明本方向） -->
+  <exec_depend>robot_arm_bringup</exec_depend>
+  <exec_depend>robot_arm_description</exec_depend>
+  <exec_depend>robot_arm_node</exec_depend>
+
+  <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>gazebo_ros2_control</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>moveit_servo</exec_depend>
+  <exec_depend>xacro</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

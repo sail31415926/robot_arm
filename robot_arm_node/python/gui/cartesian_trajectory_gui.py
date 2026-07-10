@@ -10,8 +10,8 @@
 
 用法：
   ros2 run robot_arm_node cartesian_trajectory_gui
-  ros2 launch robot_arm_bringup gazebo.launch.py controller:=ruckig_ik
-  ros2 launch robot_arm_bringup mujoco.launch.py controller:=ruckig_ik
+  ros2 launch robot_arm_gazebo gazebo.launch.py controller:=ruckig_ik
+  ros2 launch robot_arm_mujoco mujoco.launch.py controller:=ruckig_ik
   ros2 launch robot_arm_bringup real.launch.py   controller:=ruckig_ik
 
 @copyright Copyright (c) 2026 eMeet

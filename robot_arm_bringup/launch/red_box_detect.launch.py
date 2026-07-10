@@ -5,7 +5,7 @@
 
 @details 用法：
     # 终端1：先启动仿真
-    ros2 launch robot_arm_bringup gazebo.launch.py
+    ros2 launch robot_arm_gazebo gazebo.launch.py
     # 终端2：启动识别
     ros2 launch robot_arm_bringup red_box_detect.launch.py
 

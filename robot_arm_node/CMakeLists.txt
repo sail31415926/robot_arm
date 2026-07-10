@@ -155,16 +155,7 @@ install(PROGRAMS python/vision/red_box_detector.py
 # 注：Python 产品栈（commander/ + arm_motion/）已被 C++ motion/state/commander 取代并删除
 #     （Gazebo 端到端验证通过后清理，2026-07-02）。几何数学复用见上方 robot_arm_geometry。
 
-# ── python/simulation/：MuJoCo 仿真（留 Python）──────────────────────────────
-foreach(script
-  mujoco_node
-  mujoco_data_recorder
-)
-  install(PROGRAMS python/simulation/${script}.py
-    DESTINATION lib/${PROJECT_NAME}
-    RENAME ${script}
-  )
-endforeach()
+# 注：python/simulation/（mujoco_node + mujoco_data_recorder）已迁至 robot_arm_mujoco 包（2026-07-10）。
 
 # ── python/tools/：工具脚本（留 Python）───────────────────────────────────────
 install(PROGRAMS python/tools/arm_utils.py

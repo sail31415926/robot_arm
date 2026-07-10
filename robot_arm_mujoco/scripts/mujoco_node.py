@@ -22,7 +22,7 @@ TwistStamped 速度控制（对接 MoveIt Servo / IBVS）：
 
 用法：
   ros2 run robot_arm_node mujoco_node
-  ros2 launch robot_arm_bringup mujoco.launch.py
+  ros2 launch robot_arm_mujoco mujoco.launch.py
 
 @copyright Copyright (c) 2026 eMeet
 """

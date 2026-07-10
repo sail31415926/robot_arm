@@ -11,7 +11,7 @@
   3. ArmStatus 实时监控 —— 位姿/速度/状态/错误码
 
 用法：
-  ros2 launch robot_arm_bringup gazebo.launch.py controller:=commander
+  ros2 launch robot_arm_gazebo gazebo.launch.py controller:=commander
 
 @copyright Copyright (c) 2026 eMeet
 """

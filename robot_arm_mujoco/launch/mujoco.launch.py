@@ -1,12 +1,14 @@
 """
 @file mujoco.launch.py
-@brief bringup 的 MuJoCo 后端 —— MuJoCo 底座，上层栈复用共享工厂
-@version 3.0
-@date 2026-07-01
+@brief MuJoCo 后端底座（robot_arm_mujoco 包）—— 上层栈复用 bringup 共享工厂
+@version 3.1
+@date 2026-07-10
 
-@note  本文件是整机启动的 mujoco 后端（统一入口见 bringup.launch.py，backend:=mujoco）。
+@note  本文件是整机启动的 mujoco 后端（统一入口见 robot_arm_bringup 的 bringup.launch.py，
+       backend:=mujoco）。v3.1 起从 robot_arm_bringup 拆出独立包 robot_arm_mujoco，
+       mujoco_node / mujoco_data_recorder 也从 robot_arm_node 迁入本包（scripts/）。
        职责限于「底座」：mujoco_node（物理 + viewer + 轨迹接口）+ move_group（MuJoCo controllers）。
-       上层栈节点定义复用 launch/_arm_launch_common.py，与 gazebo/real 共用一份。
+       上层栈节点定义复用 robot_arm_bringup 的 launch/_arm_launch_common.py，与 gazebo/real 共用一份。
 
 @details 启动：mujoco_node（物理 + viewer + /arm_controller/joint_trajectory 订阅 + FJT action）、
          robot_state_publisher、move_group（需 IK 的模式）、按 controller 选择的上层节点。
@@ -21,9 +23,9 @@
            cartesian_trajectory | spherical_orbit | cartesian_velocity | commander
 
          示例：
-           ros2 launch robot_arm_bringup mujoco.launch.py controller:=cartesian_trajectory
-           ros2 launch robot_arm_bringup mujoco.launch.py controller:=commander            # 新增
-           ros2 launch robot_arm_bringup mujoco.launch.py controller:=commander gui:=false
+           ros2 launch robot_arm_mujoco mujoco.launch.py controller:=cartesian_trajectory
+           ros2 launch robot_arm_mujoco mujoco.launch.py controller:=commander
+           ros2 launch robot_arm_mujoco mujoco.launch.py controller:=commander gui:=false
 
 @note 不启动 ros2_control / controller_manager；mujoco_node 直接提供轨迹接口。
 
@@ -45,8 +47,9 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-# 上层栈节点工厂（与 gazebo/real 共用同一份定义）
-sys.path.insert(0, os.path.dirname(__file__))
+# 上层栈节点工厂（在 robot_arm_bringup/launch 下，与 gazebo/real 共用同一份定义）
+sys.path.insert(0, os.path.join(
+    get_package_share_directory('robot_arm_bringup'), 'launch'))
 import _arm_launch_common as common   # noqa: E402
 
 
@@ -89,18 +92,24 @@ def generate_launch_description():
     gui_arg = DeclareLaunchArgument(
         'gui', default_value='true',
         description='是否启动 commander_test_gui（仅 controller:=commander 生效）: true | false')
-    ctrl = LaunchConfiguration('controller')
-    gui  = LaunchConfiguration('gui')
+    log_level_arg = DeclareLaunchArgument(
+        'log_level', default_value='warn',
+        description='第三方底座节点（move_group/servo/rsp 等）日志级别，'
+                    '默认 warn 降噪，调试时设 info；mujoco_node 等自家节点不受影响')
+    ctrl      = LaunchConfiguration('controller')
+    gui       = LaunchConfiguration('gui')
+    log_level = LaunchConfiguration('log_level')
 
     is_velocity = common.is_mode(ctrl, 'cartesian_velocity')
 
     # ── 基座：robot_state_publisher + MuJoCo 仿真节点 ──────────────────────────
     robot_state_publisher = Node(
         package='robot_state_publisher', executable='robot_state_publisher', output='screen',
+        arguments=common.log_args(log_level),
         parameters=[{'robot_description': robot_description_raw, 'use_sim_time': USE_SIM_TIME}])
 
     mujoco_node = Node(
-        package='robot_arm_node', executable='mujoco_node', name='mujoco_node',
+        package='robot_arm_mujoco', executable='mujoco_node', name='mujoco_node',
         output='screen', additional_env=_NVIDIA_ENV)
 
     # ── 上层栈（复用共享工厂）──────────────────────────────────────────────────
@@ -108,7 +117,7 @@ def generate_launch_description():
         ctrl, robot_description=robot_description_raw, srdf=srdf_content,
         kinematics=kinematics, joint_limits=joint_limits,
         planning_pipeline=planning_pipeline, moveit_controllers=moveit_controllers,
-        use_sim_time=USE_SIM_TIME)
+        use_sim_time=USE_SIM_TIME, log_level=log_level)
 
     # cartesian_velocity：安全预移动（t≈0，3s 运动）→ t=4s 起 servo + GUI
     safe_pose = common.safe_pose_action(is_velocity)
@@ -118,7 +127,7 @@ def generate_launch_description():
             common.servo_node(is_velocity, robot_description=robot_description_raw,
                               srdf=srdf_content, kinematics=kinematics,
                               joint_limits=joint_limits, servo_params=servo_params,
-                              use_sim_time=USE_SIM_TIME),
+                              use_sim_time=USE_SIM_TIME, log_level=log_level),
             common.gui_node(ctrl, 'cartesian_velocity', 'cartesian_velocity_gui'),
         ],
         condition=is_velocity)
@@ -149,10 +158,10 @@ def generate_launch_description():
     camera_view = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(bringup_share, 'launch', 'camera_view.launch.py')),
-        launch_arguments={'use_sim_time': 'false'}.items())
+        launch_arguments={'use_sim_time': 'false', 'log_level': log_level}.items())
 
     return LaunchDescription([
-        controller_arg, gui_arg,
+        controller_arg, gui_arg, log_level_arg,
         robot_state_publisher,
         mujoco_node,
         move_group,
