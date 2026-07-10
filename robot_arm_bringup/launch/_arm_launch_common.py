@@ -20,6 +20,12 @@ backend 保留自己的时序编排，只调用这里的工厂拿「同一份节
   robot_description / srdf 传字符串；kinematics/joint_limits/planning_pipeline/moveit_controllers/
   servo_params 传已 load 的 dict。
 
+日志规范（三层）：
+  - 自家业务节点（GUI / controllers / commander / mujoco_node 等）：info + screen，不动；
+  - 第三方底座节点（move_group / servo / rviz2 / spawner / robot_state_publisher 等）：
+    默认 warn 降噪，向工厂传 log_level（通常为 LaunchConfiguration('log_level')）；
+  - 调试时 launch 加 log_level:=info 一键恢复。完整日志始终落 ~/.ros/log/。
+
 @copyright Copyright (c) 2026 eMeet
 """
 
@@ -40,6 +46,12 @@ SERVO_MODES  = ['cartesian_velocity']
 SAFE_POSE_CMD = ('{joint_names: [Joint1,Joint2,Joint3,Joint4,Joint5,Joint6], '
                  'points: [{positions: [0.0, 1.0, -1.5, 0.0, 0.3, 0.0], '
                  'time_from_start: {sec: 3, nanosec: 0}}]}')
+
+
+# ── 日志工具 ────────────────────────────────────────────────────────────────────
+def log_args(log_level):
+    """第三方底座节点的日志级别参数（log_level=None 则不加，保持默认 info）。"""
+    return ['--ros-args', '--log-level', log_level] if log_level is not None else []
 
 
 # ── 条件工具 ────────────────────────────────────────────────────────────────────
@@ -73,9 +85,11 @@ def controller_gui_nodes(ctrl):
 
 # ── move_group（需要 IK 的模式，含 commander）─────────────────────────────────────
 def move_group_node(ctrl, *, robot_description, srdf, kinematics, joint_limits,
-                    planning_pipeline, moveit_controllers, use_sim_time):
+                    planning_pipeline, moveit_controllers, use_sim_time,
+                    log_level=None):
     return Node(
         package='moveit_ros_move_group', executable='move_group', output='screen',
+        arguments=log_args(log_level),
         parameters=[
             {'robot_description': robot_description},
             {'robot_description_semantic': srdf},
@@ -91,7 +105,7 @@ def move_group_node(ctrl, *, robot_description, srdf, kinematics, joint_limits,
 
 # ── MoveIt Servo（cartesian_velocity / ibvs_control）──────────────────────────────
 def servo_node(condition, *, robot_description, srdf, kinematics, joint_limits,
-               servo_params, use_sim_time, use_gazebo=None):
+               servo_params, use_sim_time, use_gazebo=None, log_level=None):
     """servo_node_main。ibvs/velocity 无 move_group，恒禁碰撞检测避免 run_duration 超时。"""
     rd_params = {'robot_description': robot_description,
                  'robot_description_semantic': srdf,
@@ -100,6 +114,7 @@ def servo_node(condition, *, robot_description, srdf, kinematics, joint_limits,
         rd_params['use_gazebo'] = use_gazebo
     return Node(
         package='moveit_servo', executable='servo_node_main', name='servo_node', output='screen',
+        arguments=log_args(log_level),
         parameters=[
             servo_params,
             rd_params,

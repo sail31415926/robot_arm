@@ -11,6 +11,8 @@
 参数：
   use_sim_time  true/false  Gazebo 仿真时钟（默认 true）
   rviz          true/false  是否启动 RViz2（无显示器/SSH 设 false，默认 true）
+  log_level     第三方底座节点（move_group / rviz2）日志级别，默认 warn 降噪；
+                调试时 log_level:=info 恢复（完整日志始终落 ~/.ros/log/）
 
 示例：
   ros2 launch robot_arm_bringup moveit.launch.py                          # Gazebo 默认
@@ -49,8 +51,13 @@ def generate_launch_description():
         'rviz', default_value='true',
         description='是否启动 RViz2（无显示器/SSH 环境设 false）',
     )
+    log_level_arg = DeclareLaunchArgument(
+        'log_level', default_value='warn',
+        description='第三方底座节点（move_group / rviz2）日志级别，调试时设 info',
+    )
     use_sim_time = LaunchConfiguration('use_sim_time')
     rviz         = LaunchConfiguration('rviz')
+    log_level    = LaunchConfiguration('log_level')
 
     # ── Robot description ──────────────────────────────────────────────────────
     xacro_path = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
@@ -71,6 +78,7 @@ def generate_launch_description():
         package='moveit_ros_move_group',
         executable='move_group',
         output='screen',
+        arguments=['--ros-args', '--log-level', log_level],
         parameters=[
             robot_description,
             robot_description_semantic,
@@ -85,11 +93,13 @@ def generate_launch_description():
 
     # ── rviz2（条件启动）─────────────────────────────────────────────────────
     rviz_config = os.path.join(desc_share, 'rviz', 'moveit.rviz')
+    # log_level 默认 warn：抑制 InteractiveMarkerDisplay 在 sim time 下的
+    # 「Sending request / Service response」INFO 刷屏（Humble 已知噪声）
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
         output='screen',
-        arguments=['-d', rviz_config],
+        arguments=['-d', rviz_config, '--ros-args', '--log-level', log_level],
         parameters=[
             robot_description,
             robot_description_semantic,
@@ -105,4 +115,5 @@ def generate_launch_description():
         condition=IfCondition(rviz),   # 由 LaunchConfiguration 控制，IncludeLaunchDescription 也有效
     )
 
-    return LaunchDescription([use_sim_time_arg, rviz_arg, move_group_node, rviz_node])
+    return LaunchDescription([use_sim_time_arg, rviz_arg, log_level_arg,
+                              move_group_node, rviz_node])

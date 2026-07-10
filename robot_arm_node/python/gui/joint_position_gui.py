@@ -2,20 +2,28 @@
 """
 @file   joint_position_gui.py
 @brief  eMeetArm_models 6轴机械臂关节滑块控制 GUI
-@version 1.0
-@date   2026-06-04
+@version 1.1
+@date   2026-07-10
 
 基于 PyQt5 + ROS2 实现以下功能：
          - 6个关节独立滑块控制，滑块与数值框双向同步
-         - 实时发布轨迹指令至 /arm_controller/joint_trajectory
+         - 发布轨迹指令至 /arm_controller/joint_trajectory
          - 订阅 /joint_states 实时显示各关节位置与速度
          - 通过 TF2 查询并显示末端 tool0 在 base_link 下的坐标
          - 支持可调运动时间与一键回零位功能
 
+v1.1 两个实机安全/体验修复：
+  1. 滑块初值播种：启动后用第一帧 /joint_states 初始化滑块/数值框为当前关节位置
+     （此前初值恒为 0，臂不在零位时一发送就会全臂朝零位跑）。
+  2. 点到点发送（默认）：拖动滑块只更新显示，**松手才发送一次**（运动时长取
+     下方设置值）——与实物 PP 模式（驱动器自规划）匹配；此前拖动即以 0.05s
+     时长高频流式发布，PP 下每条都触发重规划，表现为卡顿走停。
+     「启动发送」开关保留为流式模式（200ms 周期），适合仿真/IP 后端。
+
 用法：
   ros2 run robot_arm_node joint_position_gui
-  ros2 launch robot_arm_bringup gazebo.launch.py controller:=slider
-  ros2 launch robot_arm_bringup mujoco.launch.py controller:=slider
+  ros2 launch robot_arm_gazebo gazebo.launch.py controller:=slider
+  ros2 launch robot_arm_mujoco mujoco.launch.py controller:=slider
   ros2 launch robot_arm_bringup real.launch.py   controller:=slider
 
 @copyright Copyright (c) 2026 eMeet
@@ -54,6 +62,7 @@ class MainWindow(QMainWindow):
     def __init__(self, node: JointPositionControllerNode, signals: RosSignals):
         super().__init__()
         self.node = node
+        self._seeded = False   # 滑块是否已用第一帧 /joint_states 播种
         self.setWindowTitle('eMeet 6轴机械臂关节控制器')
         self.setMinimumWidth(720)
 
@@ -130,6 +139,7 @@ class MainWindow(QMainWindow):
             grid.addWidget(cur_vel, row, 4)
 
             lo_, hi_ = lo, hi
+            # 拖动/改数只同步显示；流式模式（启动发送）下才随动发布
             slider.valueChanged.connect(
                 lambda val, s=spin, l=lo_, h=hi_: (
                     s.blockSignals(True),
@@ -146,6 +156,9 @@ class MainWindow(QMainWindow):
                     self._send_realtime(),
                 )
             )
+            # 点到点（默认）：滑块松手 / 数值框回车或失焦时发送一次（PP 友好）
+            slider.sliderReleased.connect(self._send_on_release)
+            spin.editingFinished.connect(self._send_on_release)
 
         grid.setColumnStretch(1, 1)
         return box
@@ -175,7 +188,7 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_duration_group(self) -> QGroupBox:
-        box = QGroupBox('运动时间（启动发送时每条指令的运动时长，拖动滑块固定 0.05 s）')
+        box = QGroupBox('运动时间（点到点发送的运动时长；流式模式下拖动固定 0.05 s）')
         layout = QHBoxLayout(box)
         layout.addWidget(QLabel('运动时间 (s):'))
 
@@ -259,6 +272,17 @@ class MainWindow(QMainWindow):
             return
         self._send(duration=0.05)
 
+    def _send_on_release(self):
+        """点到点发送（默认交互）：松手/确认输入时发一条完整时长的轨迹。
+
+        流式模式（启动发送）激活时由 200ms 定时器负责，这里不重复发。
+        实物 PP 模式下驱动器按 6081 自规划一条平滑梯形——单发即流畅；
+        高频流式发布会让 PP 每条都重规划，表现为走停卡顿。
+        """
+        if self._send_timer.isActive():
+            return
+        self._send()
+
     def _reset(self):
         for spin in self.spinboxes:
             spin.blockSignals(True)
@@ -277,6 +301,18 @@ class MainWindow(QMainWindow):
                 'background:#27AE60; color:white; font-size:13px; font-weight:bold;')
 
     def _on_joint_state(self, positions: list, velocities: list):
+        # 首帧播种：滑块/数值框初始化为当前关节位置（不触发发送），
+        # 避免"初值 0 + 一发送 → 全臂朝零位跑"的安全隐患
+        if not self._seeded:
+            self._seeded = True
+            for i, (lo, hi) in enumerate(JOINT_LIMITS):
+                pos = min(max(positions[i], lo), hi)
+                self.spinboxes[i].blockSignals(True)
+                self.spinboxes[i].setValue(pos)
+                self.spinboxes[i].blockSignals(False)
+                self.sliders[i].blockSignals(True)
+                self.sliders[i].setValue(self._rad_to_tick(pos, lo, hi))
+                self.sliders[i].blockSignals(False)
         for i in range(len(JOINT_NAMES)):
             self.cur_pos_labels[i].setText(f'{positions[i]:.4f}')
             self.cur_vel_labels[i].setText(f'{velocities[i]:.4f}')
