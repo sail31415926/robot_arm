@@ -1,0 +1,13 @@
+# can.yaml — 全局唯一的 CAN 口配置
+#
+# ★ 改 CAN 口只改这一个文件 ★
+# test_arm.launch.py（驱动自测）和 real.launch.py（整机实物）的默认值都从这里读；
+# 命令行 can_interface:=xxx 仍可临时覆盖。
+# 工作区是 --symlink-install，改完不用重新编译，直接 launch 生效。
+#
+# 常用值：can0（真机）| vcan0（假从站联调）
+# 换口后记得把对应接口拉起来：
+#   真机: sudo ip link set can0 up type can bitrate 500000 && sudo ip link set can0 txqueuelen 128
+#   虚拟: sudo modprobe vcan && sudo ip link add dev vcan0 type vcan && sudo ip link set vcan0 up
+
+can_interface: "can0"

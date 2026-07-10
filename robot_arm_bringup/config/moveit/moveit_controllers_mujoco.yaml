@@ -8,18 +8,20 @@ trajectory_execution:
   allowed_start_tolerance: 0.5
   moveit_manage_controllers: false
 
+# 注意：控制器条目必须嵌套在 moveit_simple_controller_manager 下
+# （参数路径 moveit_simple_controller_manager.<name>.action_ns），写顶层无效。
 moveit_simple_controller_manager:
   controller_names:
     - arm_controller
 
-arm_controller:
-  type: FollowJointTrajectory
-  action_ns: follow_joint_trajectory
-  default: true
-  joints:
-    - Joint1
-    - Joint2
-    - Joint3
-    - Joint4
-    - Joint5
-    - Joint6
+  arm_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    default: true
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
+      - Joint4
+      - Joint5
+      - Joint6

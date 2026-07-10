@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_arm_driver</name>
+  <version>2.0.0</version>
+  <description>
+    eMeetArm CANopen bus configuration (ros2_canopen) + enable/recover services.
+    Hardware access is provided by canopen_ros2_control/RobotSystem; this package
+    supplies bus.yml/EDS/master.dcf and the arm_driver_services helper node.
+  </description>
+  <maintainer email="support@emeet.com">EMEET Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>lely_core_libraries</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_srvs</depend>
+  <depend>controller_manager_msgs</depend>
+  <depend>lifecycle_msgs</depend>
+
+  <!-- 运行时硬件栈：URDF 插件 RobotSystem 及其 master/402 驱动 -->
+  <exec_depend>canopen_core</exec_depend>
+  <exec_depend>canopen_master_driver</exec_depend>
+  <exec_depend>canopen_402_driver</exec_depend>
+  <exec_depend>canopen_ros2_control</exec_depend>
+
+  <!-- 自测栈（launch/test_arm.launch.py）-->
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>joint_state_broadcaster</exec_depend>
+  <exec_depend>joint_trajectory_controller</exec_depend>
+  <exec_depend>canopen_fake_slaves</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

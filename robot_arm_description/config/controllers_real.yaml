@@ -1,16 +1,31 @@
 # controllers_real.yaml
-# 实物 ros2_control 控制器配置：臂 J1-3 走 ArmHardwareInterface（CANopen）。
-# 与 controllers.yaml（Gazebo 6 轴版）区分：本文件用于 PR-1 的 test_arm_hw.launch。
-# 云台 J4-6（gimbal_controller）在 PR-3（云台并网）时加入同一 controller_manager。
+# 实物 ros2_control 控制器配置（单 controller_manager 管全 6 轴）：
+#   arm_controller(JTC) 一个控制器 claim 全 6 轴，跨两个硬件组件——
+#     臂 J1-3   → canopen_ros2_control/RobotSystem（ros2_canopen，CiA402）
+#     云台 J4-6 → robot_gimbal_driver/CameraHardwareInterface（HID）
+#   与 Gazebo/MuJoCo 后端的「单一 6 轴命令总线 /arm_controller/joint_trajectory」对齐，
+#   上层（GUI/commander/MoveIt/visp）6 关节轨迹直接可用，无需分流。
+#   gimbal_controller 仅保留定义供云台单独调试（real.launch 不 spawn；
+#   与 arm_controller 抢 J4-6 接口，二者不可同时 active）。
+# 与 controllers.yaml（Gazebo 6 轴版）区分：本文件用于 real 后端。
 
 controller_manager:
   ros__parameters:
-    update_rate: 100   # 与 ip_period_ms=10 对齐（100Hz write 周期发一个插补点）
+    update_rate: 100   # 与 bus.yml sync_period=10000µs / 0x60C2 插补周期 10ms 对齐
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
     arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    # PV 模式用：claim J1-3 velocity 接口（RobotSystem 自动切 402 PV=3）。
+    # 与 arm_controller 互斥（同关节一次只准一个命令接口），
+    # 由 /arm_node/set_mode_pv 服务切换，launch 只 load 不 activate。
+    arm_velocity_controller:
+      type: velocity_controllers/JointGroupVelocityController
+
+    gimbal_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
 arm_controller:
@@ -19,6 +34,38 @@ arm_controller:
       - Joint1
       - Joint2
       - Joint3
+      - Joint4
+      - Joint5
+      - Joint6
+    # 只 claim position：RobotSystem 每关节同一时刻只允许启用一个命令接口
+    # （启用哪个接口 = 切到哪种 402 模式，position→IP(7)，velocity→PV(3)）；
+    # 云台 J4-6 position 接口同样可用
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 50.0
+    action_monitor_rate: 20.0
+    # true：visp_ibvs 单点流与预备位姿只发 J1-3（云台由视觉/上层另管），
+    # 6 轴控制器必须接受部分关节轨迹
+    allow_partial_joints_goal: true
+    open_loop_control: false               # 有真实反馈（TPDO2 位置/速度）
+    allow_nonzero_velocity_at_trajectory_end: true
+
+arm_velocity_controller:
+  ros__parameters:
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
+
+gimbal_controller:
+  ros__parameters:
+    joints:
+      - Joint4
+      - Joint5
+      - Joint6
     command_interfaces:
       - position
       - velocity
@@ -27,6 +74,6 @@ arm_controller:
       - velocity
     state_publish_rate: 50.0
     action_monitor_rate: 20.0
-    allow_partial_joints_goal: false
-    open_loop_control: false               # 有真实反馈（后台 50Hz 轮询）
+    allow_partial_joints_goal: true
+    open_loop_control: true
     allow_nonzero_velocity_at_trajectory_end: true

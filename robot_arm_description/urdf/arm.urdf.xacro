@@ -53,6 +53,7 @@
                      gazebo_camera:='false'
                      backend:='gazebo'
                      arm_sim_mode:='false'
+                     can_interface:='can0'
                      emit_camera_control:='true'
                      controllers_yaml:=''">
 
@@ -202,7 +203,7 @@
     <parent link="arm_base_link"/>
     <child link="Link1"/>
     <axis xyz="0 0 1"/>
-    <limit lower="-3.1" upper="3.1" effort="5" velocity="3.14"/>
+    <limit lower="-2.618" upper="2.618" effort="5" velocity="3.14"/>
     <dynamics damping="1.0" friction="0.0"/>
   </joint>
 
@@ -266,32 +267,40 @@
   <!-- ══ ros2_control ══════════════════════════════════════════════════════════
        Arm joints 1-3：
          backend=gazebo（默认）→ GazeboSystem（Gazebo 仿真）
-         backend=real          → robot_arm_driver/ArmHardwareInterface（CANopen 实物）
-                                 arm_sim_mode=true 时仅回显命令、不连 CAN（干跑）
+         backend=real          → canopen_ros2_control/RobotSystem（ros2_canopen，CiA402 实物）
+                                 总线拓扑/换算/PDO 见 robot_arm_driver/config/canopen/bus.yml
+                                 arm_sim_mode=true → mock_components/GenericSystem
+                                                     （命令回显为状态，不连 CAN，干跑）
        ═══════════════════════════════════════════════════════════════════════ -->
   <ros2_control name="eMeetArm_hardware" type="system">
     <hardware>
       <xacro:if value="${backend == 'real'}">
-        <plugin>robot_arm_driver/ArmHardwareInterface</plugin>
-        <!-- 硬件参数（CAN/node_id/编码器分辨率等）在此 yaml 里改，无需动 xacro -->
-        <param name="config_file">$(find robot_arm_driver)/config/arm_hw.yaml</param>
-        <xacro:if value="${arm_sim_mode}"><param name="sim_mode">true</param></xacro:if>
-        <xacro:unless value="${arm_sim_mode}"><param name="sim_mode">false</param></xacro:unless>
+        <xacro:unless value="${arm_sim_mode}">
+          <plugin>canopen_ros2_control/RobotSystem</plugin>
+          <param name="bus_config">$(find robot_arm_driver)/config/canopen/bus.yml</param>
+          <param name="master_config">$(find robot_arm_driver)/config/canopen/master.dcf</param>
+          <param name="can_interface_name">${can_interface}</param>
+        </xacro:unless>
+        <xacro:if value="${arm_sim_mode}">
+          <plugin>mock_components/GenericSystem</plugin>
+        </xacro:if>
       </xacro:if>
       <xacro:unless value="${backend == 'real'}">
         <plugin>gazebo_ros2_control/GazeboSystem</plugin>
       </xacro:unless>
     </hardware>
     <joint name="Joint1">
+      <param name="device_name">joint_1</param>
       <command_interface name="position">
-        <param name="min">-3.1</param>
-        <param name="max">3.1</param>
+        <param name="min">-2.618</param>
+        <param name="max">2.618</param>
       </command_interface>
       <command_interface name="velocity"/>
       <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
       <state_interface name="velocity"/>
     </joint>
     <joint name="Joint2">
+      <param name="device_name">joint_2</param>
       <command_interface name="position">
         <param name="min">-0.8</param>
         <param name="max">3.14</param>
@@ -301,6 +310,7 @@
       <state_interface name="velocity"/>
     </joint>
     <joint name="Joint3">
+      <param name="device_name">joint_3</param>
       <command_interface name="position">
         <param name="min">-3.14</param>
         <param name="max">0.05</param>
@@ -325,7 +335,7 @@
         <plugin>gazebo_ros2_control/GazeboSystem</plugin>
       </xacro:if>
       <xacro:unless value="${gazebo_camera}">
-        <plugin>emeet_camera_driver/CameraHardwareInterface</plugin>
+        <plugin>robot_gimbal_driver/CameraHardwareInterface</plugin>
         <param name="camera_type">auto</param>
         <xacro:if value="${sim_mode}">
           <param name="sim_mode">true</param>

@@ -1,0 +1,1857 @@
+; RB200-CA.eds — VEICHI RB200 机器人关节模组 CA（CANopen）电子数据表
+;
+; 依据《RB200-CA 机器人关节模组使用说明书（简版）V1.0》(2025.12) 第 4 章
+; 对象字典逐条转写（docs/RB200-CA机器人关节模组使用说明书（简版）V1.0.pdf）。
+;
+; 要点：
+;   - 支持模式 (6502h=0x6D)：PP(1) / PV(3) / PT(4) / HM(6) / IP(7)
+;   - IP 模式目标位置写 60C1:01（绝对位置，指令单位），不是 607A（607A 仅 PP）
+;   - 插补周期 60C2 必须与主站 SYNC 周期一致（手册 3.5 注意事项）
+;   - 指令单位经 6091 电子齿轮换算到编码器单位；6091=1:1 时 指令单位=编码器单位
+;   - 厂商参数：功能码 PnXYZ → 对象 20/2Exxh，子索引=功能码后两位(hex)+1
+;     （如 Pn297 绝对值零点单圈值设定 → 2002:98h，用于编码器零点标定）
+
+[FileInfo]
+FileName=RB200-CA.eds
+FileVersion=1
+FileRevision=0
+EDSVersion=4.0
+Description=VEICHI RB200-CA robot joint module CANopen EDS (from V1.0 manual)
+CreationTime=10:00AM
+CreationDate=07-08-2026
+CreatedBy=EMEET
+ModificationTime=10:00AM
+ModificationDate=07-08-2026
+ModifiedBy=EMEET
+
+[DeviceInfo]
+VendorName=VEICHI
+VendorNumber=0xF00002B5
+ProductName=RB200-CA
+; 2026-07-10 换新驱动实测（SDO 读 1018:02/:03）：产品号 0x0003、修订 0x0002；
+; RevisionNumber 保持 0 = 跳过修订校验，产品号需与实物一致否则主站 boot 失败
+ProductNumber=0x0003
+RevisionNumber=0x00000000
+OrderCode=RB200-CA
+BaudRate_10=0
+BaudRate_20=1
+BaudRate_50=1
+BaudRate_125=1
+BaudRate_250=1
+BaudRate_500=1
+BaudRate_800=0
+BaudRate_1000=1
+SimpleBootUpMaster=0
+SimpleBootUpSlave=1
+Granularity=8
+DynamicChannelsSupported=0
+GroupMessaging=0
+NrOfRxPDO=4
+NrOfTxPDO=4
+LSS_Supported=0
+
+[DummyUsage]
+Dummy0001=0
+Dummy0002=1
+Dummy0003=1
+Dummy0004=1
+Dummy0005=1
+Dummy0006=1
+Dummy0007=1
+
+[Comments]
+Lines=2
+Line1=RB200-CA supported drive modes: PP/PV/PT/HM/IP (6502h=0x6D)
+Line2=IP target = 60C1:01; interpolation period 60C2 must equal SYNC period
+
+[MandatoryObjects]
+SupportedObjects=3
+1=0x1000
+2=0x1001
+3=0x1018
+
+[1000]
+ParameterName=Device type
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x04020192
+PDOMapping=0
+
+[1001]
+ParameterName=Error register
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=0x00
+PDOMapping=0
+
+[1018]
+ParameterName=Identity object
+ObjectType=0x09
+SubNumber=4
+
+[1018sub0]
+ParameterName=Number of entries
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=3
+PDOMapping=0
+
+[1018sub1]
+ParameterName=Vendor-ID
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0xF00002B5
+PDOMapping=0
+
+[1018sub2]
+ParameterName=Product code
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x0003
+PDOMapping=0
+
+[1018sub3]
+ParameterName=Revision number
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x00000000
+PDOMapping=0
+
+[OptionalObjects]
+SupportedObjects=84
+1=0x1003
+2=0x1005
+3=0x1006
+4=0x1008
+5=0x100A
+6=0x100C
+7=0x100D
+8=0x1010
+9=0x1011
+10=0x1014
+11=0x1016
+12=0x1017
+13=0x1029
+14=0x1200
+15=0x1400
+16=0x1401
+17=0x1402
+18=0x1403
+19=0x1600
+20=0x1601
+21=0x1602
+22=0x1603
+23=0x1800
+24=0x1801
+25=0x1802
+26=0x1803
+27=0x1A00
+28=0x1A01
+29=0x1A02
+30=0x1A03
+31=0x603F
+32=0x6040
+33=0x6041
+34=0x605A
+35=0x605D
+36=0x6060
+37=0x6061
+38=0x6062
+39=0x6063
+40=0x6064
+41=0x6065
+42=0x6067
+43=0x6068
+44=0x606B
+45=0x606C
+46=0x606D
+47=0x606E
+48=0x606F
+49=0x6070
+50=0x6071
+51=0x6072
+52=0x6074
+53=0x6075
+54=0x6076
+55=0x6077
+56=0x6078
+57=0x607A
+58=0x607C
+59=0x607D
+60=0x607E
+61=0x607F
+62=0x6080
+63=0x6081
+64=0x6083
+65=0x6084
+66=0x6085
+67=0x6086
+68=0x6087
+69=0x6091
+70=0x6098
+71=0x6099
+72=0x609A
+73=0x60C1
+74=0x60C2
+75=0x60C5
+76=0x60C6
+77=0x60E0
+78=0x60E1
+79=0x60F4
+80=0x60FC
+81=0x60FD
+82=0x60FE
+83=0x60FF
+84=0x6502
+
+[ManufacturerObjects]
+SupportedObjects=3
+1=0x2000
+2=0x2002
+3=0x2E08
+
+; ─── 通讯对象（1000h 群组）───────────────────────────────────────────────────
+
+[1003]
+ParameterName=Pre-defined error field
+ObjectType=0x08
+SubNumber=5
+
+[1003sub0]
+ParameterName=Number of errors
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1003sub1]
+ParameterName=Standard error field 1
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0
+PDOMapping=0
+
+[1003sub2]
+ParameterName=Standard error field 2
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0
+PDOMapping=0
+
+[1003sub3]
+ParameterName=Standard error field 3
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0
+PDOMapping=0
+
+[1003sub4]
+ParameterName=Standard error field 4
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0
+PDOMapping=0
+
+[1005]
+ParameterName=COB-ID SYNC message
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x00000080
+PDOMapping=0
+
+[1006]
+; 单位 125us（手册 4.1.5）
+ParameterName=Communication cycle period
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1008]
+ParameterName=Manufacturer device name
+ObjectType=0x07
+DataType=0x0009
+AccessType=const
+DefaultValue=Servo Device
+PDOMapping=0
+
+[100A]
+ParameterName=Manufacturer software version
+ObjectType=0x07
+DataType=0x0009
+AccessType=ro
+DefaultValue=
+PDOMapping=0
+
+[100C]
+ParameterName=Guard time
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[100D]
+ParameterName=Life time factor
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1010]
+; RB200 仅实现 sub2（保存所有对象参数，写 ASCII "save" = 0x65766173）
+ParameterName=Store parameters
+ObjectType=0x08
+SubNumber=2
+
+[1010sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1010sub2]
+ParameterName=Save all parameters
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=1
+PDOMapping=0
+
+[1011]
+; RB200 仅实现 sub2（恢复所有默认参数，写 ASCII "load" = 0x64616F6C）
+ParameterName=Restore default parameters
+ObjectType=0x08
+SubNumber=2
+
+[1011sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1011sub2]
+ParameterName=Restore all default parameters
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=1
+PDOMapping=0
+
+[1014]
+ParameterName=COB-ID emergency message
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=$NODEID+0x80
+PDOMapping=0
+
+[1016]
+ParameterName=Consumer heartbeat time
+ObjectType=0x08
+SubNumber=2
+
+[1016sub0]
+ParameterName=Number of entries
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=1
+PDOMapping=0
+
+[1016sub1]
+ParameterName=Consumer heartbeat time 1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1017]
+; 单位 ms
+ParameterName=Producer heartbeat time
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1029]
+ParameterName=Error behavior object
+ObjectType=0x08
+SubNumber=2
+
+[1029sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=1
+PDOMapping=0
+
+[1029sub1]
+; 0=出错时转预操作 1=保持当前状态 2=转停止
+ParameterName=Communication error
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1200]
+ParameterName=SDO server parameter
+ObjectType=0x09
+SubNumber=3
+
+[1200sub0]
+ParameterName=Number of entries
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1200sub1]
+ParameterName=COB-ID client to server (rx)
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=$NODEID+0x600
+PDOMapping=0
+
+[1200sub2]
+ParameterName=COB-ID server to client (tx)
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=$NODEID+0x580
+PDOMapping=0
+
+; ─── RPDO 通讯/映射参数 ──────────────────────────────────────────────────────
+
+[1400]
+ParameterName=RPDO1 communication parameter
+ObjectType=0x09
+SubNumber=3
+
+[1400sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1400sub1]
+ParameterName=COB-ID used by RPDO1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=$NODEID+0x200
+PDOMapping=0
+
+[1400sub2]
+; 0=同步非循环 1~240=同步循环 254/255=异步
+ParameterName=Transmission type RPDO1
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+
+[1401]
+ParameterName=RPDO2 communication parameter
+ObjectType=0x09
+SubNumber=3
+
+[1401sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1401sub1]
+ParameterName=COB-ID used by RPDO2
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=$NODEID+0x300
+PDOMapping=0
+
+[1401sub2]
+ParameterName=Transmission type RPDO2
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+
+[1402]
+ParameterName=RPDO3 communication parameter
+ObjectType=0x09
+SubNumber=3
+
+[1402sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1402sub1]
+ParameterName=COB-ID used by RPDO3
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+; 2026-07-10 实测：新驱动出厂 RPDO3 为禁用(bit31=1)。默认值必须与实物一致，
+; 否则 dcfgen 认为"已是期望值"跳过下发，PP 的 607A 帧会被驱动器静默丢弃。
+; 启用由 bus.yml rpdo:3 显式配置（差异触发 boot 写入）。
+DefaultValue=$NODEID+0x80000400
+PDOMapping=0
+
+[1402sub2]
+ParameterName=Transmission type RPDO3
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+
+[1403]
+ParameterName=RPDO4 communication parameter
+ObjectType=0x09
+SubNumber=3
+
+[1403sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1403sub1]
+ParameterName=COB-ID used by RPDO4
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+; 同 RPDO3：实物出厂禁用，默认值与实物一致（RPDO4 当前未用，60FF 走 RPDO2）
+DefaultValue=$NODEID+0x80000500
+PDOMapping=0
+
+[1403sub2]
+ParameterName=Transmission type RPDO4
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+
+[1600]
+; 出厂默认映射：控制字
+ParameterName=RPDO1 mapping parameter
+ObjectType=0x09
+SubNumber=5
+
+[1600sub0]
+ParameterName=Number of mapped objects
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=1
+PDOMapping=0
+
+[1600sub1]
+ParameterName=RPDO1 mapping 1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60400010
+PDOMapping=0
+
+[1600sub2]
+ParameterName=RPDO1 mapping 2
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1600sub3]
+ParameterName=RPDO1 mapping 3
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1600sub4]
+ParameterName=RPDO1 mapping 4
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1601]
+; 出厂默认映射：控制字 + 运行模式选择
+ParameterName=RPDO2 mapping parameter
+ObjectType=0x09
+SubNumber=5
+
+[1601sub0]
+ParameterName=Number of mapped objects
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[1601sub1]
+ParameterName=RPDO2 mapping 1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60400010
+PDOMapping=0
+
+[1601sub2]
+ParameterName=RPDO2 mapping 2
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60600008
+PDOMapping=0
+
+[1601sub3]
+ParameterName=RPDO2 mapping 3
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1601sub4]
+ParameterName=RPDO2 mapping 4
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1602]
+; 出厂默认映射：控制字 + 目标位置（PP）
+ParameterName=RPDO3 mapping parameter
+ObjectType=0x09
+SubNumber=5
+
+[1602sub0]
+ParameterName=Number of mapped objects
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[1602sub1]
+ParameterName=RPDO3 mapping 1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60400010
+PDOMapping=0
+
+[1602sub2]
+ParameterName=RPDO3 mapping 2
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x607A0020
+PDOMapping=0
+
+[1602sub3]
+ParameterName=RPDO3 mapping 3
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1602sub4]
+ParameterName=RPDO3 mapping 4
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1603]
+; 出厂默认映射：控制字 + 目标速度（PV）
+ParameterName=RPDO4 mapping parameter
+ObjectType=0x09
+SubNumber=5
+
+[1603sub0]
+ParameterName=Number of mapped objects
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[1603sub1]
+ParameterName=RPDO4 mapping 1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60400010
+PDOMapping=0
+
+[1603sub2]
+ParameterName=RPDO4 mapping 2
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60FF0020
+PDOMapping=0
+
+[1603sub3]
+ParameterName=RPDO4 mapping 3
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1603sub4]
+ParameterName=RPDO4 mapping 4
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+; ─── TPDO 通讯/映射参数 ──────────────────────────────────────────────────────
+
+[1800]
+ParameterName=TPDO1 communication parameter
+ObjectType=0x09
+SubNumber=6
+
+[1800sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=5
+PDOMapping=0
+
+[1800sub1]
+ParameterName=COB-ID used by TPDO1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=$NODEID+0x180
+PDOMapping=0
+
+[1800sub2]
+; 0=同步非周期 1~240=同步循环 255=异步周期
+ParameterName=Transmission type TPDO1
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+
+[1800sub3]
+; 单位 125us
+ParameterName=Inhibit time TPDO1
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1800sub4]
+ParameterName=Reserved
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1800sub5]
+; 单位 1ms
+ParameterName=Event timer TPDO1
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1801]
+ParameterName=TPDO2 communication parameter
+ObjectType=0x09
+SubNumber=6
+
+[1801sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=5
+PDOMapping=0
+
+[1801sub1]
+ParameterName=COB-ID used by TPDO2
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=$NODEID+0x280
+PDOMapping=0
+
+[1801sub2]
+ParameterName=Transmission type TPDO2
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+
+[1801sub3]
+ParameterName=Inhibit time TPDO2
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1801sub4]
+ParameterName=Reserved
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1801sub5]
+ParameterName=Event timer TPDO2
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1802]
+ParameterName=TPDO3 communication parameter
+ObjectType=0x09
+SubNumber=6
+
+[1802sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=5
+PDOMapping=0
+
+[1802sub1]
+ParameterName=COB-ID used by TPDO3
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=$NODEID+0x380
+PDOMapping=0
+
+[1802sub2]
+ParameterName=Transmission type TPDO3
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+
+[1802sub3]
+ParameterName=Inhibit time TPDO3
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1802sub4]
+ParameterName=Reserved
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1802sub5]
+ParameterName=Event timer TPDO3
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1803]
+ParameterName=TPDO4 communication parameter
+ObjectType=0x09
+SubNumber=6
+
+[1803sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=5
+PDOMapping=0
+
+[1803sub1]
+ParameterName=COB-ID used by TPDO4
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=$NODEID+0x480
+PDOMapping=0
+
+[1803sub2]
+ParameterName=Transmission type TPDO4
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+
+[1803sub3]
+ParameterName=Inhibit time TPDO4
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1803sub4]
+ParameterName=Reserved
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1803sub5]
+ParameterName=Event timer TPDO4
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1A00]
+; 出厂默认映射：状态字
+ParameterName=TPDO1 mapping parameter
+ObjectType=0x09
+SubNumber=5
+
+[1A00sub0]
+ParameterName=Number of mapped objects
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=1
+PDOMapping=0
+
+[1A00sub1]
+ParameterName=TPDO1 mapping 1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60410010
+PDOMapping=0
+
+[1A00sub2]
+ParameterName=TPDO1 mapping 2
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1A00sub3]
+ParameterName=TPDO1 mapping 3
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1A00sub4]
+ParameterName=TPDO1 mapping 4
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1A01]
+; 出厂默认映射：状态字 + 当前运行模式
+ParameterName=TPDO2 mapping parameter
+ObjectType=0x09
+SubNumber=5
+
+[1A01sub0]
+ParameterName=Number of mapped objects
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[1A01sub1]
+ParameterName=TPDO2 mapping 1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60410010
+PDOMapping=0
+
+[1A01sub2]
+ParameterName=TPDO2 mapping 2
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60610008
+PDOMapping=0
+
+[1A01sub3]
+ParameterName=TPDO2 mapping 3
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1A01sub4]
+ParameterName=TPDO2 mapping 4
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1A02]
+; 出厂默认映射：状态字 + 当前位置
+ParameterName=TPDO3 mapping parameter
+ObjectType=0x09
+SubNumber=5
+
+[1A02sub0]
+ParameterName=Number of mapped objects
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[1A02sub1]
+ParameterName=TPDO3 mapping 1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60410010
+PDOMapping=0
+
+[1A02sub2]
+ParameterName=TPDO3 mapping 2
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60640020
+PDOMapping=0
+
+[1A02sub3]
+ParameterName=TPDO3 mapping 3
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1A02sub4]
+ParameterName=TPDO3 mapping 4
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1A03]
+; 出厂默认映射：状态字 + 当前速度
+ParameterName=TPDO4 mapping parameter
+ObjectType=0x09
+SubNumber=5
+
+[1A03sub0]
+ParameterName=Number of mapped objects
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[1A03sub1]
+ParameterName=TPDO4 mapping 1
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60410010
+PDOMapping=0
+
+[1A03sub2]
+ParameterName=TPDO4 mapping 2
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x606C0020
+PDOMapping=0
+
+[1A03sub3]
+ParameterName=TPDO4 mapping 3
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1A03sub4]
+ParameterName=TPDO4 mapping 4
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+; ─── 厂商对象（2000h 群组，功能码映射：子索引 = 功能码后两位(hex)+1）───────────
+
+[2000]
+; Pn0xx 基本控制参数（仅列出手册明确文档化的子项）
+ParameterName=Pn0xx basic control parameters
+ObjectType=0x08
+SubNumber=6
+
+[2000sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=0x86
+PDOMapping=0
+
+[2000sub1]
+ParameterName=Pn000 function select switch 0
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+PDOMapping=0
+
+[2000sub2]
+ParameterName=Pn001 function select switch 1
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+PDOMapping=0
+
+[2000sub3]
+ParameterName=Pn002 motor rotation direction
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+PDOMapping=0
+
+[2000sub82]
+ParameterName=Pn081 local communication format
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+PDOMapping=0
+
+[2000sub86]
+ParameterName=Pn085 store function codes to EEPROM on write
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+PDOMapping=0
+
+[2002]
+; Pn2xx 位置类参数（仅列出标定用到的子项）
+ParameterName=Pn2xx position parameters
+ObjectType=0x08
+SubNumber=3
+
+[2002sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=0x9A
+PDOMapping=0
+
+[2002sub98]
+; 绝对值编码器零点单圈值设定 —— 编码器零点标定（替代旧 set_encoder_zero 工具）
+ParameterName=Pn297 absolute encoder single-turn zero offset
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+PDOMapping=0
+
+[2002sub9A]
+ParameterName=Pn299 homing timeout time
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+PDOMapping=0
+
+[2E08]
+; Un8xx 监控参数
+ParameterName=Un8xx monitor parameters
+ObjectType=0x08
+SubNumber=3
+
+[2E08sub0]
+ParameterName=Largest sub-index supported
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=0x43
+PDOMapping=0
+
+[2E08sub1]
+ParameterName=Un800 current fault or warning code
+ObjectType=0x07
+DataType=0x0006
+AccessType=ro
+PDOMapping=0
+
+[2E08sub2]
+ParameterName=Un801 alarm code at occurrence
+ObjectType=0x07
+DataType=0x0006
+AccessType=ro
+PDOMapping=0
+
+; ─── CiA402 对象（6000h 群组）────────────────────────────────────────────────
+
+[603F]
+ParameterName=Error code
+ObjectType=0x07
+DataType=0x0006
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[6040]
+ParameterName=Controlword
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[6041]
+ParameterName=Statusword
+ObjectType=0x07
+DataType=0x0006
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[605A]
+; 0=自由停机 1=6084 斜坡停 2=6085 斜坡停(默认) 5/6=停后锁轴
+ParameterName=Quick stop option code
+ObjectType=0x07
+DataType=0x0003
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[605D]
+; 1=6084/6087 斜坡停(默认) 2=6085/6087 斜坡停 3=急停转矩停
+ParameterName=Halt option code
+ObjectType=0x07
+DataType=0x0003
+AccessType=rw
+DefaultValue=1
+PDOMapping=0
+
+[6060]
+; 1=PP 3=PV 4=PT 6=HM 7=IP（出厂 1）
+ParameterName=Modes of operation
+ObjectType=0x07
+DataType=0x0002
+AccessType=rw
+DefaultValue=1
+PDOMapping=1
+
+[6061]
+ParameterName=Modes of operation display
+ObjectType=0x07
+DataType=0x0002
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[6062]
+; 指令单位
+ParameterName=Position demand value
+ObjectType=0x07
+DataType=0x0004
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[6063]
+; 编码器单位
+ParameterName=Position actual value (motor)
+ObjectType=0x07
+DataType=0x0004
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[6064]
+; 指令单位；6064 × 齿轮比(6091) = 电机位置反馈 6063
+ParameterName=Position actual value
+ObjectType=0x07
+DataType=0x0004
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[6065]
+; 指令单位；超差报 ER.d00；写 4294967295 关闭监控
+ParameterName=Following error window
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=38400000
+PDOMapping=1
+
+[6067]
+; 指令单位；与 6068 联合判定位置到达（状态字 bit10）
+ParameterName=Position window
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=100
+PDOMapping=1
+
+[6068]
+; 单位 0.1ms
+ParameterName=Position window time
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[606B]
+; 单位 0.1rpm
+ParameterName=Velocity demand value
+ObjectType=0x07
+DataType=0x0004
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[606C]
+; 单位 指令单位/s
+ParameterName=Velocity actual value
+ObjectType=0x07
+DataType=0x0004
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[606D]
+; 单位 0.1rpm
+ParameterName=Velocity window
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=100
+PDOMapping=1
+
+[606E]
+; 单位 ms
+ParameterName=Velocity window time
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[606F]
+; 单位 0.1rpm（零速判定阈值）
+ParameterName=Velocity threshold
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=10
+PDOMapping=1
+
+[6070]
+; 单位 2ms（零速判定时间窗口）
+ParameterName=Velocity threshold time
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[6071]
+; 单位 0.1%（PT 模式目标转矩）
+ParameterName=Target torque
+ObjectType=0x07
+DataType=0x0003
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[6072]
+; 单位 0.1%
+ParameterName=Max torque
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=3000
+PDOMapping=1
+
+[6074]
+; 单位 0.1%
+ParameterName=Torque demand value
+ObjectType=0x07
+DataType=0x0003
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[6075]
+; 单位 mA
+ParameterName=Motor rated current
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[6076]
+; 单位 mNm
+ParameterName=Motor rated torque
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[6077]
+; 单位 0.1%
+ParameterName=Torque actual value
+ObjectType=0x07
+DataType=0x0003
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[6078]
+; 单位 0.01A
+ParameterName=Current actual value
+ObjectType=0x07
+DataType=0x0003
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[607A]
+; 指令单位（仅 PP 模式；bit6=0 绝对 / bit6=1 相对）
+ParameterName=Target position
+ObjectType=0x07
+DataType=0x0004
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[607C]
+; 指令单位（HM 模式原点偏置）
+ParameterName=Home offset
+ObjectType=0x07
+DataType=0x0004
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[607D]
+; 指令单位；sub1/sub2 均默认值时软限位不生效
+ParameterName=Software position limit
+ObjectType=0x08
+SubNumber=3
+
+[607Dsub0]
+ParameterName=Number of entries
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[607Dsub1]
+ParameterName=Min position limit
+ObjectType=0x07
+DataType=0x0004
+AccessType=rw
+DefaultValue=-2147483648
+PDOMapping=1
+
+[607Dsub2]
+ParameterName=Max position limit
+ObjectType=0x07
+DataType=0x0004
+AccessType=rw
+DefaultValue=2147483647
+PDOMapping=1
+
+[607E]
+; bit7 位置极性 bit6 速度极性 bit5 转矩极性
+ParameterName=Polarity
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[607F]
+; 单位 指令单位/s；另受 Pn318 限制，取两者较小值
+ParameterName=Max profile velocity
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=838860800
+PDOMapping=1
+
+[6080]
+; 单位 rpm（电机侧）
+ParameterName=Max motor speed
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+PDOMapping=1
+
+[6081]
+; 单位 指令单位/s（PP 模式匀速段速度）
+ParameterName=Profile velocity
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=8388608
+PDOMapping=1
+
+[6083]
+; 单位 指令单位/s^2（PP/PV 加速度；写 0 内部强制为 1）
+ParameterName=Profile acceleration
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=83886080
+PDOMapping=1
+
+[6084]
+; 单位 指令单位/s^2（PP/PV 减速度；写 0 内部强制为 1）
+ParameterName=Profile deceleration
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=83886080
+PDOMapping=1
+
+[6085]
+; 单位 指令单位/s^2（快速停机减速度，605A=2 时生效）
+ParameterName=Quick stop deceleration
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=2147483647
+PDOMapping=1
+
+[6086]
+ParameterName=Motion profile type
+ObjectType=0x07
+DataType=0x0003
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[6087]
+; 单位 0.1%/s（PT 模式转矩斜坡；写 0 强制为 1）
+ParameterName=Torque slope
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=1000
+PDOMapping=1
+
+[6091]
+; 电子齿轮比 = (Pn204/Pn206) × (6091:01/6091:02)；1:1 时 指令单位=编码器单位
+ParameterName=Gear ratio
+ObjectType=0x08
+SubNumber=3
+
+[6091sub0]
+ParameterName=Number of entries
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[6091sub1]
+ParameterName=Motor revolutions
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=1
+PDOMapping=1
+
+[6091sub2]
+ParameterName=Shaft revolutions
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=1
+PDOMapping=1
+
+[6098]
+; 1~14 带 Z 脉冲，17~34 不参考 Z 脉冲，35=以当前位置为零点
+ParameterName=Homing method
+ObjectType=0x07
+DataType=0x0002
+AccessType=rw
+DefaultValue=1
+PDOMapping=1
+
+[6099]
+ParameterName=Homing speeds
+ObjectType=0x08
+SubNumber=3
+
+[6099sub0]
+ParameterName=Number of entries
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[6099sub1]
+; 单位 指令单位/s（搜索减速点信号速度）
+ParameterName=Speed during search for switch
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=27962026
+PDOMapping=1
+
+[6099sub2]
+; 单位 指令单位/s（搜索原点信号速度）
+ParameterName=Speed during search for zero
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=5592405
+PDOMapping=1
+
+[609A]
+; 单位 指令单位/s^2
+ParameterName=Homing acceleration
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=83886080
+PDOMapping=1
+
+[60C1]
+; IP 模式目标位置（绝对，指令单位）——上位机每个同步周期发一个
+ParameterName=Interpolation data record
+ObjectType=0x08
+SubNumber=2
+
+[60C1sub0]
+ParameterName=Number of entries
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=1
+PDOMapping=0
+
+[60C1sub1]
+ParameterName=Interpolation position command (absolute)
+ObjectType=0x07
+DataType=0x0004
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[60C2]
+; 插补周期 = 60C2:01 × 10^(60C2:02) 秒；必须与 SYNC 周期一致
+ParameterName=Interpolation time period
+ObjectType=0x08
+SubNumber=3
+
+[60C2sub0]
+ParameterName=Number of entries
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[60C2sub1]
+; 范围 1~20
+ParameterName=Interpolation time units
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=1
+
+[60C2sub2]
+; -3=ms -4=0.1ms -2=10ms
+ParameterName=Interpolation time index
+ObjectType=0x07
+DataType=0x0002
+AccessType=rw
+DefaultValue=-3
+PDOMapping=1
+
+[60C5]
+; 单位 指令单位/s^2
+ParameterName=Max profile acceleration
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=2147483647
+PDOMapping=1
+
+[60C6]
+; 单位 指令单位/s^2
+ParameterName=Max profile deceleration
+ObjectType=0x07
+DataType=0x0007
+AccessType=rw
+DefaultValue=2147483647
+PDOMapping=1
+
+[60E0]
+; 单位 0.1%
+ParameterName=Positive torque limit
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=3000
+PDOMapping=1
+
+[60E1]
+; 单位 0.1%
+ParameterName=Negative torque limit
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=3000
+PDOMapping=1
+
+[60F4]
+; 单位 指令单位（实时位置偏差）
+ParameterName=Following error actual value
+ObjectType=0x07
+DataType=0x0004
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[60FC]
+; 编码器单位；6062 × 电子齿轮比 = 60FC
+ParameterName=Position demand value (motor)
+ObjectType=0x07
+DataType=0x0004
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[60FD]
+; bit0 反向超程开关 bit1 正向超程开关 bit16~31 厂家自定义
+ParameterName=Digital inputs
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[60FE]
+; bit0 抱闸输出（RB200 为只读）
+ParameterName=Digital outputs
+ObjectType=0x08
+SubNumber=2
+
+[60FEsub0]
+ParameterName=Number of entries
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
+DefaultValue=1
+PDOMapping=0
+
+[60FEsub1]
+ParameterName=Physical outputs
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[60FF]
+; 单位 指令单位/s（PV 模式目标速度）
+ParameterName=Target velocity
+ObjectType=0x07
+DataType=0x0004
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[6502]
+; bit0=PP bit2=PV bit3=PT bit5=HM bit6=IP → 0x6D
+ParameterName=Supported drive modes
+ObjectType=0x07
+DataType=0x0006
+AccessType=ro
+DefaultValue=0x006D
+PDOMapping=1

@@ -1,0 +1,239 @@
+# bus.yml — eMeetArm CANopen 总线拓扑（ros2_canopen，从站=VEICHI RB200-CA 关节模组）
+#
+# 构建时由 generate_dcf(canopen) 处理：
+#   1. @BUS_CONFIG_PATH@ 替换为 install 后的 share/robot_arm_driver/config/canopen
+#   2. dcfgen 依据本文件 + RB200-CA.eds 生成 master.dcf / joint_N.bin
+# URDF 的 canopen_ros2_control/RobotSystem 插件通过 bus_config/master_config 参数引用。
+#
+# ── RB200-CA 要点（依据简版手册 V1.0）────────────────────────────────────────
+# 支持模式(6502h=0x6D)：PP(1) PV(3) PT(4) HM(6) IP(7)
+#   - IP：上位机每同步周期发绝对位置到 60C1:01（不是 607A！607A 仅 PP 用），
+#         插补周期 60C2 必须与 SYNC 周期一致（手册 3.5）→ 都是 10ms
+#   - ros2_control 接口映射：position→IP(7)  velocity→PV(3)  effort→PT(4)
+#     （启用哪个命令接口 = 402 驱动自动切到对应模式）
+#   - HM 回零：6098(方式,35=当前位置为零点)/6099/609A，由上位工具经 SDO 触发
+# 单位链：指令单位 ×电子齿轮比(6091)= 编码器单位；本配置 6091=1:1，
+#   减速机端绝对编码器 19bit = 524288 counts/rev（输出轴），故：
+#   scale_pos_to_dev  = 524288/2π = 83443.026748  [指令单位/rad]
+#   scale_pos_from_dev = 2π/524288 = 1.1984224905e-05 [rad/指令单位]
+#   速度对象(60FF/606C/6081/6083…)单位均为 指令单位/s(/s²)，同比例换算
+# 方向：若关节正方向与 URDF 相反，改从站 Pn002（或 607E 极性位），别改 scale 符号
+# 标定：编码器零点用 `ros2 run robot_arm_driver set_encoder_zero`（HM 方法 35）
+#
+# ── 速度/加速度/限位就在下面各关节 sdo: 段直接调（旧 arm_hw.yaml 的对应物）────
+# 单位是 pp，照下表换算（rad × 83443.03；或跑 set_motor_limits 让它帮你算）：
+#   rad(/s,/s²): 0.1→8344   0.2→16689   0.5→41722   1.0→83443   1.5→125165
+#                2.0→166886 3.0→250329  5.0→417215  10.0→834430
+#   rad(位置):   0.05→4172  0.8→66754   π/2→131072  2.618→218454 3.14→262011
+# 改完需重编译（约1秒，dcfgen 重新生成 master.dcf）再重启 launch：
+#   colcon build --symlink-install --packages-select robot_arm_driver
+# 临时调试不想重编译：ros2 run robot_arm_driver set_motor_limits can0 1 --vel 1.5
+# （工具改的值下次起栈会被本文件覆盖，长期值以本文件为准）
+
+options:
+  dcf_path: "@BUS_CONFIG_PATH@"
+
+master:
+  node_id: 127
+  driver: "ros2_canopen::MasterDriver"
+  package: "canopen_master_driver"
+  baudrate: 500                 # kbit/s，与实机一致（真正的位率由 ip link 设置：
+                                #   sudo ip link set can0 up type can bitrate 500000）
+  sync_period: 10000            # µs，10ms，= 60C2 插补周期 = controller update 周期
+
+joint_1:
+  node_id: 1
+  dcf: "RB200-CA.eds"
+  driver: "ros2_canopen::Cia402Driver"
+  package: "canopen_402_driver"
+  period: 10                    # ms，402 状态机轮询周期
+  boot_timeout_ms: 2000         # CANopen boot(配置下发)等待，默认 20ms 太短必超时
+  revision_number: 0
+  heartbeat_producer: 1000      # 从站心跳 1s（1017h），主站自动监测
+  position_mode: 7              # IP —— JTC/position 接口（写 60C1:01）
+  velocity_mode: 3              # PV —— velocity 接口（写 60FF）
+  effort_mode: 4                # PT —— effort 接口（写 6071，0.1% 额定转矩）
+  scale_pos_to_dev: 83443.026748
+  scale_pos_from_dev: 0.0000119842249054
+  scale_vel_to_dev: 83443.026748
+  scale_vel_from_dev: 0.0000119842249054
+  sdo:                          # 上线时主站自动下发
+    - {index: 0x6091, sub_index: 1, value: 1}        # 电子齿轮 1:1（指令单位=编码器单位）
+    - {index: 0x6091, sub_index: 2, value: 1}
+    - {index: 0x60C2, sub_index: 1, value: 10}       # 插补周期 10 ×
+    - {index: 0x60C2, sub_index: 2, value: -3}       #   10^-3 s = 10ms（与 SYNC 一致，硬要求）
+    - {index: 0x6081, sub_index: 0, value: 83443}    # PP 轮廓速度 ≈1 rad/s
+    - {index: 0x6083, sub_index: 0, value: 83443}    # 轮廓加速度 ≈1 rad/s²（PP/PV）
+    - {index: 0x6084, sub_index: 0, value: 83443}    # 轮廓减速度 ≈1 rad/s²（PP/PV）
+    - {index: 0x6085, sub_index: 0, value: 834430}   # 快速停机减速度 ≈10 rad/s²（605A=2 生效）
+    - {index: 0x6087, sub_index: 0, value: 1000}     # PT 转矩斜坡 100%/s
+    - {index: 0x6098, sub_index: 0, value: 0}        # 回零方法=0（402 驱动 init 才会跳过回零！绝对编码器无需回零；
+                                                     #   新驱动出厂 6098=1(找限位开关,会动!)，标零走 set_encoder_zero）
+    # 可选（按需解注释）：
+    # - {index: 0x6072, sub_index: 0, value: 3000}   # 最大转矩 300.0%
+    # - {index: 0x6065, sub_index: 0, value: 524288} # 位置偏差过大阈值 ≈2π rad（默认 38400000 很松）
+    # - {index: 0x607D, sub_index: 1, value: -218453} # 软限位 min（指令单位，按关节行程算）
+    # - {index: 0x607D, sub_index: 2, value: 218453}  # 软限位 max
+  tpdo:                         # 从站→主站（SYNC 同步发布）
+    1:
+      enabled: true
+      cob_id: "auto"
+      transmission: 0x01        # 每个 SYNC 发一次
+      mapping:
+        - {index: 0x6041, sub_index: 0}   # 状态字
+        - {index: 0x6061, sub_index: 0}   # 当前运行模式
+    2:
+      enabled: true
+      cob_id: "auto"
+      transmission: 0x01
+      mapping:
+        - {index: 0x6064, sub_index: 0}   # 用户位置反馈（指令单位）
+        - {index: 0x606C, sub_index: 0}   # 实际速度反馈（指令单位/s）
+  rpdo:                         # 主站→从站
+    1:
+      enabled: true
+      cob_id: "auto"
+      mapping:
+        - {index: 0x6040, sub_index: 0}   # 控制字
+        - {index: 0x6060, sub_index: 0}   # 模式选择
+    2:
+      enabled: true
+      cob_id: "auto"
+      mapping:
+        - {index: 0x60C1, sub_index: 1}   # IP 目标位置（绝对，指令单位）
+        - {index: 0x60FF, sub_index: 0}   # PV 目标速度（指令单位/s）——共 8 字节恰好占满
+    3:
+      enabled: true                       # ★实物出厂 RPDO3 禁用(1402:01 bit31=1)，必须显式启用，
+      cob_id: "auto"                      #   否则 PP 的 607A 帧被静默丢弃（EDS 默认值已改为"禁用"以触发下发）
+      transmission: 0xFF                  # 收到立即生效（PP 设定点 + 控制字握手不等 SYNC）
+      mapping:
+        - {index: 0x6040, sub_index: 0}   # 控制字
+        - {index: 0x607A, sub_index: 0}   # PP 目标位置（指令单位）
+
+joint_2:
+  node_id: 2
+  dcf: "RB200-CA.eds"
+  driver: "ros2_canopen::Cia402Driver"
+  package: "canopen_402_driver"
+  period: 10
+  boot_timeout_ms: 2000
+  revision_number: 0
+  heartbeat_producer: 1000
+  position_mode: 7
+  velocity_mode: 3
+  effort_mode: 4
+  scale_pos_to_dev: 83443.026748
+  scale_pos_from_dev: 0.0000119842249054
+  scale_vel_to_dev: 83443.026748
+  scale_vel_from_dev: 0.0000119842249054
+  sdo:
+    - {index: 0x6091, sub_index: 1, value: 1}
+    - {index: 0x6091, sub_index: 2, value: 1}
+    - {index: 0x60C2, sub_index: 1, value: 10}
+    - {index: 0x60C2, sub_index: 2, value: -3}
+    - {index: 0x6081, sub_index: 0, value: 83443}
+    - {index: 0x6083, sub_index: 0, value: 83443}
+    - {index: 0x6084, sub_index: 0, value: 83443}
+    - {index: 0x6085, sub_index: 0, value: 834430}
+    - {index: 0x6087, sub_index: 0, value: 1000}
+    - {index: 0x6098, sub_index: 0, value: 0}        # 回零方法=0（402 驱动 init 才会跳过回零！绝对编码器无需回零；
+                                                     #   新驱动出厂 6098=1(找限位开关,会动!)，标零走 set_encoder_zero）
+  tpdo:
+    1:
+      enabled: true
+      cob_id: "auto"
+      transmission: 0x01
+      mapping:
+        - {index: 0x6041, sub_index: 0}
+        - {index: 0x6061, sub_index: 0}
+    2:
+      enabled: true
+      cob_id: "auto"
+      transmission: 0x01
+      mapping:
+        - {index: 0x6064, sub_index: 0}
+        - {index: 0x606C, sub_index: 0}
+  rpdo:
+    1:
+      enabled: true
+      cob_id: "auto"
+      mapping:
+        - {index: 0x6040, sub_index: 0}
+        - {index: 0x6060, sub_index: 0}
+    2:
+      enabled: true
+      cob_id: "auto"
+      mapping:
+        - {index: 0x60C1, sub_index: 1}
+        - {index: 0x60FF, sub_index: 0}
+    3:
+      enabled: true                 # 实物出厂禁用，显式启用（PP 用，见 joint_1 注释）
+      cob_id: "auto"
+      transmission: 0xFF
+      mapping:
+        - {index: 0x6040, sub_index: 0}
+        - {index: 0x607A, sub_index: 0}
+
+joint_3:
+  node_id: 3
+  dcf: "RB200-CA.eds"
+  driver: "ros2_canopen::Cia402Driver"
+  package: "canopen_402_driver"
+  period: 10
+  boot_timeout_ms: 2000
+  revision_number: 0
+  heartbeat_producer: 1000
+  position_mode: 7
+  velocity_mode: 3
+  effort_mode: 4
+  scale_pos_to_dev: 83443.026748
+  scale_pos_from_dev: 0.0000119842249054
+  scale_vel_to_dev: 83443.026748
+  scale_vel_from_dev: 0.0000119842249054
+  sdo:
+    - {index: 0x6091, sub_index: 1, value: 1}
+    - {index: 0x6091, sub_index: 2, value: 1}
+    - {index: 0x60C2, sub_index: 1, value: 10}
+    - {index: 0x60C2, sub_index: 2, value: -3}
+    - {index: 0x6081, sub_index: 0, value: 83443}
+    - {index: 0x6083, sub_index: 0, value: 83443}
+    - {index: 0x6084, sub_index: 0, value: 83443}
+    - {index: 0x6085, sub_index: 0, value: 834430}
+    - {index: 0x6087, sub_index: 0, value: 1000}
+    - {index: 0x6098, sub_index: 0, value: 0}        # 回零方法=0（402 驱动 init 才会跳过回零！绝对编码器无需回零；
+                                                     #   新驱动出厂 6098=1(找限位开关,会动!)，标零走 set_encoder_zero）
+  tpdo:
+    1:
+      enabled: true
+      cob_id: "auto"
+      transmission: 0x01
+      mapping:
+        - {index: 0x6041, sub_index: 0}
+        - {index: 0x6061, sub_index: 0}
+    2:
+      enabled: true
+      cob_id: "auto"
+      transmission: 0x01
+      mapping:
+        - {index: 0x6064, sub_index: 0}
+        - {index: 0x606C, sub_index: 0}
+  rpdo:
+    1:
+      enabled: true
+      cob_id: "auto"
+      mapping:
+        - {index: 0x6040, sub_index: 0}
+        - {index: 0x6060, sub_index: 0}
+    2:
+      enabled: true
+      cob_id: "auto"
+      mapping:
+        - {index: 0x60C1, sub_index: 1}
+        - {index: 0x60FF, sub_index: 0}
+    3:
+      enabled: true                 # 实物出厂禁用，显式启用（PP 用，见 joint_1 注释）
+      cob_id: "auto"
+      transmission: 0xFF
+      mapping:
+        - {index: 0x6040, sub_index: 0}
+        - {index: 0x607A, sub_index: 0}

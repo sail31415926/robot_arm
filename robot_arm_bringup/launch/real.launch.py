@@ -1,31 +1,36 @@
 """
 @file real.launch.py
 @brief bringup 的实物后端 —— 只管实物底座，上层栈复用共享工厂
-@version 1.7
-@date 2026-07-01
+@version 2.0
+@date 2026-07-08
 
 @note  本文件是整机启动的 real 后端（统一入口见 bringup.launch.py，backend:=real）。
-       职责限于「底座」：arm_node(CANopen, J1-3) + ros2_control 相机(HID, J4-6) + 起相机控制器 +
-       move_group(实物 controllers)。上层栈（controller GUI / servo / commander / ibvs / visp /
-       安全预移动）的节点定义复用 launch/_arm_launch_common.py，与 gazebo/mujoco 共用一份。
+       v2.0：臂 J1-3 从 arm_node（自研 CANopen）切换到 ros2_control HAL
+       （canopen_ros2_control/RobotSystem，ros2_canopen），与云台 J4-6
+       （CameraHardwareInterface，HID）合并为单个 controller_manager 管全 6 轴。
 
-启动拓扑：
-  Joint1-3  →  arm_node（CANopen，JointTrajectory + joint_states 整体接口）
-  Joint4-6  →  ros2_control / CameraHardwareInterface（HID）
-               └─ gimbal_controller（JointTrajectoryController）
+启动拓扑（单 arm_controller 管全 6 轴，与 Gazebo/MuJoCo 命令总线一致）：
+  arm_controller（JTC，claim Joint1-6 position，跨两个硬件组件）
+    ├─ Joint1-3  →  canopen_ros2_control/RobotSystem（ros2_canopen，CiA402/SocketCAN，position→IP）
+    └─ Joint4-6  →  robot_gimbal_driver/CameraHardwareInterface（HID）
+  /arm_node/{enable,disable,recover} → arm_driver_services（转发 controller_manager）
+  注：gimbal_controller 仅在 controllers_real.yaml 保留定义（云台单独调试用），本 launch 不 spawn。
 
 用法（与 Gazebo launch 参数一致）：
-  ros2 launch robot_arm_bringup real.launch.py controller:=joint_position             # 关节滑块（PP 模式）
+  ros2 launch robot_arm_bringup real.launch.py controller:=joint_position             # 关节滑块
   ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_moveit           # MoveIt 笛卡尔直线
   ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_realtime_ik      # 滑块即时 IK
   ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_trajectory       # Ruckig 点到点+环绕
   ros2 launch robot_arm_bringup real.launch.py controller:=spherical_orbit            # 球面轨道运镜
-  ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_velocity         # 笛卡尔速度（手动点动，MoveIt Servo）
-  ros2 launch robot_arm_bringup real.launch.py controller:=visp_ibvs                  # 红色方块 IBVS 闭环（C++ ViSP+Pinocchio，直接 PV，无 Servo）
+  ros2 launch robot_arm_bringup real.launch.py controller:=cartesian_velocity         # 笛卡尔速度（MoveIt Servo）
+  ros2 launch robot_arm_bringup real.launch.py controller:=visp_ibvs                  # 红色方块 IBVS 闭环
+  ros2 launch robot_arm_bringup real.launch.py controller:=commander                  # Arm Commander 中间层
+  ros2 launch robot_arm_bringup real.launch.py controller:=commander gui:=false
 
-  ros2 launch robot_arm_bringup real.launch.py controller:=commander                  # Arm Commander 中间层（含 GUI）
-  ros2 launch robot_arm_bringup real.launch.py controller:=commander gui:=false       # Arm Commander 中间层（无 GUI，纯话题接口，同时关闭视频流窗口）
-  gui 参数（默认 true）同时控制：commander_test_gui + camera_view 窗口
+  arm_sim_mode:=true   臂 J1-3 不连 CAN（mock_components 回显），云台照常，用于无臂调试
+
+前置条件（真机）：
+  sudo ip link set can0 up type can bitrate 500000 && sudo ip link set can0 txqueuelen 128
 
 视频流由 robot_camera_node（robot_gimbal_node 包）单独启动，仅占用 V4L2，
 不与 ros2_control CameraHardwareInterface（HID）冲突，可同时运行。
@@ -40,7 +45,7 @@ import xacro
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, TimerAction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
@@ -55,120 +60,72 @@ def _load_yaml(path):
         return yaml.safe_load(f)
 
 
-
-def _camera_ros2_control_urdf(camera_type: str) -> str:
-    return f"""<?xml version="1.0"?>
-<robot name="eMeetCamera">
-  <ros2_control name="eMeetCamera_hardware" type="system">
-    <hardware>
-      <plugin>robot_gimbal_driver/CameraHardwareInterface</plugin>
-      <param name="camera_type">{camera_type}</param>
-      <param name="sim_mode">false</param>
-    </hardware>
-    <joint name="Joint4">
-      <command_interface name="position">
-        <param name="min">-3.1</param><param name="max">3.1</param>
-      </command_interface>
-      <command_interface name="velocity"/>
-      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
-      <state_interface name="velocity"/>
-    </joint>
-    <joint name="Joint5">
-      <command_interface name="position">
-        <param name="min">-0.7854</param><param name="max">0.7854</param>
-      </command_interface>
-      <command_interface name="velocity"/>
-      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
-      <state_interface name="velocity"/>
-    </joint>
-    <joint name="Joint6">
-      <command_interface name="position">
-        <param name="min">-1.5</param><param name="max">0.5</param><!-- [−1.5, +0.5] rad ↔ HID [+85.94°, −28.65°] -->
-      </command_interface>
-      <command_interface name="velocity"/>
-      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
-      <state_interface name="velocity"/>
-    </joint>
-  </ros2_control>
-</robot>"""
+def _default_can_interface() -> str:
+    """★ CAN 口统一在 robot_arm_driver/config/can.yaml 改（test_arm.launch 也读它）★"""
+    try:
+        cfg = os.path.join(get_package_share_directory('robot_arm_driver'),
+                           'config', 'can.yaml')
+        with open(cfg) as f:
+            return str(yaml.safe_load(f)['can_interface'])
+    except Exception:
+        return 'can0'
 
 
-def generate_launch_description():
+def _setup(context, *args, **kwargs):
     desc_share       = get_package_share_directory('robot_arm_description')
     bringup_share    = get_package_share_directory('robot_arm_bringup')
-    driver_share     = get_package_share_directory('robot_arm_driver')
     gimbal_share     = get_package_share_directory('robot_gimbal_node')
-    arm_yaml         = os.path.join(driver_share, 'config', 'arm.yaml')
-    controllers_yaml = os.path.join(desc_share, 'config', 'controllers.yaml')
+    controllers_yaml = os.path.join(desc_share, 'config', 'controllers_real.yaml')
     moveit_cfg       = os.path.join(bringup_share, 'config', 'moveit')
     servo_params     = _load_yaml(os.path.join(moveit_cfg, 'servo_config.yaml'))
     srdf_content     = open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf')).read()
 
-    _xacro_path  = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
-    _arm_urdf    = xacro.process_file(
-        _xacro_path, mappings={'sim_mode': 'false', 'gazebo_camera': 'false'}
+    arm_sim_mode  = LaunchConfiguration('arm_sim_mode').perform(context)
+    can_interface = LaunchConfiguration('can_interface').perform(context)
+
+    # 全 6 轴 URDF：J1-3 RobotSystem（CANopen）+ J4-6 CameraHardwareInterface（HID）
+    _xacro_path = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
+    rd = xacro.process_file(
+        _xacro_path,
+        mappings={
+            'backend': 'real',
+            'arm_sim_mode': arm_sim_mode,
+            'can_interface': can_interface,
+            'sim_mode': 'false',            # 云台连实物 HID
+            'gazebo_camera': 'false',
+            'emit_camera_control': 'true',
+            'controllers_yaml': '',         # 实物无 gazebo_ros2_control 插件
+        },
     ).toxml()
+    rds = srdf_content
 
-    # ── Launch arguments ──────────────────────────────────────────────────────
-    robot_description_arg = DeclareLaunchArgument(
-        'robot_description',
-        default_value=_arm_urdf,
-        description='完整机器人 URDF/XML 字符串；默认使用 arm_sim.urdf.xacro 处理结果',
-    )
-    robot_description_semantic_arg = DeclareLaunchArgument(
-        'robot_description_semantic',
-        default_value=srdf_content,
-        description='SRDF 语义描述字符串；默认使用 eMeetArm_models.srdf',
-    )
-
-    controller_arg = DeclareLaunchArgument(
-        'controller', default_value='joint_position',
-        description='控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
-                    'cartesian_trajectory | spherical_orbit | cartesian_velocity | '
-                    'visp_ibvs | commander',
-    )
-    gui_arg = DeclareLaunchArgument(
-        'gui', default_value='true',
-        description='是否启动 commander_test_gui（仅 controller:=commander 时生效）: true | false',
-    )
-    ctrl = LaunchConfiguration('controller')
-    gui  = LaunchConfiguration('gui')
-
-    camera_urdf = _camera_ros2_control_urdf('auto')
-    rd  = LaunchConfiguration('robot_description')
-    rds = LaunchConfiguration('robot_description_semantic')
+    ctrl      = LaunchConfiguration('controller')
+    gui       = LaunchConfiguration('gui')
+    log_level = LaunchConfiguration('log_level')
+    base_log  = common.log_args(log_level)   # 第三方底座节点统一追加
 
     # ── Core nodes ────────────────────────────────────────────────────────────
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='screen',
+        arguments=base_log,
         parameters=[{'robot_description': rd, 'use_sim_time': False}],
     )
 
-    # ros2_control 只管摄像头云台（Joint4-6）
+    # 单 controller_manager 管全 6 轴（臂 CANopen + 云台 HID）
     ros2_control_node = Node(
         package='controller_manager',
         executable='ros2_control_node',
         output='screen',
-        parameters=[{'robot_description': camera_urdf}, controllers_yaml],
+        arguments=base_log,
+        parameters=[{'robot_description': rd}, controllers_yaml],
     )
 
-    # 机械臂整体节点：Joint1-3，JointTrajectory 输入，joint_states 输出
-    # joint_position 模式使用 PP（轮廓位置）模式，其余模式使用 IP（插补位置）模式
-    arm_node = Node(
-        package='robot_arm_driver', executable='arm_node',
-        name='arm_node', output='screen',
-        parameters=[arm_yaml, {
-            # controller → motion_mode 映射规则：
-            #   joint_position              → pp（单点目标跳转）
-            #   ibvs_control / visp_ibvs    → pv（速度闭环，直接透传 velocities）
-            #   其余（cartesian_* / commander / spherical_orbit）→ ip（位置轨迹插补）
-            'motion_mode': PythonExpression([
-                "'pp' if '", ctrl, "' in ('joint_position', 'visp_ibvs') else "
-                "'ip'"
-            ])
-        }],
+    # 使能/失能/故障恢复服务：/arm_node/{enable,disable,recover}
+    # （commander 及旧接口兼容，转发到 controller_manager 硬件组件状态）
+    arm_driver_services = Node(
+        package='robot_arm_driver', executable='arm_driver_services', output='screen',
     )
 
     # 相机视频流节点：仅 V4L2，不占用 HID，与 ros2_control 无冲突
@@ -183,16 +140,27 @@ def generate_launch_description():
         name='camera_view_gui', output='screen',
         condition=IfCondition(gui),
     )
+    _ = (robot_camera_node, camera_view_node)   # 默认不启（保留定义，需要时加回列表）
 
-    # ── Camera controller spawners ────────────────────────────────────────────
+    # ── Controller spawners ───────────────────────────────────────────────────
     jsb_spawner = Node(
         package='controller_manager', executable='spawner',
-        arguments=['joint_state_broadcaster', '--controller-manager', '/controller_manager'],
+        arguments=['joint_state_broadcaster', '--controller-manager', '/controller_manager'] + base_log,
         output='screen',
     )
-    camera_ctrl_spawner = Node(
+    arm_ctrl_spawner = Node(
         package='controller_manager', executable='spawner',
-        arguments=['gimbal_controller', '--controller-manager', '/controller_manager'],
+        arguments=['arm_controller', '--controller-manager', '/controller_manager'] + base_log,
+        output='screen',
+    )
+    # gimbal_controller 不再 spawn：arm_controller 已 claim 全 6 轴（含云台 J4-6）
+
+    # PV 模式备用：只 load+configure 不 activate（--inactive），
+    # 由 /arm_node/set_mode_pv 与 arm_controller 互斥切换
+    vel_ctrl_loader = Node(
+        package='controller_manager', executable='spawner',
+        arguments=['arm_velocity_controller', '--inactive',
+                   '--controller-manager', '/controller_manager'] + base_log,
         output='screen',
     )
 
@@ -217,6 +185,7 @@ def generate_launch_description():
         package='moveit_ros_move_group',
         executable='move_group',
         output='screen',
+        arguments=base_log,
         parameters=[
             {'robot_description': rd},
             {'robot_description_semantic': rds},
@@ -232,11 +201,11 @@ def generate_launch_description():
         condition=needs_moveit,
     )
 
-    # ── MoveIt Servo（cartesian_velocity / ibvs_control / commander 模式）──────
-    is_velocity     = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
-    is_visp_ibvs    = IfCondition(PythonExpression(["'", ctrl, "' == 'visp_ibvs'"]))
-    is_commander    = IfCondition(PythonExpression(["'", ctrl, "' == 'commander'"]))
-    needs_servo     = IfCondition(PythonExpression(
+    # ── MoveIt Servo（cartesian_velocity 模式）─────────────────────────────────
+    is_velocity  = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
+    is_visp_ibvs = IfCondition(PythonExpression(["'", ctrl, "' == 'visp_ibvs'"]))
+    is_commander = IfCondition(PythonExpression(["'", ctrl, "' == 'commander'"]))
+    needs_servo  = IfCondition(PythonExpression(
         ["'", ctrl, "' in ['cartesian_velocity']"]))
 
     def make_servo_node(condition, check_collisions=True):
@@ -246,6 +215,7 @@ def generate_launch_description():
             executable='servo_node_main',
             name='servo_node',
             output='screen',
+            arguments=base_log,
             parameters=[
                 servo_params,
                 {'robot_description': rd,
@@ -264,23 +234,16 @@ def generate_launch_description():
     # 安全姿态预移动（全零关节是运动学奇异点，Servo 启动前须先移走）
     move_to_safe_pose = common.safe_pose_action(needs_servo)
 
-    # 电机状态控制 GUI：一键 使能/失能/故障复位（作用于整体 arm_node 的 Joint1-3）
-    # commander 模式由 commander_test_gui 统一管理使能/复位，不需要此窗口
-    motor_state_gui = Node(
-        package='robot_arm_driver', executable='motor_state_control_gui',
-        name='motor_state_control_gui', output='screen',
-        parameters=[{'namespaces': ['/arm_node'], 'labels': ['ARM']}],
-        condition=IfCondition(PythonExpression(["'", ctrl, "' != 'commander'"])),
-    )
-
     # Servo 模式：t=3s 安全姿态预移动（3s 运动），t=7s 启动 servo_node + 控制器
     cartesian_velocity_start = TimerAction(
         period=7.0,
         actions=[make_servo_node(is_velocity, check_collisions=False), velocity_ctrl],
         condition=is_velocity,
     )
+
     # ── visp_ibvs 模式 ───────────────────────────────────────────────────────
-    # arm_node 以 IP 模式启动（可接收位置指令）
+    # IBVS 节点发布 /arm_controller/joint_trajectory 单点流（positions+velocities），
+    # JTC（position→IP 模式）直接跟踪，无需旧 arm_node 的 PV 模式切换。
     # t=3s：发预备位姿（关节空间，3s 运动时间）
     visp_ibvs_prep = TimerAction(
         period=3.0,
@@ -300,20 +263,13 @@ def generate_launch_description():
         ],
         condition=is_visp_ibvs,
     )
-    # t=7s：切换到 PV 模式后启动 IBVS（等预备位姿到达）
+    # t=7s：等预备位姿到达后启动 IBVS 节点
     visp_ibvs_start = TimerAction(
         period=7.0,
-        actions=[
-            ExecuteProcess(
-                cmd=['ros2', 'service', 'call', '/arm_node/pv_mode',
-                     'std_srvs/srv/Trigger', '{}'],
-                output='screen',
-                condition=is_visp_ibvs,
-            ),
-        ] + common.visp_nodes(ctrl, 'visp_ibvs',
-                              robot_description=rd, use_sim_time=False,
-                              perception_topic='/ros2_algo_vision/report',
-                              control_depth=False),
+        actions=common.visp_nodes(ctrl, 'visp_ibvs',
+                                  robot_description=rd, use_sim_time=False,
+                                  perception_topic='/ros2_algo_vision/report',
+                                  control_depth=False),
         condition=is_visp_ibvs,
     )
 
@@ -325,10 +281,25 @@ def generate_launch_description():
         condition=is_commander,
     )
 
-    # 摄像头控制器 2 s 后 spawn（等 ros2_control_node 初始化）
-    spawn_camera = TimerAction(
+    # 控制器 2 s 后 spawn（等 controller_manager / CANopen master 初始化）
+    spawn_controllers = TimerAction(
         period=2.0,
-        actions=[jsb_spawner, camera_ctrl_spawner],
+        actions=[jsb_spawner, arm_ctrl_spawner, vel_ctrl_loader],
+    )
+
+    # ── 电机运行模式（402）按控制方式自动选择，经 /arm_node/set_mode_* 编排 ──────
+    #   joint_position                → PP(1) 驱动器自规划（滑块点到点，6081 限速）
+    #   轨迹/运镜/commander 等其余     → IP(7) 跟随上位机插补（bus.yml 默认，无需调用）
+    #   cartesian_velocity/visp_ibvs  → PV(3) 速度伺服（待上层改发速度指令后接入，
+    #                                   现阶段仍走 IP 位置流）
+    set_mode_pp = TimerAction(
+        period=6.0,   # 等 arm_controller 激活完成（t=2s spawn + 使能耗时）
+        actions=[ExecuteProcess(
+            cmd=['ros2', 'service', 'call', '/arm_node/set_mode_pp',
+                 'std_srvs/srv/Trigger', '{}'],
+            output='screen',
+        )],
+        condition=IfCondition(PythonExpression(["'", ctrl, "' == 'joint_position'"])),
     )
 
     # t=3s：启动 GUI 控制器 + 安全姿态预移动（Servo 模式）
@@ -337,26 +308,50 @@ def generate_launch_description():
         actions=[
             joint_position_ctrl, cartesian_moveit_ctrl, realtime_ik_ctrl,
             trajectory_ctrl, spherical_orbit_ctrl,
-            motor_state_gui,     # 电机状态控制 GUI（所有控制方式通用）
             move_to_safe_pose,   # Servo 模式专用（condition=needs_servo）
         ],
     )
 
-    return LaunchDescription([
-        robot_description_arg,
-        robot_description_semantic_arg,
-        controller_arg,
-        gui_arg,
+    return [
         robot_state_publisher,
         ros2_control_node,
-        arm_node,
-        # robot_camera_node,
-        #camera_view_node,
-        move_group_node,           # cartesian_moveit / cartesian_realtime_ik / cartesian_trajectory / spherical_orbit
-        spawn_camera,
+        arm_driver_services,
+        move_group_node,           # cartesian_moveit / realtime_ik / trajectory / orbit / commander
+        spawn_controllers,
+        set_mode_pp,               # t=6s，仅 joint_position 模式（402 切 PP）
         spawn_gui,
         cartesian_velocity_start,  # t=7s，仅 cartesian_velocity 模式
-        visp_ibvs_prep,            # t=3s，visp_ibvs 预备位姿（IP 模式）
-        visp_ibvs_start,           # t=7s，visp_ibvs 切 PV + 启动 IBVS 节点
+        visp_ibvs_prep,            # t=3s，visp_ibvs 预备位姿
+        visp_ibvs_start,           # t=7s，visp_ibvs 启动 IBVS 节点
         commander_start,           # t=10s，仅 commander 模式
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'controller', default_value='joint_position',
+            description='控制方式: joint_position | cartesian_moveit | cartesian_realtime_ik | '
+                        'cartesian_trajectory | spherical_orbit | cartesian_velocity | '
+                        'visp_ibvs | commander',
+        ),
+        DeclareLaunchArgument(
+            'gui', default_value='true',
+            description='是否启动 commander_test_gui（仅 controller:=commander 时生效）: true | false',
+        ),
+        DeclareLaunchArgument(
+            'arm_sim_mode', default_value='false',
+            description='true=臂 J1-3 不连 CAN（mock 回显），云台照常；false=连接实物 CANopen',
+        ),
+        DeclareLaunchArgument(
+            'can_interface', default_value=_default_can_interface(),
+            description='SocketCAN 接口名，默认读 robot_arm_driver/config/can.yaml；'
+                        '可临时覆盖：can0（真机）| vcan0（假从站联调）',
+        ),
+        DeclareLaunchArgument(
+            'log_level', default_value='warn',
+            description='第三方底座节点（move_group/servo/spawner/rsp/ros2_control 等）'
+                        '日志级别，默认 warn 降噪，调试时设 info；自家业务节点不受影响',
+        ),
+        OpaqueFunction(function=_setup),
     ])

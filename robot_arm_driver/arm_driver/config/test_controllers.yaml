@@ -1,0 +1,32 @@
+# test_controllers.yaml — robot_arm_driver 自测栈控制器配置（仅臂 J1-3）
+# 与 robot_arm_description/config/controllers_real.yaml 的臂段一致；本文件只给
+# test_arm.launch.py 用，整机 real 栈仍用 controllers_real.yaml。
+
+controller_manager:
+  ros__parameters:
+    update_rate: 100   # 与 bus.yml sync_period=10000µs / 0x60C2 插补周期 10ms 对齐
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+arm_controller:
+  ros__parameters:
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
+    # 只 claim position：RobotSystem 每关节同一时刻只允许启用一个命令接口
+    # （position→IP(7)，velocity→PV(3)，effort→PT(4)）
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 50.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    open_loop_control: false
+    allow_nonzero_velocity_at_trajectory_end: true

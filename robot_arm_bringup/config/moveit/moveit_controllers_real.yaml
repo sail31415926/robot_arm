@@ -1,6 +1,6 @@
 # MoveIt 控制器配置 —— 实物模式
-# Joint1-3 → arm_node 的 /arm_controller/follow_joint_trajectory action
-# Joint4-6 → ros2_control 的 /gimbal_controller/follow_joint_trajectory action
+# 全 6 轴 → ros2_control arm_controller 的 /arm_controller/follow_joint_trajectory action
+# （单 JTC claim Joint1-6，跨 CANopen + 云台两个硬件组件，见 controllers_real.yaml）
 moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
 
 trajectory_execution:
@@ -9,25 +9,22 @@ trajectory_execution:
   allowed_start_tolerance: 0.1
   moveit_manage_controllers: false
 
+# 注意：各控制器条目必须嵌套在 moveit_simple_controller_manager 下——
+# MoveItSimpleControllerManager 读的参数路径是
+# moveit_simple_controller_manager.<name>.action_ns，写顶层会报
+# "No action namespace specified" 且无法通过 MoveIt 执行轨迹。
 moveit_simple_controller_manager:
   controller_names:
     - arm_controller
-    - gimbal_controller
 
-arm_controller:
-  type: FollowJointTrajectory
-  action_ns: follow_joint_trajectory
-  default: true
-  joints:
-    - Joint1
-    - Joint2
-    - Joint3
-
-gimbal_controller:
-  type: FollowJointTrajectory
-  action_ns: follow_joint_trajectory
-  default: false
-  joints:
-    - Joint4
-    - Joint5
-    - Joint6
+  arm_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    default: true
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
+      - Joint4
+      - Joint5
+      - Joint6
