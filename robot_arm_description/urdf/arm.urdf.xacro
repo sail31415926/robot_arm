@@ -324,9 +324,12 @@
   <!-- ══ ros2_control ══════════════════════════════════════════════════════════
        Camera joints 4-6：
          gazebo_camera=true  → GazeboSystem（Gazebo 仿真，物理由 Gazebo 托管）
-         gazebo_camera=false → CameraHardwareInterface（实物/MuJoCo/display）
-                               sim_mode=true  仅回显指令（无 HID 连接）
-                               sim_mode=false 连接实物 USB HID
+         gazebo_camera=false → GimbalForwardingInterface（实物/MuJoCo/display）
+                               无 HID：write 变化检测转发给 robot_gimbal_node
+                              （唯一 HID 拥有者），read 回填其真实回读，
+                               详见 docs/云台控制路径融合方案.md
+                               sim_mode=true  纯指令回显（无 ROS 话题，无实物场景用）
+                               sim_mode=false 转发模式（实物，须运行 robot_gimbal_node）
        ═══════════════════════════════════════════════════════════════════════ -->
   <xacro:if value="${emit_camera_control}">
   <ros2_control name="eMeetCamera_hardware" type="system">
@@ -335,8 +338,10 @@
         <plugin>gazebo_ros2_control/GazeboSystem</plugin>
       </xacro:if>
       <xacro:unless value="${gazebo_camera}">
-        <plugin>robot_gimbal_driver/CameraHardwareInterface</plugin>
-        <param name="camera_type">auto</param>
+        <plugin>robot_gimbal_driver/GimbalForwardingInterface</plugin>
+        <param name="forward_cmd_topic">/robot_gimbal/forward_cmd</param>
+        <param name="states_topic">/robot_gimbal/joint_states_raw</param>
+        <param name="cmd_change_threshold">0.01</param>
         <xacro:if value="${sim_mode}">
           <param name="sim_mode">true</param>
         </xacro:if>

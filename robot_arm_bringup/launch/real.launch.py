@@ -6,13 +6,19 @@
 
 @note  本文件是整机启动的 real 后端（统一入口见 bringup.launch.py，backend:=real）。
        v2.0：臂 J1-3 从 arm_node（自研 CANopen）切换到 ros2_control HAL
-       （canopen_ros2_control/RobotSystem，ros2_canopen），与云台 J4-6
-       （CameraHardwareInterface，HID）合并为单个 controller_manager 管全 6 轴。
+       （canopen_ros2_control/RobotSystem，ros2_canopen），与云台 J4-6 合并为
+       单个 controller_manager 管全 6 轴。
+       v2.1（2026-07-13 控制路径融合）：J4-6 换 GimbalForwardingInterface（无 HID
+       转发插件），robot_gimbal_node 为唯一 HID 拥有者、本 launch 常驻拉起。
 
 启动拓扑（单 arm_controller 管全 6 轴，与 Gazebo/MuJoCo 命令总线一致）：
   arm_controller（JTC，claim Joint1-6 position，跨两个硬件组件）
     ├─ Joint1-3  →  canopen_ros2_control/RobotSystem（ros2_canopen，CiA402/SocketCAN，position→IP）
-    └─ Joint4-6  →  robot_gimbal_driver/CameraHardwareInterface（HID）
+    └─ Joint4-6  →  robot_gimbal_driver/GimbalForwardingInterface（转发插件，无 HID）
+                      ├ 指令：变化检测 → /robot_gimbal/forward_cmd → robot_gimbal_node（唯一 HID 拥有者）
+                      └ 状态：/robot_gimbal/joint_states_raw（50Hz 真实回读）回填 → jsb 统一发 6 轴 /joint_states
+  robot_gimbal_node：本 launch 常驻必需组件（云台执行者 + Director 语义接口），
+                     详见 docs/云台控制路径融合方案.md
   /arm_node/{enable,disable,recover} → arm_driver_services（转发 controller_manager）
   注：gimbal_controller 仅在 controllers_real.yaml 保留定义（云台单独调试用），本 launch 不 spawn。
 
@@ -33,7 +39,7 @@
   sudo ip link set can0 up type can bitrate 500000 && sudo ip link set can0 txqueuelen 128
 
 视频流由 robot_camera_node（robot_gimbal_node 包）单独启动，仅占用 V4L2，
-不与 ros2_control CameraHardwareInterface（HID）冲突，可同时运行。
+不与云台控制路径（robot_gimbal_node 独占 HID）冲突，可同时运行。
 
 @copyright Copyright (c) 2026 eMeet
 """
@@ -83,7 +89,7 @@ def _setup(context, *args, **kwargs):
     arm_sim_mode  = LaunchConfiguration('arm_sim_mode').perform(context)
     can_interface = LaunchConfiguration('can_interface').perform(context)
 
-    # 全 6 轴 URDF：J1-3 RobotSystem（CANopen）+ J4-6 CameraHardwareInterface（HID）
+    # 全 6 轴 URDF：J1-3 RobotSystem（CANopen）+ J4-6 GimbalForwardingInterface（转发）
     _xacro_path = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
     rd = xacro.process_file(
         _xacro_path,
@@ -128,6 +134,16 @@ def _setup(context, *args, **kwargs):
         package='robot_arm_driver', executable='arm_driver_services', output='screen',
     )
 
+    # 云台执行节点（唯一 HID 拥有者）：消费转发插件的 /robot_gimbal/forward_cmd，
+    # 回发 /robot_gimbal/joint_states_raw 真实回读；同时提供 Director 语义接口
+    # （gimbal_cmd / cmd_vel / rotate_to_angle）。融合后为本 launch 必需常驻组件。
+    gimbal_params = os.path.join(gimbal_share, 'config', 'params.yaml')
+    robot_gimbal_node = Node(
+        package='robot_gimbal_node', executable='robot_gimbal_node',
+        name='robot_gimbal_node', output='screen',
+        parameters=[gimbal_params],
+    )
+
     # 相机视频流节点：仅 V4L2，不占用 HID，与 ros2_control 无冲突
     camera_params = os.path.join(gimbal_share, 'config', 'params.yaml')
     robot_camera_node = Node(
@@ -165,12 +181,13 @@ def _setup(context, *args, **kwargs):
     )
 
     # ── GUI controller nodes（复用共享工厂）─────────────────────────────────────
-    joint_position_ctrl    = common.gui_node(ctrl, 'joint_position',        'joint_position_gui')
-    cartesian_moveit_ctrl  = common.gui_node(ctrl, 'cartesian_moveit',      'cartesian_moveit_gui')
-    realtime_ik_ctrl       = common.gui_node(ctrl, 'cartesian_realtime_ik', 'cartesian_realtime_ik_gui')
-    trajectory_ctrl        = common.gui_node(ctrl, 'cartesian_trajectory',  'cartesian_trajectory_gui')
-    spherical_orbit_ctrl   = common.gui_node(ctrl, 'spherical_orbit',       'spherical_orbit_gui')
-    velocity_ctrl          = common.gui_node(ctrl, 'cartesian_velocity',    'cartesian_velocity_gui')
+    # use_sim_time=False：实物无 /clock，若为 True 节点内定时器永不触发（TF 位姿面板卡 '--'）
+    joint_position_ctrl    = common.gui_node(ctrl, 'joint_position',        'joint_position_gui',        use_sim_time=False)
+    cartesian_moveit_ctrl  = common.gui_node(ctrl, 'cartesian_moveit',      'cartesian_moveit_gui',      use_sim_time=False)
+    realtime_ik_ctrl       = common.gui_node(ctrl, 'cartesian_realtime_ik', 'cartesian_realtime_ik_gui', use_sim_time=False)
+    trajectory_ctrl        = common.gui_node(ctrl, 'cartesian_trajectory',  'cartesian_trajectory_gui',  use_sim_time=False)
+    spherical_orbit_ctrl   = common.gui_node(ctrl, 'spherical_orbit',       'spherical_orbit_gui',       use_sim_time=False)
+    velocity_ctrl          = common.gui_node(ctrl, 'cartesian_velocity',    'cartesian_velocity_gui',    use_sim_time=False)
 
     # ── MoveIt（需要 IK 的控制方式）────────────────────────────────────────────
     needs_moveit = IfCondition(
@@ -314,6 +331,7 @@ def _setup(context, *args, **kwargs):
 
     return [
         robot_state_publisher,
+        robot_gimbal_node,         # 先于 spawner 拉起，回读就绪前转发插件回显兜底
         ros2_control_node,
         arm_driver_services,
         move_group_node,           # cartesian_moveit / realtime_ik / trajectory / orbit / commander

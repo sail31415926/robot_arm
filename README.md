@@ -104,8 +104,8 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
  L1 控制/后端层（三选一，总线接口一致，上层无感切换）
    [Gazebo]  gazebo_ros2_control → arm_controller (JTC, 6 轴) → 物理仿真
    [MuJoCo]  mujoco_node (py 桥)   订阅轨迹 / Servo，回填 joint_states + 相机图像
-   [Real]    arm_node (C++)  J1-3 → CANopen；并转发 J4-6 → /gimbal_controller/…
-             ros2_control + CameraHardwareInterface  J4-6 相机云台（HID）
+   [Real]    ros2_control 单 CM：J1-3 → RobotSystem（CANopen）
+             J4-6 → GimbalForwardingInterface（转发）⇄ robot_gimbal_node（HID 独占）
 ───────────────────────────────────────────────────────────────────────────────────
  L0 物理/驱动     Gazebo 物理引擎   │   MuJoCo 物理   │   SocketCAN can0 + 云台 HID/V4L2
 ═══════════════════════════════════════════════════════════════════════════════════
@@ -125,7 +125,7 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 | 关节 | 驱动（硬件组件） | 反馈来源 | 命令入口 |
 | :--- | :--- | :--- | :--- |
 | Joint1–3 | `canopen_ros2_control/RobotSystem`（ros2_canopen，CiA402/SocketCAN） | `joint_state_broadcaster` → `/joint_states` | `/arm_controller/joint_trajectory` |
-| Joint4–6 | HID 相机云台（`robot_gimbal_driver/CameraHardwareInterface`） | `joint_state_broadcaster` → `/joint_states` | `/arm_controller/joint_trajectory`（同一控制器） |
+| Joint4–6 | `robot_gimbal_driver/GimbalForwardingInterface`（转发插件，无 HID）⇄ `robot_gimbal_node`（唯一 HID 拥有者，真实回读） | `joint_state_broadcaster` → `/joint_states` | `/arm_controller/joint_trajectory`（同一控制器） |
 
 ### 各节点职责与数据传输
 
@@ -138,7 +138,7 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 | `mujoco_node` | robot_arm_mujoco · py | MuJoCo 仿真桥：物理步进 + 相机渲染 | `/arm_controller/joint_trajectory`、`/servo_node/delta_twist_cmds` → `/joint_states`、`/camera/camera_sensor/image_raw` |
 | `move_group` | MoveIt | 运动规划 / IK / 笛卡尔路径 | 规划请求 → `/compute_ik`、`/compute_cartesian_path` 服务；`/arm_controller/follow_joint_trajectory` 执行 |
 | `servo_node` | MoveIt Servo | 实时笛卡尔速度 → 关节增量 | `/servo_node/delta_twist_cmds` → `/arm_controller/joint_trajectory` |
-| `ros2_control_node` + `arm_controller`(JTC) | controller_manager · C++ | 【实物】单 CM 管全 6 轴：J1-3 CANopen（RobotSystem，position→IP 模式）+ J4-6 云台 HID（CameraHardwareInterface） | `/arm_controller/joint_trajectory`、`/arm_controller/follow_joint_trajectory` Action → CAN/HID + `/joint_states`(6 轴) |
+| `ros2_control_node` + `arm_controller`(JTC) | controller_manager · C++ | 【实物】单 CM 管全 6 轴：J1-3 CANopen（RobotSystem，position→IP 模式）+ J4-6 云台（GimbalForwardingInterface 转发 ⇄ robot_gimbal_node，见 docs/云台控制路径融合方案.md） | `/arm_controller/joint_trajectory`、`/arm_controller/follow_joint_trajectory` Action → CAN/HID + `/joint_states`(6 轴) |
 | `arm_driver_services` | robot_arm_driver · C++ | 【实物】使能/失能/故障恢复服务（转发 controller_manager 硬件组件状态） | `/arm_node/{enable,disable,recover}`(Trigger) → CM 组件 active↔inactive |
 | `arm_controller` (JTC) | Gazebo / ros2_control | 【Gazebo】6 轴关节轨迹控制器驱动仿真模型 | `/arm_controller/joint_trajectory` → 物理 + `/joint_states` |
 | `robot_camera_node` | robot_gimbal_node · C++ | 【实物】V4L2 视频流（仅占 V4L2，与 HID 不冲突） | 相机 → `/camera/image_raw/compressed` |

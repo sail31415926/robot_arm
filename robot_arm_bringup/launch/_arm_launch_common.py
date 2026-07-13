@@ -68,8 +68,11 @@ def in_modes(ctrl, names):
 
 # ── controller GUI（基础 5 种；cartesian_velocity 的 GUI 随 servo 时序单独起）──────
 # 调试控制器/GUI 在 robot_arm_debug 包（产品栈 arm_commander_node 在 robot_arm_node）
-def gui_node(ctrl, mode, exe):
+# use_sim_time 必须按后端传入（默认 True 兼容 gazebo/mujoco 调用点；real 传 False）：
+# 实物无 /clock 时若为 True，节点内所有 ROS 定时器永不触发（位姿面板卡 '--'）。
+def gui_node(ctrl, mode, exe, use_sim_time=True):
     return Node(package='robot_arm_debug', executable=exe, output='screen',
+                parameters=[{'use_sim_time': use_sim_time}],
                 condition=is_mode(ctrl, mode))
 
 
@@ -142,6 +145,7 @@ def commander_nodes(ctrl, gui, use_sim_time):
              parameters=[{'use_sim_time': use_sim_time}],
              condition=is_mode(ctrl, 'commander')),
         Node(package='robot_arm_debug', executable='commander_test_gui', output='screen',
+             parameters=[{'use_sim_time': use_sim_time}],
              condition=IfCondition(PythonExpression(
                  ["'", ctrl, "' == 'commander' and '", gui, "' == 'true'"]))),
     ]

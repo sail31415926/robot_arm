@@ -69,12 +69,10 @@ ERR_NAMES        = {0: 'NONE', 1: 'LIMIT', 2: 'DRIVER', 3: 'TIMEOUT'}
 # ── ROS 节点 ─────────────────────────────────────────────────────────────────────
 class CommanderTestNode(Node):
     def __init__(self, gui_q: queue.Queue):
-        super().__init__('commander_test_gui',
-                         parameter_overrides=[
-                             rclpy.parameter.Parameter(
-                                 'use_sim_time',
-                                 rclpy.parameter.Parameter.Type.BOOL, True)
-                         ])
+        super().__init__('commander_test_gui')
+        # use_sim_time 由 launch 按后端传入（gazebo/mujoco=true，real=false）。
+        # 切勿在此硬编码覆盖：实物无 /clock 时 use_sim_time=true 会让所有
+        # ROS 定时器永不触发（位姿面板卡 '--' 的教训）。
         self._q = gui_q
 
         self._mtp_client          = ActionClient(self, ArmMoveToPose, ACTION_MTP)
