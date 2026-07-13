@@ -8,4 +8,6 @@ log/
 
 # 不参与 git（恢复时删除下面这行即可）
 robot_arm_rl/
-robot_arm_matlab/
+
+# 第三方 Robotics Toolbox 安装包（26MB，可自行下载，不进 git）
+robot_arm_matlab/RTB.mltbx
