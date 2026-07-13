@@ -47,8 +47,8 @@ world
 
 | 关节 | 类型 | 驱动 | 仿真 |
 | --- | --- | --- | --- |
-| Joint1–3 | revolute | CANopen（arm_node） | GazeboSystem |
-| Joint4–6 | revolute | HID（CameraHardwareInterface） | GazeboSystem（`gazebo_camera=true`） |
+| Joint1–3 | revolute | CANopen（`canopen_ros2_control/RobotSystem`，ros2_canopen） | GazeboSystem |
+| Joint4–6 | revolute | `GimbalForwardingInterface`（转发插件，无 HID；实际执行者 robot_gimbal_node，见 docs/云台控制路径融合方案.md） | GazeboSystem（`gazebo_camera=true`） |
 
 ---
 
@@ -77,8 +77,8 @@ world
 | `parent` | —（必填） | 挂载父 link 名称 |
 | `xyz` | `0 0 0.31` | 安装位置偏移（m） |
 | `rpy` | `0 0 0` | 安装姿态偏移（rad） |
-| `sim_mode` | `true` | `false`=连接实物 HID，`true`=仿真回显 |
-| `gazebo_camera` | `false` | `true`=Gazebo 托管 Joint4-6，`false`=CameraHardwareInterface |
+| `sim_mode` | `true` | `false`=转发模式（须运行 robot_gimbal_node），`true`=纯指令回显（无实物场景） |
+| `gazebo_camera` | `false` | `true`=Gazebo 托管 Joint4-6，`false`=GimbalForwardingInterface（转发插件） |
 | `controllers_yaml` | `''` | 非空时注入 `gazebo_ros2_control` 插件 |
 
 外部包（底盘包）的 `full_robot.urdf.xacro` 示例：
@@ -135,7 +135,12 @@ robot_description = xacro.process_file(
 | -------- | ------ | ---------- |
 | `joint_state_broadcaster` | 全部 | 所有模式 |
 | `arm_controller` | Joint1–6 | Gazebo / MuJoCo 仿真 |
-| `gimbal_controller` | Joint4–6 | 实物（Joint1–3 由 arm_node 独立驱动） |
+| `gimbal_controller` | Joint4–6 | 仅云台单独调试保留定义（与 arm_controller 抢 J4-6 接口，二者不可同时 active） |
+
+实物用 `config/controllers_real.yaml`（单 CM 管全 6 轴）：`arm_controller` claim
+Joint1-6，J4-6 已禁用轨迹/到点容差——反馈是云台真实回读（经转发插件回传，
+有话题滞后 + 设备自规划滞后），不禁用会 abort 整条 6 轴轨迹。旧 arm_node
+（自研 CANopen 栈）已于 2026-07 下线。
 
 ---
 

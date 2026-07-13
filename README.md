@@ -5,8 +5,8 @@
 | 项目属性 | 详情 |
 | :--- | :--- |
 | **项目名称** | eMeet Robot Arm ROS 2 Package |
-| **版本** | v1.4.0 |
-| **发布日期** | 2026-07-07 |
+| **版本** | v1.5.0 |
+| **发布日期** | 2026-07-13 |
 | **支持平台** | Ubuntu 22.04 LTS · ROS 2 Humble · Python 3.10 |
 | **设备** | eMeet 6 轴机械臂（Joint1-3 CANopen + Joint4-6 相机云台 HID） |
 | **语言** | C++ / Python / MATLAB |
