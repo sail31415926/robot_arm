@@ -117,90 +117,9 @@ install(TARGETS arm_commander_node DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY include/ DESTINATION include)
 
-
-# ── gui/：所有 GUI 节点（rename 为无扩展名可执行，ros2 run 调起）────────────
-foreach(script
-  joint_position_gui
-  cartesian_moveit_gui
-  cartesian_realtime_ik_gui
-  cartesian_trajectory_gui
-  cartesian_velocity_gui
-  spherical_orbit_gui
-  visp_ibvs_gui
-)
-  install(PROGRAMS python/gui/${script}.py
-    DESTINATION lib/${PROJECT_NAME}
-    RENAME ${script}
-  )
-endforeach()
-
-# ── python/controllers/：调试控制节点（留 Python，供 GUI import 或独立运行）────────
-install(PROGRAMS
-  python/controllers/joint_position_controller_node.py
-  python/controllers/cartesian_moveit_controller_node.py
-  python/controllers/cartesian_realtime_ik_controller_node.py
-  python/controllers/cartesian_velocity_controller_node.py
-  python/controllers/cartesian_trajectory_controller_node.py
-  python/controllers/spherical_orbit_controller_node.py
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-# ── python/vision/：视觉感知节点（留 Python；红方块检测器，喂特征给 C++ visp_ibvs_node）──
-install(PROGRAMS python/vision/red_box_detector.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME red_box_detector
-)
-# 注：Python 版 IBVS（ibvs_control_node + IBVS_Controller/）已被 C++ visp_ibvs_node 取代并删除。
-
-# 注：Python 产品栈（commander/ + arm_motion/）已被 C++ motion/state/commander 取代并删除
-#     （Gazebo 端到端验证通过后清理，2026-07-02）。几何数学复用见上方 robot_arm_geometry。
-
-# 注：python/simulation/（mujoco_node + mujoco_data_recorder）已迁至 robot_arm_mujoco 包（2026-07-10）。
-
-# ── python/tools/：工具脚本（留 Python）───────────────────────────────────────
-install(PROGRAMS python/tools/arm_utils.py
-  DESTINATION lib/${PROJECT_NAME}
-)
-install(PROGRAMS python/tools/arm_trajectory_bridge.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME arm_trajectory_bridge
-)
-
-# ── python/tests/ ─────────────────────────────────────────────────────────────
-install(PROGRAMS python/tests/commander_test_gui.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME commander_test_gui
-)
-
-# ── vision/：ViSP + Pinocchio IBVS C++ 节点 ──────────────────────────────────
-find_package(VISP QUIET)
-find_package(pinocchio QUIET)
-find_package(geometry_msgs REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(trajectory_msgs REQUIRED)
-find_package(ros2_algo_vision_interfaces QUIET)
-
-if(VISP_FOUND AND pinocchio_FOUND)
-  add_executable(visp_ibvs_node src/vision/visp_ibvs_node.cpp)
-  target_compile_features(visp_ibvs_node PRIVATE cxx_std_17)
-  target_include_directories(visp_ibvs_node PRIVATE
-    ${VISP_INCLUDE_DIRS}
-    ${pinocchio_INCLUDE_DIRS})
-  if(ros2_algo_vision_interfaces_FOUND)
-    target_compile_definitions(visp_ibvs_node PRIVATE HAS_PERCEPTION_REPORT)
-    ament_target_dependencies(visp_ibvs_node
-      rclcpp geometry_msgs sensor_msgs trajectory_msgs ros2_algo_vision_interfaces)
-    message(STATUS "ros2_algo_vision_interfaces found — PerceptionReport support enabled")
-  else()
-    ament_target_dependencies(visp_ibvs_node
-      rclcpp geometry_msgs sensor_msgs trajectory_msgs)
-    message(STATUS "ros2_algo_vision_interfaces not found — PerceptionReport support disabled")
-  endif()
-  target_link_libraries(visp_ibvs_node ${VISP_LIBRARIES} pinocchio::pinocchio)
-  install(TARGETS visp_ibvs_node DESTINATION lib/${PROJECT_NAME})
-  message(STATUS "ViSP (${VISP_VERSION}) + Pinocchio found — visp_ibvs_node will be built")
-else()
-  message(WARNING "VISP or Pinocchio not found — visp_ibvs_node skipped. Install ros-humble-visp ros-humble-pinocchio.")
-endif()
+# 注：本包为**产品层**（C++ motion/state/commander）。
+#     Python 调试控制器/GUI/工具 + 视觉感知（visp_ibvs_node/red_box_detector，
+#     暂归调试）已迁至 robot_arm_debug 包（2026-07-13）；
+#     MuJoCo 仿真桥已迁至 robot_arm_mujoco（2026-07-10）。
 
 ament_package()

@@ -1,8 +1,10 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>robot_arm_node</name>
-  <version>0.1.0</version>
-  <description>Application-level control nodes for eMeet robotic arm</description>
+  <version>0.2.0</version>
+  <description>Product-level application layer for eMeet robotic arm:
+    C++ motion / state / commander stack (arm_commander_node).
+    调试工具与视觉感知见 robot_arm_debug。</description>
   <maintainer email="ruichao.liu@emeet.com">ruichao.liu</maintainer>
   <license>Apache-2.0</license>
 
@@ -19,7 +21,6 @@
   <depend>geometry_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>tf2</depend>
-  <depend>pinocchio</depend>
   <depend>trajectory_msgs</depend>
 
   <export>

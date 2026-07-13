@@ -20,7 +20,8 @@ robot_arm/
 ├── robot_arm_interfaces/    # 自定义 msg / srv / action（ArmStatus、ArmMoveToPose、ArmTrajectoryShot…）
 ├── robot_arm_description/   # URDF / SRDF / MJCF / mesh / RViz / kinematics（pick_ik）配置
 ├── robot_arm_driver/        # C++ CANopen 驱动（J1-3）：arm_node（独立节点）+ ArmHardwareInterface（ros2_control 插件）
-├── robot_arm_node/          # 应用层：C++ 产品栈（commander / motion / vision）+ Python 调试控制器 / GUI / 工具
+├── robot_arm_node/          # ★产品层：C++ 产品栈（motion / state / commander，arm_commander_node）
+├── robot_arm_debug/         # ☆调试层：Python 调试控制器 / GUI / 工具 + 视觉感知（visp_ibvs、红块检测，暂归调试）
 ├── robot_arm_bringup/       # 统一启动入口（bringup/real/moveit launch）+ MoveIt 配置 + 三后端共享上层栈定义
 ├── robot_arm_gazebo/        # Gazebo 仿真后端：gazebo.launch.py + worlds / models 资产
 ├── robot_arm_mujoco/        # MuJoCo 仿真后端：mujoco.launch.py + mujoco_node 仿真桥
@@ -131,9 +132,9 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 | 节点（可执行） | 包·语言 | 职责 | 关键输入 → 输出 |
 | :--- | :--- | :--- | :--- |
 | `arm_commander_node` | robot_arm_node · C++ | 产品中间层状态机，把「拍摄/姿态」意图翻译成轨迹 | `/robot_arm/{move_to_pose,trajectory_shot,track_target}` Action、`/joint_states`、`/compute_ik` → `/arm_controller/joint_trajectory`、`/robot_arm/arm_status` |
-| `controllers ×6` | robot_arm_node · py | 调试控制：关节滑块 / 笛卡尔 / 实时 IK / Ruckig 点到点 / 球面运镜 / 速度点动 | GUI 滑块、`/joint_states`、`/compute_ik`·`/compute_cartesian_path` → `/arm_controller/joint_trajectory`（`cartesian_velocity` 改发 `/servo_node/delta_twist_cmds`） |
-| `visp_ibvs_node` | robot_arm_node · C++ | ViSP+Pinocchio 图像伺服，加权 Jacobian 直接算关节速度 | `/red_detector/feature`（或外部 `perception_topic`）、`/joint_states` → `/arm_controller/joint_trajectory` |
-| `red_box_detector` | robot_arm_node · py | OpenCV 红块检测，产出归一化像素特征 + 深度 | `/camera/camera_sensor/image_raw` → `/red_detector/feature`、`/red_detector/image` |
+| `controllers ×6` | robot_arm_debug · py | 调试控制：关节滑块 / 笛卡尔 / 实时 IK / Ruckig 点到点 / 球面运镜 / 速度点动 | GUI 滑块、`/joint_states`、`/compute_ik`·`/compute_cartesian_path` → `/arm_controller/joint_trajectory`（`cartesian_velocity` 改发 `/servo_node/delta_twist_cmds`） |
+| `visp_ibvs_node` | robot_arm_debug · C++ | ViSP+Pinocchio 图像伺服，加权 Jacobian 直接算关节速度 | `/red_detector/feature`（或外部 `perception_topic`）、`/joint_states` → `/arm_controller/joint_trajectory` |
+| `red_box_detector` | robot_arm_debug · py | OpenCV 红块检测，产出归一化像素特征 + 深度 | `/camera/camera_sensor/image_raw` → `/red_detector/feature`、`/red_detector/image` |
 | `mujoco_node` | robot_arm_mujoco · py | MuJoCo 仿真桥：物理步进 + 相机渲染 | `/arm_controller/joint_trajectory`、`/servo_node/delta_twist_cmds` → `/joint_states`、`/camera/camera_sensor/image_raw` |
 | `move_group` | MoveIt | 运动规划 / IK / 笛卡尔路径 | 规划请求 → `/compute_ik`、`/compute_cartesian_path` 服务；`/arm_controller/follow_joint_trajectory` 执行 |
 | `servo_node` | MoveIt Servo | 实时笛卡尔速度 → 关节增量 | `/servo_node/delta_twist_cmds` → `/arm_controller/joint_trajectory` |
@@ -197,7 +198,7 @@ source install/setup.bash   # 编译后
 # 编译所有机械臂相关包
 colcon build --symlink-install --packages-select \
   robot_arm_interfaces robot_arm_driver robot_arm_description \
-  robot_arm_bringup robot_arm_node robot_arm_gazebo robot_arm_mujoco
+  robot_arm_bringup robot_arm_node robot_arm_debug robot_arm_gazebo robot_arm_mujoco
 
 # 生效
 source install/setup.bash

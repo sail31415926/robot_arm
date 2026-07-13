@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_arm_debug</name>
+  <version>0.1.0</version>
+  <description>Debug / development tools for eMeet robotic arm:
+    Python debug controllers + PyQt GUIs, and vision perception
+    (visp_ibvs_node, red_box_detector — 暂归调试，成熟后再升产品包).
+    产品部署无需安装本包（robot_arm_node 为产品层）。</description>
+  <maintainer email="support@emeet.com">EMEET Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- C++ 视觉节点（visp_ibvs_node，VISP 用 find_package(QUIET) 缺省跳过） -->
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>pinocchio</depend>
+
+  <!-- Python 调试控制器 / GUI（PyQt5、opencv 走 pip，见 requirements.txt） -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>robot_arm_interfaces</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

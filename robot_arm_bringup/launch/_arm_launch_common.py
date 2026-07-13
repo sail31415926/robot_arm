@@ -67,8 +67,9 @@ def in_modes(ctrl, names):
 
 
 # ── controller GUI（基础 5 种；cartesian_velocity 的 GUI 随 servo 时序单独起）──────
+# 调试控制器/GUI 在 robot_arm_debug 包（产品栈 arm_commander_node 在 robot_arm_node）
 def gui_node(ctrl, mode, exe):
-    return Node(package='robot_arm_node', executable=exe, output='screen',
+    return Node(package='robot_arm_debug', executable=exe, output='screen',
                 condition=is_mode(ctrl, mode))
 
 
@@ -140,7 +141,7 @@ def commander_nodes(ctrl, gui, use_sim_time):
         Node(package='robot_arm_node', executable='arm_commander_node', output='screen',
              parameters=[{'use_sim_time': use_sim_time}],
              condition=is_mode(ctrl, 'commander')),
-        Node(package='robot_arm_node', executable='commander_test_gui', output='screen',
+        Node(package='robot_arm_debug', executable='commander_test_gui', output='screen',
              condition=IfCondition(PythonExpression(
                  ["'", ctrl, "' == 'commander' and '", gui, "' == 'true'"]))),
     ]
@@ -160,10 +161,10 @@ def visp_nodes(ctrl, mode, *, robot_description, use_sim_time,
     if perception_topic:
         visp_params['perception_topic'] = perception_topic
     return [
-        Node(package='robot_arm_node', executable='red_box_detector', output='screen',
+        Node(package='robot_arm_debug', executable='red_box_detector', output='screen',
              parameters=[{'use_sim_time': use_sim_time}], condition=cond),
-        Node(package='robot_arm_node', executable='visp_ibvs_node', output='screen',
+        Node(package='robot_arm_debug', executable='visp_ibvs_node', output='screen',
              parameters=[visp_params], condition=cond),
-        Node(package='robot_arm_node', executable='visp_ibvs_gui', output='screen',
+        Node(package='robot_arm_debug', executable='visp_ibvs_gui', output='screen',
              condition=cond),
     ]

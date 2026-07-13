@@ -14,6 +14,7 @@
   <exec_depend>robot_arm_bringup</exec_depend>
   <exec_depend>robot_arm_description</exec_depend>
   <exec_depend>robot_arm_node</exec_depend>
+  <exec_depend>robot_arm_debug</exec_depend>
 
   <exec_depend>gazebo_ros</exec_depend>
   <exec_depend>gazebo_ros2_control</exec_depend>

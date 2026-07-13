@@ -30,7 +30,7 @@ def generate_launch_description():
         DeclareLaunchArgument('min_area', default_value='300',
                               description='最小轮廓面积阈值(像素)'),
         Node(
-            package='robot_arm_node',
+            package='robot_arm_debug',
             executable='red_box_detector',
             name='red_box_detector',
             output='screen',
