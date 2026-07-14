@@ -1,5 +1,5 @@
 # test_controllers.yaml — robot_arm_driver 自测栈控制器配置（仅臂 J1-3）
-# 与 robot_arm_description/config/controllers_real.yaml 的臂段一致；本文件只给
+# 与 robot_arm_bringup/config/controllers_real.yaml 的臂段一致；本文件只给
 # test_arm.launch.py 用，整机 real 栈仍用 controllers_real.yaml。
 
 controller_manager:

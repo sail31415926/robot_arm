@@ -2,7 +2,7 @@
 
 机械臂驱动节点，接收高层运动控制指令，驱动机械臂到达目标高度，并实时发布机械臂状态。
 
-> **当前状态**：stub 实现，接口已定义，驱动层待对接硬件 SDK。
+> **当前状态**：commander 产品栈（arm_commander_node：motion / state / commander），驱动经 `/arm_controller/joint_trajectory` 总线与三后端解耦。
 
 ---
 

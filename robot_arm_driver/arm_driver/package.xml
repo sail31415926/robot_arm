@@ -26,6 +26,7 @@
 
   <!-- 自测栈（launch/test_arm.launch.py）-->
   <exec_depend>controller_manager</exec_depend>
+  <exec_depend>hardware_interface</exec_depend>  <!-- mock 模式插件 mock_components/GenericSystem -->
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>canopen_fake_slaves</exec_depend>

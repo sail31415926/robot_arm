@@ -39,7 +39,8 @@ endforeach()
 install(TARGETS set_encoder_zero set_motor_limits unit_convert DESTINATION lib/${PROJECT_NAME})
 
 # ── 自测栈（launch/test_arm.launch.py，mock/vcan假从站/真机 三合一）────────────
-install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME}
+        PATTERN "__pycache__" EXCLUDE)
 install(FILES config/test_controllers.yaml config/can.yaml
   DESTINATION share/${PROJECT_NAME}/config)
 

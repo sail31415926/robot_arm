@@ -11,20 +11,26 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- C++ 视觉节点（visp_ibvs_node，VISP 用 find_package(QUIET) 缺省跳过） -->
+  <!-- C++ 视觉节点（visp_ibvs_node）。可选依赖 VISP / ros2_algo_vision_interfaces
+       用 find_package(QUIET)，缺省自动跳过该节点，故不在此强声明（rosdep key: visp） -->
   <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>trajectory_msgs</depend>
   <depend>pinocchio</depend>
 
-  <!-- Python 调试控制器 / GUI（PyQt5、opencv 走 pip，见 requirements.txt） -->
+  <!-- Python 调试控制器 / GUI（ruckig python 绑定走 pip，见 requirements.txt） -->
   <exec_depend>rclpy</exec_depend>
   <exec_depend>moveit_msgs</exec_depend>
-  <exec_depend>control_msgs</exec_depend>
-  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>robot_arm_interfaces</exec_depend>
+  <exec_depend>python3-tk</exec_depend>       <!-- tkinter GUI ×7 -->
+  <exec_depend>python3-pyqt5</exec_depend>    <!-- joint_position_gui -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>   <!-- red_box_detector -->
 
   <export>
     <build_type>ament_cmake</build_type>
