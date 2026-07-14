@@ -69,11 +69,10 @@ joint_1:
     - {index: 0x6087, sub_index: 0, value: 1000}     # PT 转矩斜坡 100%/s
     - {index: 0x6098, sub_index: 0, value: 0}        # 回零方法=0（402 驱动 init 才会跳过回零！绝对编码器无需回零；
                                                      #   新驱动出厂 6098=1(找限位开关,会动!)，标零走 set_encoder_zero）
-    # 可选（按需解注释）：
-    # - {index: 0x6072, sub_index: 0, value: 3000}   # 最大转矩 300.0%
-    # - {index: 0x6065, sub_index: 0, value: 524288} # 位置偏差过大阈值 ≈2π rad（默认 38400000 很松）
-    # - {index: 0x607D, sub_index: 1, value: -218453} # 软限位 min（指令单位，按关节行程算）
-    # - {index: 0x607D, sub_index: 2, value: 218453}  # 软限位 max
+    - {index: 0x6072, sub_index: 0, value: 3000}     # 最大转矩 300.0%（上限保护，调试限力可临时改小）
+    - {index: 0x6065, sub_index: 0, value: 524288}   # 位置偏差过大阈值 ≈2π rad（先松后紧；超差报 ER.d00 进 fault）
+    - {index: 0x607D, sub_index: 1, value: -222626}  # 软限位 min ≈-2.668 rad（URDF -2.618 外留 0.05 余量；
+    - {index: 0x607D, sub_index: 2, value: 222626}   #   以驱动器零点为基准，标零错则窗口整体平移！）
   tpdo:                         # 从站→主站（SYNC 同步发布）
     1:
       enabled: true
@@ -138,6 +137,10 @@ joint_2:
     - {index: 0x6087, sub_index: 0, value: 1000}
     - {index: 0x6098, sub_index: 0, value: 0}        # 回零方法=0（402 驱动 init 才会跳过回零！绝对编码器无需回零；
                                                      #   新驱动出厂 6098=1(找限位开关,会动!)，标零走 set_encoder_zero）
+    - {index: 0x6072, sub_index: 0, value: 3000}     # 最大转矩 300.0%
+    - {index: 0x6065, sub_index: 0, value: 524288}   # 位置偏差过大阈值 ≈2π rad
+    - {index: 0x607D, sub_index: 1, value: -70927}   # 软限位 min ≈-0.85 rad（URDF -0.8 外留 0.05 余量）
+    - {index: 0x607D, sub_index: 2, value: 266184}   # 软限位 max ≈3.19 rad（URDF 3.14 外留 0.05 余量）
   tpdo:
     1:
       enabled: true
@@ -202,6 +205,10 @@ joint_3:
     - {index: 0x6087, sub_index: 0, value: 1000}
     - {index: 0x6098, sub_index: 0, value: 0}        # 回零方法=0（402 驱动 init 才会跳过回零！绝对编码器无需回零；
                                                      #   新驱动出厂 6098=1(找限位开关,会动!)，标零走 set_encoder_zero）
+    - {index: 0x6072, sub_index: 0, value: 3000}     # 最大转矩 300.0%
+    - {index: 0x6065, sub_index: 0, value: 524288}   # 位置偏差过大阈值 ≈2π rad
+    - {index: 0x607D, sub_index: 1, value: -266184}  # 软限位 min ≈-3.19 rad（URDF -3.14 外留 0.05 余量）
+    - {index: 0x607D, sub_index: 2, value: 8345}     # 软限位 max ≈0.10 rad（URDF 0.05 外留 0.05 余量）
   tpdo:
     1:
       enabled: true
