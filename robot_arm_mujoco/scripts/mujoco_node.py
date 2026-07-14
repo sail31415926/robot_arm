@@ -49,7 +49,7 @@ from ament_index_python.packages import get_package_share_directory
 JOINT_NAMES = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
 MJCF_PATH   = os.path.join(
     get_package_share_directory('robot_arm_description'),
-    'xml', 'eMeetArm.xml')
+    'mujoco', 'eMeetArm.xml')
 
 # ── Actuator PD gains (from eMeetArm.xml) for velocity feedforward ──────────
 #     ctrl = target_pos + (kv/kp) * target_vel

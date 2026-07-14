@@ -15,8 +15,8 @@
                 调试时 log_level:=info 恢复（完整日志始终落 ~/.ros/log/）
 
 示例：
-  ros2 launch robot_arm_bringup moveit.launch.py                          # Gazebo 默认
-  ros2 launch robot_arm_bringup moveit.launch.py use_sim_time:=false rviz:=false  # 实物无显示器
+  ros2 launch robot_arm_moveit_config moveit.launch.py                          # Gazebo 默认
+  ros2 launch robot_arm_moveit_config moveit.launch.py use_sim_time:=false rviz:=false  # 实物无显示器
 
 @copyright Copyright (c) 2026 eMeet
 """
@@ -38,9 +38,8 @@ def load_yaml(path: str) -> dict:
 
 
 def generate_launch_description():
-    desc_share    = get_package_share_directory('robot_arm_description')
-    bringup_share = get_package_share_directory('robot_arm_bringup')
-    cfg           = os.path.join(bringup_share, 'config', 'moveit')
+    desc_share = get_package_share_directory('robot_arm_description')
+    cfg        = os.path.join(get_package_share_directory('robot_arm_moveit_config'), 'config')
 
     # ── Launch arguments ──────────────────────────────────────────────────────
     use_sim_time_arg = DeclareLaunchArgument(
@@ -62,13 +61,13 @@ def generate_launch_description():
     # ── Robot description ──────────────────────────────────────────────────────
     xacro_path = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
     urdf_content = xacro.process_file(xacro_path).toxml()
-    with open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf'), 'r') as f:
+    with open(os.path.join(cfg, 'eMeetArm_models.srdf'), 'r') as f:
         srdf_content = f.read()
 
     robot_description          = {'robot_description':          urdf_content}
     robot_description_semantic = {'robot_description_semantic': srdf_content}
-    robot_description_kin      = {'robot_description_kinematics': load_yaml(os.path.join(desc_share, 'config', 'kinematics.yaml'))}
-    robot_description_plan     = {'robot_description_planning':   load_yaml(os.path.join(desc_share, 'config', 'joint_limits.yaml'))}
+    robot_description_kin      = {'robot_description_kinematics': load_yaml(os.path.join(cfg, 'kinematics.yaml'))}
+    robot_description_plan     = {'robot_description_planning':   load_yaml(os.path.join(cfg, 'joint_limits.yaml'))}
 
     planning_pipeline  = load_yaml(os.path.join(cfg, 'planning_pipeline.yaml'))
     moveit_controllers = load_yaml(os.path.join(cfg, 'moveit_controllers.yaml'))
@@ -92,7 +91,7 @@ def generate_launch_description():
     )
 
     # ── rviz2（条件启动）─────────────────────────────────────────────────────
-    rviz_config = os.path.join(desc_share, 'rviz', 'moveit.rviz')
+    rviz_config = os.path.join(cfg, 'moveit.rviz')
     # log_level 默认 warn：抑制 InteractiveMarkerDisplay 在 sim time 下的
     # 「Sending request / Service response」INFO 刷屏（Humble 已知噪声）
     rviz_node = Node(

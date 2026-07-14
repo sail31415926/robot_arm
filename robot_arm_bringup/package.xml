@@ -1,18 +1,45 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>robot_arm_bringup</name>
-  <version>1.0.0</version>
-  <description>Launch files, configs and simulation resources for eMeet robotic arm</description>
+  <version>1.1.0</version>
+  <description>Launch files and control configs for eMeet robotic arm
+    (bringup.launch.py 统一入口 + real 后端 + launch_common 共享工厂 +
+    ros2_control 控制器配置 controllers{,_real}.yaml)</description>
   <maintainer email="support@emeet.com">EMEET Team</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
+  <!-- 自家栈 -->
   <exec_depend>robot_arm_driver</exec_depend>
   <exec_depend>robot_arm_description</exec_depend>
-  <exec_depend>robot_arm_node</exec_depend>
-  <exec_depend>robot_arm_debug</exec_depend>
-  <exec_depend>robot_arm_interfaces</exec_depend>
+  <exec_depend>robot_arm_moveit_config</exec_depend>   <!-- SRDF/kinematics/joint_limits/MoveIt 配置 -->
+  <exec_depend>robot_arm_node</exec_depend>            <!-- commander 产品栈 -->
+  <!-- robot_arm_debug 故意不声明：仅调试路径需要（joint_position/cartesian_* 等
+       调试 GUI、commander_test_gui、visp_ibvs 节点、red_box_detect.launch.py），
+       产品最小部署集不装；缺包时 launch 在拉对应节点阶段报 package not found，
+       编译方法见 README「编译」节 -->
+
+  <!-- real 后端（real.launch.py 实际拉起/加载的外部包） -->
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_servo</exec_depend>
+  <exec_depend>robot_gimbal_node</exec_depend>         <!-- 云台执行节点，real 常驻必需 -->
+  <exec_depend>robot_gimbal_driver</exec_depend>       <!-- URDF 插件 GimbalForwardingInterface -->
+  <exec_depend>xacro</exec_depend>
+
+  <!-- 调试/可视化 launch（display / camera_view） -->
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>joint_state_publisher_gui</exec_depend>
+  <exec_depend>image_transport</exec_depend>
+  <exec_depend>rqt_image_view</exec_depend>
+
+  <!-- launch 基础设施 -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -8,11 +8,13 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- 复用 robot_arm_bringup 的 _arm_launch_common.py / camera_view.launch.py /
-       config/moveit（bringup 反向 include 本包 launch，但为避免循环依赖，只声明本方向）。
-       MJCF 模型 xml/eMeetArm.xml 在 robot_arm_description。
+  <!-- 复用 robot_arm_bringup 的 launch_common 模块 / camera_view.launch.py，
+       以及 robot_arm_moveit_config 的 MoveIt 配置
+       （bringup 反向 include 本包 launch，为避免循环依赖只声明本方向）。
+       MJCF 模型 mujoco/eMeetArm.xml 在 robot_arm_description。
        python 的 mujoco 库走 pip（见 robot_arm/requirements.txt），不在 rosdep 声明。 -->
   <exec_depend>robot_arm_bringup</exec_depend>
+  <exec_depend>robot_arm_moveit_config</exec_depend>
   <exec_depend>robot_arm_description</exec_depend>
   <exec_depend>robot_arm_node</exec_depend>
   <exec_depend>robot_arm_debug</exec_depend>
@@ -24,6 +26,9 @@
   <exec_depend>control_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>message_filters</exec_depend>  <!-- mujoco_data_recorder -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
   <exec_depend>xacro</exec_depend>
 
   <export>

@@ -45,7 +45,6 @@
 """
 
 import os
-import sys
 
 import xacro
 import yaml
@@ -56,9 +55,8 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
-# 上层栈节点工厂（与 gazebo/mujoco 共用同一份定义）
-sys.path.insert(0, os.path.dirname(__file__))
-import _arm_launch_common as common   # noqa: E402
+# 上层栈节点工厂（与 gazebo/mujoco 共用同一份定义，ament_python 正式模块）
+from robot_arm_bringup import launch_common as common
 
 
 def _load_yaml(path):
@@ -81,10 +79,14 @@ def _setup(context, *args, **kwargs):
     desc_share       = get_package_share_directory('robot_arm_description')
     bringup_share    = get_package_share_directory('robot_arm_bringup')
     gimbal_share     = get_package_share_directory('robot_gimbal_node')
-    controllers_yaml = os.path.join(desc_share, 'config', 'controllers_real.yaml')
-    moveit_cfg       = os.path.join(bringup_share, 'config', 'moveit')
-    servo_params     = _load_yaml(os.path.join(moveit_cfg, 'servo_config.yaml'))
-    srdf_content     = open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf')).read()
+    moveit_cfg       = os.path.join(
+        get_package_share_directory('robot_arm_moveit_config'), 'config')
+    controllers_yaml = os.path.join(bringup_share, 'config', 'controllers_real.yaml')
+    # moveit_servo 命名空间必须显式包上：Humble 只从 moveit_servo. 前缀读参数，
+    # 裸传会整体静默回退 Panda 默认值（错规划组/错输出话题）
+    servo_params     = {'moveit_servo': _load_yaml(
+        os.path.join(moveit_cfg, 'servo_config.yaml'))}
+    srdf_content     = open(os.path.join(moveit_cfg, 'eMeetArm_models.srdf')).read()
 
     arm_sim_mode  = LaunchConfiguration('arm_sim_mode').perform(context)
     can_interface = LaunchConfiguration('can_interface').perform(context)
@@ -189,64 +191,25 @@ def _setup(context, *args, **kwargs):
     spherical_orbit_ctrl   = common.gui_node(ctrl, 'spherical_orbit',       'spherical_orbit_gui',       use_sim_time=False)
     velocity_ctrl          = common.gui_node(ctrl, 'cartesian_velocity',    'cartesian_velocity_gui',    use_sim_time=False)
 
-    # ── MoveIt（需要 IK 的控制方式）────────────────────────────────────────────
-    needs_moveit = IfCondition(
-        PythonExpression([
-            "'", ctrl, "' in ['cartesian_moveit','cartesian_realtime_ik',"
-            "'cartesian_trajectory','spherical_orbit','commander']"
-        ])
-    )
+    # ── MoveIt（需要 IK 的控制方式；模式分组唯一来源 = common.MOVEIT_MODES）──────
+    kinematics_yaml   = _load_yaml(os.path.join(moveit_cfg, 'kinematics.yaml'))
+    joint_limits_yaml = _load_yaml(os.path.join(moveit_cfg, 'joint_limits.yaml'))
     # 实物模式直接创建 move_group，使用 FollowJointTrajectory action 配置
     # （不 include moveit.launch.py，避免 Ros2ControlManager 找不到 Joint1-3 控制器）
-    move_group_node = Node(
-        package='moveit_ros_move_group',
-        executable='move_group',
-        output='screen',
-        arguments=base_log,
-        parameters=[
-            {'robot_description': rd},
-            {'robot_description_semantic': rds},
-            {'robot_description_kinematics': _load_yaml(
-                os.path.join(desc_share, 'config', 'kinematics.yaml'))},
-            {'robot_description_planning': _load_yaml(
-                os.path.join(desc_share, 'config', 'joint_limits.yaml'))},
-            _load_yaml(os.path.join(moveit_cfg, 'planning_pipeline.yaml')),
-            _load_yaml(os.path.join(moveit_cfg, 'moveit_controllers_real.yaml')),
-            {'use_sim_time': False,
-             'start_state_max_bounds_error': 0.5},
-        ],
-        condition=needs_moveit,
+    move_group_node = common.move_group_node(
+        ctrl,
+        robot_description=rd, srdf=rds,
+        kinematics=kinematics_yaml, joint_limits=joint_limits_yaml,
+        planning_pipeline=_load_yaml(os.path.join(moveit_cfg, 'planning_pipeline.yaml')),
+        moveit_controllers=_load_yaml(os.path.join(moveit_cfg, 'moveit_controllers_real.yaml')),
+        use_sim_time=False, log_level=log_level,
     )
 
     # ── MoveIt Servo（cartesian_velocity 模式）─────────────────────────────────
-    is_velocity  = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
-    is_visp_ibvs = IfCondition(PythonExpression(["'", ctrl, "' == 'visp_ibvs'"]))
-    is_commander = IfCondition(PythonExpression(["'", ctrl, "' == 'commander'"]))
-    needs_servo  = IfCondition(PythonExpression(
-        ["'", ctrl, "' in ['cartesian_velocity']"]))
-
-    def make_servo_node(condition, check_collisions=True):
-        extra = {} if check_collisions else {'moveit_servo': {'check_collisions': False}}
-        return Node(
-            package='moveit_servo',
-            executable='servo_node_main',
-            name='servo_node',
-            output='screen',
-            arguments=base_log,
-            parameters=[
-                servo_params,
-                {'robot_description': rd,
-                 'robot_description_semantic': rds,
-                 'use_sim_time': False,
-                 'use_gazebo': False},
-                {'robot_description_kinematics': _load_yaml(
-                    os.path.join(desc_share, 'config', 'kinematics.yaml'))},
-                {'robot_description_planning': _load_yaml(
-                    os.path.join(desc_share, 'config', 'joint_limits.yaml'))},
-                extra,
-            ],
-            condition=condition,
-        )
+    is_velocity  = common.is_mode(ctrl, 'cartesian_velocity')
+    is_visp_ibvs = common.is_mode(ctrl, 'visp_ibvs')
+    is_commander = common.is_mode(ctrl, 'commander')
+    needs_servo  = common.in_modes(ctrl, common.SERVO_MODES)
 
     # 安全姿态预移动（全零关节是运动学奇异点，Servo 启动前须先移走）
     move_to_safe_pose = common.safe_pose_action(needs_servo)
@@ -254,7 +217,16 @@ def _setup(context, *args, **kwargs):
     # Servo 模式：t=3s 安全姿态预移动（3s 运动），t=7s 启动 servo_node + 控制器
     cartesian_velocity_start = TimerAction(
         period=7.0,
-        actions=[make_servo_node(is_velocity, check_collisions=False), velocity_ctrl],
+        actions=[
+            common.servo_node(
+                is_velocity,
+                robot_description=rd, srdf=rds,
+                kinematics=kinematics_yaml, joint_limits=joint_limits_yaml,
+                servo_params=servo_params,
+                use_sim_time=False, use_gazebo=False, log_level=log_level,
+            ),
+            velocity_ctrl,
+        ],
         condition=is_velocity,
     )
 

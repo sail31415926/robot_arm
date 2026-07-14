@@ -1,0 +1,7 @@
+# 手写（非 Setup Assistant 生成），供 moveit_configs_utils.MoveItConfigsBuilder 定位 URDF/SRDF
+moveit_setup_assistant_config:
+  urdf:
+    package: robot_arm_description
+    relative_path: urdf/arm_sim.urdf.xacro
+  srdf:
+    relative_path: config/eMeetArm_models.srdf

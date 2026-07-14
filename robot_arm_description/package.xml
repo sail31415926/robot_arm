@@ -1,13 +1,14 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>robot_arm_description</name>
-  <version>1.0.0</version>
-  <description>URDF model, meshes and rviz config for eMeet robotic arm</description>
+  <version>1.1.0</version>
+  <description>URDF model, meshes, MJCF and rviz config for eMeet robotic arm
+    (纯数据包；SRDF/MoveIt 配置在 robot_arm_moveit_config，
+    ros2_control 控制器配置在 robot_arm_bringup)</description>
   <maintainer email="support@emeet.com">EMEET Team</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>xacro</exec_depend>
 
   <export>

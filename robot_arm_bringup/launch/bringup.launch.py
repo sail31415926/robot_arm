@@ -25,7 +25,7 @@
     ├─ robot_arm_gazebo/launch/gazebo.launch.py   ← Gazebo 底座（含 worlds/models 资产）
     ├─ robot_arm_mujoco/launch/mujoco.launch.py   ← MuJoCo 底座（含 mujoco_node 仿真桥）
     └─ 本包 launch/real.launch.py                 ← 实物底座
-         └─ _arm_launch_common.py（本包）         ← 三后端共用的「上层栈」节点定义：
+         └─ robot_arm_bringup.launch_common（本包 Python 模块）← 三后端共用的「上层栈」节点定义：
                                                      controller GUI / move_group / servo /
                                                      commander / ibvs / visp / 安全预移动
   上层只写一份、由三后端复用，从源头消除「三处各抄一遍 → 必然漂移」。

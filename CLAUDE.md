@@ -12,7 +12,7 @@
 ## 高频坑
 
 - **ros2_control_node 崩溃/被杀后，CAN 总线可能残留异常**：CANopen master 没有干净关闭时，驱动器或 PCAN-USB 适配器会卡在坏状态，下次 launch 在硬件激活阶段报 `SDO protocol timed out` / `Failed to activate 'JointX'`，can0 甚至变 NO-CARRIER。重新 launch 前先 `sudo ip link set can0 down && sudo ip link set can0 up type can bitrate 500000`，再 `timeout 3 candump can0` 确认 0x701/702/703 三个心跳都在；心跳缺失就断电重启机械臂。另：启动时每关节刷 ~11 条 `AsyncUpload:6502 General error` 是驱动例行查询、无害；但 **timed out 不是**，那是总线问题。
-- **节点里永远不要硬编码 `use_sim_time=True`**：实物上没有 `/clock`，`use_sim_time=true` 的节点**所有 ROS 定时器永不触发**（症状极隐蔽：订阅回调都正常、只有 timer 驱动的逻辑静默死掉，如 GUI 的 TF 位姿面板卡 `--`）。正确做法是 launch 按后端传参（`_arm_launch_common.gui_node(use_sim_time=...)`，gazebo/mujoco=true、real=false）。
+- **节点里永远不要硬编码 `use_sim_time=True`**：实物上没有 `/clock`，`use_sim_time=true` 的节点**所有 ROS 定时器永不触发**（症状极隐蔽：订阅回调都正常、只有 timer 驱动的逻辑静默死掉，如 GUI 的 TF 位姿面板卡 `--`）。正确做法是 launch 按后端传参（`robot_arm_bringup.launch_common.gui_node(use_sim_time=...)`，gazebo=true、mujoco/real=false——MuJoCo 暂不发 /clock）。
 - **编译完新包要重新 source**：终端里 `install/setup.bash` 是 source 时刻的快照，之后新编译的包（launch 报 `package 'xxx' not found`，而 install/ 里明明有）在该终端不可见，重新 source 即可。
 
 - **新增 Python 脚本必须手动登记安装**：`robot_arm_debug`、`robot_arm_mujoco` 是 ament_cmake 包，用 `install(PROGRAMS ...)` 安装脚本。新增 `.py` 后忘了加进对应 `CMakeLists.txt`，编译不会报错，但运行时节点找不到/ModuleNotFoundError 崩溃。

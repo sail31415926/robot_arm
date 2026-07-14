@@ -27,7 +27,7 @@
       <link name="world"/>
       <xacro:emeet_arm parent="world" xyz="0 0 0" rpy="0 0 0"
                        sim_mode="true"
-                       controllers_yaml="$(find robot_arm_description)/config/controllers.yaml"/>
+                       controllers_yaml="$(find robot_arm_bringup)/config/controllers.yaml"/>
     </robot>
 
   TF 树（挂载到底盘时）：

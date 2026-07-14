@@ -12,18 +12,19 @@ robot_arm_description/
 │   ├── arm.urdf.xacro          # 机械臂宏定义（对外接口）
 │   ├── arm_sim.urdf.xacro      # 仿真入口（内部 launch 使用）
 │   └── eMeetArm_models.urdf    # SolidWorks 原始导出（参考/备用）
-├── srdf/
-│   └── eMeetArm_models.srdf    # MoveIt 规划组定义
 ├── meshes/
 │   └── base_link.STL / Link1~6.STL
-├── config/
-│   ├── controllers.yaml        # ros2_control 控制器配置
-│   ├── kinematics.yaml         # pick_ik 求解器配置
-│   └── joint_limits.yaml       # MoveIt 关节速度/加速度限制
+├── mujoco/
+│   └── eMeetArm.xml            # MuJoCo MJCF 模型（meshdir 复用本包 meshes/）
+├── scripts/
+│   └── simplify_meshes.py      # mesh 减面工具（开发用，不随包安装）
 └── rviz/
-    ├── eMeetArm_models.rviz    # display 可视化配置
-    └── moveit.rviz             # MoveIt MotionPlanning 配置
+    └── eMeetArm_models.rviz    # display 可视化配置
 ```
+
+> 本包是**纯数据包**（URDF/mesh/MJCF/RViz 显示配置）。SRDF、kinematics（pick_ik）、
+> joint_limits 等 MoveIt 配置在 `robot_arm_moveit_config`；ros2_control 控制器配置
+> `controllers{,_real}.yaml` 在 `robot_arm_bringup/config/`。
 
 ---
 
@@ -129,7 +130,7 @@ robot_description = xacro.process_file(
 
 ---
 
-## 控制器配置（`config/controllers.yaml`）
+## 控制器配置（`robot_arm_bringup/config/controllers.yaml`）
 
 | 控制器 | 关节 | 使用场景 |
 | -------- | ------ | ---------- |
@@ -137,14 +138,14 @@ robot_description = xacro.process_file(
 | `arm_controller` | Joint1–6 | Gazebo / MuJoCo 仿真 |
 | `gimbal_controller` | Joint4–6 | 仅云台单独调试保留定义（与 arm_controller 抢 J4-6 接口，二者不可同时 active） |
 
-实物用 `config/controllers_real.yaml`（单 CM 管全 6 轴）：`arm_controller` claim
+实物用 `robot_arm_bringup/config/controllers_real.yaml`（单 CM 管全 6 轴）：`arm_controller` claim
 Joint1-6，J4-6 已禁用轨迹/到点容差——反馈是云台真实回读（经转发插件回传，
 有话题滞后 + 设备自规划滞后），不禁用会 abort 整条 6 轴轨迹。旧 arm_node
 （自研 CANopen 栈）已于 2026-07 下线。
 
 ---
 
-## 运动学（`config/kinematics.yaml`）
+## 运动学（`robot_arm_moveit_config/config/kinematics.yaml`）
 
 使用 **pick_ik** 全局 IK 求解器：
 
@@ -157,11 +158,12 @@ Joint1-6，J4-6 已禁用轨迹/到点容差——反馈是云台真实回读（
 ## 与其他包的关系
 
 ```bash
-robot_arm_description          提供 URDF/xacro、配置
+robot_arm_description          提供 URDF/xacro、mesh、MJCF（纯数据）
   ↑ include arm.urdf.xacro
 外部底盘包                     组合完整机器人 URDF
   ↑ 加载 arm_sim.urdf.xacro
-robot_arm_bringup              仿真/实物 launch 文件（内部使用）
+robot_arm_bringup              launch 入口 + ros2_control 控制器配置
+robot_arm_moveit_config        SRDF / kinematics / joint_limits / MoveIt 配置
 ```
 
 本包对底盘/外部系统**零感知**，所有外部集成通过 `arm.urdf.xacro` 宏参数完成。

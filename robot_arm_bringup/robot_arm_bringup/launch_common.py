@@ -1,8 +1,8 @@
 """
-@file   _arm_launch_common.py
+@file   launch_common.py（robot_arm_bringup.launch_common）
 @brief  上层栈节点工厂 —— controller GUI / move_group / servo / 安全预移动 / commander / ibvs / visp 的单一来源
-@version 1.0
-@date   2026-07-01
+@version 1.1
+@date   2026-07-14
 
 PR-4 launch 重构·第二步：把三后端各抄一遍的「上层栈」节点定义收成一份。
 
@@ -12,8 +12,9 @@ robot_description / use_sim_time / moveit_controllers 各异。改用**工厂函
 backend 保留自己的时序编排，只调用这里的工厂拿「同一份节点定义」，从而消除复制粘贴漂移，
 风险最低（不重写已调好的时序）。
 
-注意：本文件以下划线开头、非 `*.launch.py`，不会被 `ros2 launch` 当作入口。backend launch
-用 `sys.path.insert(0, os.path.dirname(__file__)); import _arm_launch_common` 导入。
+注意：本模块经 ament_python_install_package 作为正式 Python 包安装
+（v1.1 前是 launch/_arm_launch_common.py + sys.path hack）。backend launch 用
+`from robot_arm_bringup import launch_common as common` 导入。
 
 约定：
   ctrl / gui 传 LaunchConfiguration；use_sim_time 传 bool（各 backend 自己的固定值）；
@@ -68,7 +69,7 @@ def in_modes(ctrl, names):
 
 # ── controller GUI（基础 5 种；cartesian_velocity 的 GUI 随 servo 时序单独起）──────
 # 调试控制器/GUI 在 robot_arm_debug 包（产品栈 arm_commander_node 在 robot_arm_node）
-# use_sim_time 必须按后端传入（默认 True 兼容 gazebo/mujoco 调用点；real 传 False）：
+# use_sim_time 必须按后端传入（默认 True 仅适配 gazebo 调用点；mujoco/real 传 False）：
 # 实物无 /clock 时若为 True，节点内所有 ROS 定时器永不触发（位姿面板卡 '--'）。
 def gui_node(ctrl, mode, exe, use_sim_time=True):
     return Node(package='robot_arm_debug', executable=exe, output='screen',
@@ -110,21 +111,27 @@ def move_group_node(ctrl, *, robot_description, srdf, kinematics, joint_limits,
 # ── MoveIt Servo（cartesian_velocity / ibvs_control）──────────────────────────────
 def servo_node(condition, *, robot_description, srdf, kinematics, joint_limits,
                servo_params, use_sim_time, use_gazebo=None, log_level=None):
-    """servo_node_main。ibvs/velocity 无 move_group，恒禁碰撞检测避免 run_duration 超时。"""
-    rd_params = {'robot_description': robot_description,
-                 'robot_description_semantic': srdf,
-                 'use_sim_time': use_sim_time}
+    """servo_node_main。ibvs/velocity 无 move_group，恒禁碰撞检测避免 run_duration 超时。
+
+    servo_params 必须已包在 {'moveit_servo': ...} 命名空间下——Humble 的
+    makeServoParameters 只从 moveit_servo. 前缀读参数，裸传会整体静默回退
+    Panda 默认值（panda_arm 规划组、/panda_arm_controller 输出话题）。
+    use_gazebo 同属 moveit_servo.* 参数，在此并入正确命名空间。
+    """
+    servo_overrides = {'check_collisions': False}
     if use_gazebo is not None:
-        rd_params['use_gazebo'] = use_gazebo
+        servo_overrides['use_gazebo'] = use_gazebo
     return Node(
         package='moveit_servo', executable='servo_node_main', name='servo_node', output='screen',
         arguments=log_args(log_level),
         parameters=[
             servo_params,
-            rd_params,
+            {'robot_description': robot_description,
+             'robot_description_semantic': srdf,
+             'use_sim_time': use_sim_time},
             {'robot_description_kinematics': kinematics},
             {'robot_description_planning': joint_limits},
-            {'moveit_servo': {'check_collisions': False}},
+            {'moveit_servo': servo_overrides},
         ],
         condition=condition,
     )

@@ -8,15 +8,17 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- 复用 robot_arm_bringup 的 _arm_launch_common.py / moveit.launch.py /
-       camera_view.launch.py / config/moveit（bringup 反向 include 本包 launch，
-       但为避免循环依赖，只声明本方向） -->
+  <!-- 复用 robot_arm_bringup 的 launch_common 模块 / camera_view.launch.py，
+       以及 robot_arm_moveit_config 的 moveit.launch.py 与 MoveIt 配置
+       （bringup 反向 include 本包 launch，为避免循环依赖只声明本方向） -->
   <exec_depend>robot_arm_bringup</exec_depend>
+  <exec_depend>robot_arm_moveit_config</exec_depend>
   <exec_depend>robot_arm_description</exec_depend>
   <exec_depend>robot_arm_node</exec_depend>
   <exec_depend>robot_arm_debug</exec_depend>
 
   <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>gazebo_plugins</exec_depend>   <!-- planar_move(world)/camera(URDF) 插件 -->
   <exec_depend>gazebo_ros2_control</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>controller_manager</exec_depend>

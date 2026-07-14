@@ -9,8 +9,8 @@
        世界/模型资产随本包安装（worlds/ models/）。
        职责限于「底座」：gzserver/gzclient + spawn_entity + gazebo_ros2_control 起 6 轴控制器 +
        Gazebo 环境/世界。上层栈（controller GUI / servo / commander / ibvs / visp / 安全预移动）
-       的节点定义复用 robot_arm_bringup 的 launch/_arm_launch_common.py，与 mujoco/real 共用一份。
-       move_group 走 robot_arm_bringup 的 moveit.launch.py（含 rviz）。
+       的节点定义复用 robot_arm_bringup.launch_common（正式 Python 模块），与 mujoco/real 共用一份。
+       move_group 走 robot_arm_moveit_config 的 moveit.launch.py（含 rviz）。
 
 @details 启动以下节点：
          - gzserver：物理仿真服务端（无 GPU 渲染，避免双窗口）
@@ -52,8 +52,6 @@
 """
 
 import os
-import sys
-
 import xacro
 import yaml
 from ament_index_python.packages import get_package_share_directory
@@ -68,10 +66,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 
-# 上层栈节点工厂（在 robot_arm_bringup/launch 下，与 mujoco/real 共用同一份定义）
-sys.path.insert(0, os.path.join(
-    get_package_share_directory('robot_arm_bringup'), 'launch'))
-import _arm_launch_common as common   # noqa: E402
+# 上层栈节点工厂（robot_arm_bringup 的正式 Python 模块，与 mujoco/real 共用同一份定义）
+from robot_arm_bringup import launch_common as common
 
 
 def _load_yaml(path):
@@ -83,10 +79,11 @@ def generate_launch_description():
     desc_share       = get_package_share_directory('robot_arm_description')
     bringup_share    = get_package_share_directory('robot_arm_bringup')
     gazebo_share     = get_package_share_directory('robot_arm_gazebo')
+    moveit_share     = get_package_share_directory('robot_arm_moveit_config')
     arm_share_parent = os.path.dirname(desc_share)   # Gazebo 解析 package://robot_arm_description/... 需要
-    moveit_cfg       = os.path.join(bringup_share, 'config', 'moveit')
+    moveit_cfg       = os.path.join(moveit_share, 'config')
     xacro_path        = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
-    controllers_yaml_path = os.path.join(desc_share, 'config', 'controllers.yaml')
+    controllers_yaml_path = os.path.join(bringup_share, 'config', 'controllers.yaml')
     worlds_dir    = os.path.join(gazebo_share, 'worlds')
     gazebo_ros_share = get_package_share_directory('gazebo_ros')
 
@@ -100,17 +97,13 @@ def generate_launch_description():
     ).toxml()
 
     # ── MoveIt Servo 用到的额外资源（servo 模式：cartesian_velocity / ibvs_control）─
-    with open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf'), 'r') as f:
+    with open(os.path.join(moveit_cfg, 'eMeetArm_models.srdf'), 'r') as f:
         srdf_content = f.read()
     servo_params = {
         'moveit_servo': _load_yaml(os.path.join(moveit_cfg, 'servo_config.yaml')),
     }
-    robot_description_kinematics = {
-        'robot_description_kinematics': _load_yaml(os.path.join(desc_share, 'config', 'kinematics.yaml')),
-    }
-    robot_description_planning = {
-        'robot_description_planning': _load_yaml(os.path.join(desc_share, 'config', 'joint_limits.yaml')),
-    }
+    kinematics_yaml   = _load_yaml(os.path.join(moveit_cfg, 'kinematics.yaml'))
+    joint_limits_yaml = _load_yaml(os.path.join(moveit_cfg, 'joint_limits.yaml'))
 
     # ── 控制方式参数（参数名 = 对应 GUI 名去掉 _gui 后缀）──────────────────────
     controller_arg = DeclareLaunchArgument(
@@ -158,14 +151,9 @@ def generate_launch_description():
         actions=common.commander_nodes(ctrl, gui, use_sim_time=True),
         condition=is_commander,
     )
-    # ── MoveIt（需要 IK 的控制方式，含 commander）─────────────────────────────
-    needs_moveit = IfCondition(
-        PythonExpression([
-            "'", ctrl, "' in ['cartesian_moveit','cartesian_realtime_ik',"
-            "'cartesian_trajectory','spherical_orbit','commander']"
-        ])
-    )
-    moveit_launch_path = os.path.join(bringup_share, 'launch', 'moveit.launch.py')
+    # ── MoveIt（需要 IK 的控制方式，含 commander；分组唯一来源 = common）────────
+    needs_moveit = common.in_modes(ctrl, common.MOVEIT_MODES)
+    moveit_launch_path = os.path.join(moveit_share, 'launch', 'moveit.launch.py')
     moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(moveit_launch_path),
         launch_arguments={'use_sim_time': 'true', 'rviz': 'true',
@@ -174,28 +162,17 @@ def generate_launch_description():
     )
 
     # ── MoveIt Servo 条件（cartesian_velocity / ibvs_control）────────────────────
-    is_velocity      = IfCondition(PythonExpression(["'", ctrl, "' == 'cartesian_velocity'"]))
-    is_visp_ibvs     = IfCondition(PythonExpression(["'", ctrl, "' == 'visp_ibvs_control'"]))
-    def make_servo_node(condition, check_collisions=True):
-        # ibvs/velocity 模式无 move_group，禁用碰撞检测避免 run_duration 超时
-        extra = {} if check_collisions else \
-            {'moveit_servo': {'check_collisions': False}}
-        return Node(
-            package='moveit_servo',
-            executable='servo_node_main',
-            name='servo_node',
-            output='screen',
-            arguments=base_log,
-            parameters=[
-                servo_params,
-                {'robot_description': robot_description,
-                 'robot_description_semantic': srdf_content,
-                 'use_sim_time': True},
-                robot_description_kinematics,
-                robot_description_planning,
-                extra,
-            ],
-            condition=condition,
+    is_velocity      = common.is_mode(ctrl, 'cartesian_velocity')
+    is_visp_ibvs     = common.is_mode(ctrl, 'visp_ibvs_control')
+
+    def make_servo_node(condition):
+        # ibvs/velocity 模式无 move_group，工厂内恒禁碰撞检测避免 run_duration 超时
+        return common.servo_node(
+            condition,
+            robot_description=robot_description, srdf=srdf_content,
+            kinematics=kinematics_yaml, joint_limits=joint_limits_yaml,
+            servo_params=servo_params,
+            use_sim_time=True, log_level=log_level,
         )
 
     # visp_ibvs_control：Pinocchio 加权 Jacobian，直接发 JointTrajectory，无需 Servo
@@ -209,14 +186,12 @@ def generate_launch_description():
 
     # ── 安全姿态预移动（全零关节是运动学奇异点，servo 启动前须先移走）──────────
     # commander 模式不需要预移动，由上层自行决定初始姿态
-    needs_safe_pose = IfCondition(
-        PythonExpression(["'", ctrl, "' in ['cartesian_velocity']"])
-    )
-    move_to_safe_pose = common.safe_pose_action(needs_safe_pose)
+    move_to_safe_pose = common.safe_pose_action(
+        common.in_modes(ctrl, common.SERVO_MODES))
 
     velocity_start_after_pose = TimerAction(
         period=4.0,
-        actions=[make_servo_node(is_velocity, check_collisions=False),
+        actions=[make_servo_node(is_velocity),
                  velocity_ctrl],
         condition=is_velocity,
     )

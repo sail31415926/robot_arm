@@ -18,11 +18,13 @@
 ```text
 robot_arm/
 ├── robot_arm_interfaces/    # 自定义 msg / srv / action（ArmStatus、ArmMoveToPose、ArmTrajectoryShot…）
-├── robot_arm_description/   # URDF / SRDF / MJCF / mesh / RViz / kinematics（pick_ik）配置
-├── robot_arm_driver/        # C++ CANopen 驱动（J1-3）：arm_node（独立节点）+ ArmHardwareInterface（ros2_control 插件）
+├── robot_arm_description/   # 纯数据包：URDF / mesh / MJCF / RViz 显示配置
+├── robot_arm_moveit_config/ # MoveIt 配置包（社区标准布局）：SRDF / kinematics(pick_ik) / joint_limits /
+│                            #   OMPL 管线 / 三后端 moveit_controllers / servo 配置 / moveit.launch.py
+├── robot_arm_driver/        # CANopen 驱动（J1-3，ros2_canopen）：bus.yml/EDS + arm_driver_services + 标定工具
 ├── robot_arm_node/          # ★产品层：C++ 产品栈（motion / state / commander，arm_commander_node）
 ├── robot_arm_debug/         # ☆调试层：Python 调试控制器 / GUI / 工具 + 视觉感知（visp_ibvs、红块检测，暂归调试）
-├── robot_arm_bringup/       # 统一启动入口（bringup/real/moveit launch）+ MoveIt 配置 + 三后端共享上层栈定义
+├── robot_arm_bringup/       # 统一启动入口（bringup/real launch）+ ros2_control 控制器配置 + launch_common 共享工厂
 ├── robot_arm_gazebo/        # Gazebo 仿真后端：gazebo.launch.py + worlds / models 资产
 ├── robot_arm_mujoco/        # MuJoCo 仿真后端：mujoco.launch.py + mujoco_node 仿真桥
 └── robot_arm_matlab/        # MATLAB 离线分析工具箱（Simscape 导出）
@@ -45,7 +47,7 @@ robot_arm/
 
 ```bash
 colcon build --symlink-install --packages-select \
-  robot_arm_interfaces robot_arm_driver robot_arm_description \
+  robot_arm_interfaces robot_arm_driver robot_arm_description robot_arm_moveit_config \
   robot_arm_bringup robot_arm_node robot_arm_debug robot_arm_gazebo robot_arm_mujoco \
   robot_gimbal_interfaces robot_gimbal_driver robot_gimbal_node
 
@@ -55,12 +57,12 @@ source install/setup.bash
 
 ### 实机编译（板上部署最小集）
 
-只需 5 个 robot_arm 包 + 云台 3 包（转发插件/云台节点/接口，J4-6 依赖，
+只需 6 个 robot_arm 包 + 云台 3 包（转发插件/云台节点/接口，J4-6 依赖，
 另仓库 `robot_gimbal`）：
 
 ```bash
 colcon build --symlink-install --packages-select \
-  robot_arm_interfaces robot_arm_driver robot_arm_description \
+  robot_arm_interfaces robot_arm_driver robot_arm_description robot_arm_moveit_config \
   robot_arm_bringup robot_arm_node \
   robot_gimbal_interfaces robot_gimbal_driver robot_gimbal_node
 
@@ -88,9 +90,9 @@ source install/setup.bash
 ros2 launch robot_arm_bringup display.launch.py    # 仅 RViz 显示 URDF
 ros2 launch robot_arm_gazebo gazebo.launch.py     # Gazebo 仿真
 ros2 launch robot_arm_mujoco mujoco.launch.py     # MuJoCo 仿真
-ros2 launch robot_arm_bringup real.launch.py       # 实物（arm_node + 云台 + MoveIt + 视频流）
-ros2 launch robot_arm_bringup moveit.launch.py     # 单独 move_group + RViz
-ros2 launch robot_arm_bringup motor.launch.py      # 仅底层电机控制（不含 MoveIt）
+ros2 launch robot_arm_bringup real.launch.py       # 实物（ros2_control HAL + 云台 + MoveIt）
+ros2 launch robot_arm_moveit_config moveit.launch.py   # 单独 move_group + RViz
+ros2 launch robot_arm_driver test_arm.launch.py    # 驱动层自测（mock/vcan/真机，不含 MoveIt）
 ```
 
 ```bash

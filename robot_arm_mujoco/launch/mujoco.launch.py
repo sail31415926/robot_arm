@@ -8,12 +8,12 @@
        backend:=mujoco）。v3.1 起从 robot_arm_bringup 拆出独立包 robot_arm_mujoco，
        mujoco_node / mujoco_data_recorder 也从 robot_arm_node 迁入本包（scripts/）。
        职责限于「底座」：mujoco_node（物理 + viewer + 轨迹接口）+ move_group（MuJoCo controllers）。
-       上层栈节点定义复用 robot_arm_bringup 的 launch/_arm_launch_common.py，与 gazebo/real 共用一份。
+       上层栈节点定义复用 robot_arm_bringup.launch_common（正式 Python 模块），与 gazebo/real 共用一份。
 
 @details 启动：mujoco_node（物理 + viewer + /arm_controller/joint_trajectory 订阅 + FJT action）、
          robot_state_publisher、move_group（需 IK 的模式）、按 controller 选择的上层节点。
 
-         v3.0（PR-4 第二步）：上层栈节点定义改为复用 `_arm_launch_common`（与 gazebo/real 同一份），
+         v3.0（PR-4 第二步）：上层栈节点定义改为复用 `robot_arm_bringup.launch_common`（与 gazebo/real 同一份），
          并**补上 commander 模式**（此前 MuJoCo 缺失的漂移）。mujoco_node 订阅
          `/arm_controller/joint_trajectory` 话题，故 commander 的 JointTrajectory 可直接驱动。
          use_sim_time 仍为 false —— MuJoCo 暂不发布 /clock（见方案 §九 P5），待其发 /clock 后再统一为 true。
@@ -33,7 +33,6 @@
 """
 
 import os
-import sys
 
 import xacro
 import yaml
@@ -47,10 +46,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-# 上层栈节点工厂（在 robot_arm_bringup/launch 下，与 gazebo/real 共用同一份定义）
-sys.path.insert(0, os.path.join(
-    get_package_share_directory('robot_arm_bringup'), 'launch'))
-import _arm_launch_common as common   # noqa: E402
+# 上层栈节点工厂（robot_arm_bringup 的正式 Python 模块，与 gazebo/real 共用同一份定义）
+from robot_arm_bringup import launch_common as common
 
 
 def load_yaml(path: str) -> dict:
@@ -72,14 +69,15 @@ _NVIDIA_ENV = {
 def generate_launch_description():
     desc_share    = get_package_share_directory('robot_arm_description')
     bringup_share = get_package_share_directory('robot_arm_bringup')
-    cfg           = os.path.join(bringup_share, 'config', 'moveit')
+    cfg           = os.path.join(
+        get_package_share_directory('robot_arm_moveit_config'), 'config')
     xacro_path    = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
 
     # ── 描述与配置（MuJoCo 不用 ros2_control，xacro 取默认映射）─────────────────
     robot_description_raw = xacro.process_file(xacro_path).toxml()
-    srdf_content = open(os.path.join(desc_share, 'srdf', 'eMeetArm_models.srdf')).read()
-    kinematics         = load_yaml(os.path.join(desc_share, 'config', 'kinematics.yaml'))
-    joint_limits       = load_yaml(os.path.join(desc_share, 'config', 'joint_limits.yaml'))
+    srdf_content = open(os.path.join(cfg, 'eMeetArm_models.srdf')).read()
+    kinematics         = load_yaml(os.path.join(cfg, 'kinematics.yaml'))
+    joint_limits       = load_yaml(os.path.join(cfg, 'joint_limits.yaml'))
     planning_pipeline  = load_yaml(os.path.join(cfg, 'planning_pipeline.yaml'))
     moveit_controllers = load_yaml(os.path.join(cfg, 'moveit_controllers_mujoco.yaml'))  # MuJoCo 专用
     servo_params       = {'moveit_servo': load_yaml(os.path.join(cfg, 'servo_config.yaml'))}
@@ -127,25 +125,28 @@ def generate_launch_description():
             common.servo_node(is_velocity, robot_description=robot_description_raw,
                               srdf=srdf_content, kinematics=kinematics,
                               joint_limits=joint_limits, servo_params=servo_params,
-                              use_sim_time=USE_SIM_TIME, log_level=log_level),
-            common.gui_node(ctrl, 'cartesian_velocity', 'cartesian_velocity_gui'),
+                              use_sim_time=USE_SIM_TIME, use_gazebo=False,
+                              log_level=log_level),
+            common.gui_node(ctrl, 'cartesian_velocity', 'cartesian_velocity_gui',
+                            use_sim_time=USE_SIM_TIME),
         ],
         condition=is_velocity)
 
     # joint_position：仅需 MuJoCo 就绪，t=2s
     joint_position_timed = TimerAction(
         period=2.0,
-        actions=[common.gui_node(ctrl, 'joint_position', 'joint_position_gui')],
+        actions=[common.gui_node(ctrl, 'joint_position', 'joint_position_gui',
+                                 use_sim_time=USE_SIM_TIME)],
         condition=common.is_mode(ctrl, 'joint_position'))
 
     # 需 MoveIt 的 GUI（cartesian_moveit/realtime_ik/trajectory/spherical_orbit）：t=4s（各自互斥条件）
     moveit_gui_timed = TimerAction(
         period=4.0,
         actions=[
-            common.gui_node(ctrl, 'cartesian_moveit',      'cartesian_moveit_gui'),
-            common.gui_node(ctrl, 'cartesian_realtime_ik', 'cartesian_realtime_ik_gui'),
-            common.gui_node(ctrl, 'cartesian_trajectory',  'cartesian_trajectory_gui'),
-            common.gui_node(ctrl, 'spherical_orbit',       'spherical_orbit_gui'),
+            common.gui_node(ctrl, 'cartesian_moveit',      'cartesian_moveit_gui',      use_sim_time=USE_SIM_TIME),
+            common.gui_node(ctrl, 'cartesian_realtime_ik', 'cartesian_realtime_ik_gui', use_sim_time=USE_SIM_TIME),
+            common.gui_node(ctrl, 'cartesian_trajectory',  'cartesian_trajectory_gui',  use_sim_time=USE_SIM_TIME),
+            common.gui_node(ctrl, 'spherical_orbit',       'spherical_orbit_gui',       use_sim_time=USE_SIM_TIME),
         ])
 
     # commander（新增）：等 move_group planning scene 就绪，t=8s
