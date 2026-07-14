@@ -15,10 +15,17 @@ robot_arm_driver/               ← 容器目录（本身不是 ament 包，没�
 │   │   │   ├── bus.yml         ← 总线拓扑：节点/模式/换算/PDO/初始化 SDO
 │   │   │   └── RB200-CA.eds    ← 从站对象字典（按厂商手册第 4 章逐条转写）
 │   │   └── test_controllers.yaml   ← 自测栈控制器配置（jsb + arm_controller）
+│   ├── include/robot_arm_driver/   ← 共享头（包内自用，不 install/export）
+│   │   ├── motor_unit_converter.hpp ← 单位换算 rad↔pp（单一权威，524288 counts/rev）
+│   │   └── sdo_client.hpp      ← 极简 SDO 客户端 + 主站心跳（标定工具共用）
 │   ├── launch/
 │   │   └── test_arm.launch.py  ← 自测入口（mock / vcan 假从站 / 真机 三合一）
 │   └── src/
-│       └── arm_driver_services.cpp ← /arm_node/{enable,disable,recover} 兼容服务
+│       ├── arm_driver_services.cpp ← 常驻伴生节点：/arm_node/{enable,disable,recover}
+│       └── tools/              ← 独立标定/调参工具（占总线，先停 ros2_control 栈再跑）
+│           ├── set_encoder_zero.cpp   ← 编码器零点标定（HM 方法 35，断电保持）
+│           ├── set_motor_limits.cpp   ← 限速/软限位/最大转矩 查看与设定（rad 输入）
+│           └── unit_convert.cpp       ← 命令行换算器 rad↔pp（改 bus.yml 时用）
 └── ros2_canopen/               ← vendored 上游快照（humble 0.2.13 精简版，见其 VENDOR.md）
 ```
 
@@ -41,7 +48,7 @@ RB200-CA ×3（node 1/2/3，波特率 500k）
 - **IP 模式目标写 60C1:01**（RB200 特性，607A 仅 PP 用），插补周期 60C2 必须
   = SYNC 周期 = 10ms（三处联动，改周期要一起改）
 - **单位**：与你交互的一切（/joint_states、JTC 轨迹、MoveIt、标定工具入参）都是 **rad**；
-  pp（指令单位）只存在于 CAN 总线上。换算单一权威 = `src/motor_unit_converter.hpp`
+  pp（指令单位）只存在于 CAN 总线上。换算单一权威 = `include/robot_arm_driver/motor_unit_converter.hpp`
   （自研栈 1:1 保留件，524288 counts/rev 实测校准）——运行时驱动按 bus.yml 的
   `scale = 83443.026748 counts/rad`（同源数值）换算；手工换算用
   `ros2 run robot_arm_driver unit_convert`（rad2pp / pp2rad / 无参数=速查表）
@@ -136,6 +143,10 @@ Joint1 三秒走到 0.1 rad 再回零。
 4. EDS 为手册转写，个别对象手册自身有出入（6070 类型、60C2:01 范围等）；真机 SDO
    Abort 时用 `candump` + 厂商 VCSDSoft_L 工具核对。
 5. 升级 vendored ros2_canopen 的方法见 `ros2_canopen/VENDOR.md`（保留 9 包精简版）。
+6. **全编译时 colcon 报 `1 package had stderr output: lely_core_libraries`**：
+   正常噪音、非失败——该 vendored 库构建时打补丁的提示、setuptools/autoconf
+   过时告警、libtool relinking 都走 stderr，每次编译稳定出现。真正的失败
+   看 Summary 里有无 `failed` / 输出里有无 `error:`。
 
 ## 相关文档
 

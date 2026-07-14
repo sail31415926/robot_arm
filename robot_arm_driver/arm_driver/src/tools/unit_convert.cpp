@@ -20,7 +20,7 @@
  * @copyright Copyright (c) 2026 EMEET
  */
 
-#include "motor_unit_converter.hpp"
+#include "robot_arm_driver/motor_unit_converter.hpp"
 
 #include <cstdio>
 #include <cstdlib>

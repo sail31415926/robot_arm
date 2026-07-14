@@ -15,7 +15,7 @@
  *   velocity_rad_s = velocity_pp_s × 2π / counts_per_rev
  *   accel_rad_s2  = accel_pp_s2  × 2π / counts_per_rev
  *
- * 所属模块：robot_arm_driver/arm_driver/src/（自研栈唯一保留件，v2.0 起为全部
+ * 所属模块：arm_driver/include/robot_arm_driver/（自研栈唯一保留件，v2.0 起为全部
  * 工具/手工换算的单一权威；运行时驱动的换算=bus.yml scale_*，数值与本文件同源）
  *
  * @version 2.0（1:1 保留 v1.1 实现，仅迁移位置；ros2_canopen 化后由

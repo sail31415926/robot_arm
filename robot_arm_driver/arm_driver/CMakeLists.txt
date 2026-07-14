@@ -23,14 +23,19 @@ ament_target_dependencies(arm_driver_services
   rclcpp std_srvs controller_manager_msgs lifecycle_msgs)
 install(TARGETS arm_driver_services DESTINATION lib/${PROJECT_NAME})
 
-# ── 独立标定/调参工具（SocketCAN 直连，共享 src/sdo_client.hpp，先停栈再跑）────
-# 单位换算统一走 src/motor_unit_converter.hpp（自研栈保留件，单一权威）
+# ── 独立标定/调参工具（src/tools/，SocketCAN 直连，先停栈再跑）────────────────
+# 共享头在 include/robot_arm_driver/（包内自用，不 install/export）：
+#   sdo_client.hpp（极简 SDO 客户端）、motor_unit_converter.hpp（单位换算，
+#   自研栈保留件，单一权威）
 # set_encoder_zero  编码器零点标定（HM 方法 35，断电保持）
 # set_motor_limits  速度/加速度上限、软限位、最大转矩 查看与设定（rad 单位输入）
 # unit_convert      命令行换算器 rad↔pp（改 bus.yml 时用）
-add_executable(set_encoder_zero src/set_encoder_zero.cpp)
-add_executable(set_motor_limits src/set_motor_limits.cpp)
-add_executable(unit_convert src/unit_convert.cpp)
+add_executable(set_encoder_zero src/tools/set_encoder_zero.cpp)
+add_executable(set_motor_limits src/tools/set_motor_limits.cpp)
+add_executable(unit_convert src/tools/unit_convert.cpp)
+foreach(tool set_encoder_zero set_motor_limits unit_convert)
+  target_include_directories(${tool} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+endforeach()
 install(TARGETS set_encoder_zero set_motor_limits unit_convert DESTINATION lib/${PROJECT_NAME})
 
 # ── 自测栈（launch/test_arm.launch.py，mock/vcan假从站/真机 三合一）────────────

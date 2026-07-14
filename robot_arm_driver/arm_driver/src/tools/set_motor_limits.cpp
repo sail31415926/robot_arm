@@ -41,7 +41,7 @@
  * @copyright Copyright (c) 2026 EMEET
  */
 
-#include "sdo_client.hpp"
+#include "robot_arm_driver/sdo_client.hpp"
 
 #include <cstdlib>
 #include <optional>
