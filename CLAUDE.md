@@ -16,7 +16,7 @@
 - **编译完新包要重新 source**：终端里 `install/setup.bash` 是 source 时刻的快照，之后新编译的包（launch 报 `package 'xxx' not found`，而 install/ 里明明有）在该终端不可见，重新 source 即可。
 
 - **新增 Python 脚本必须手动登记安装**：`robot_arm_debug`、`robot_arm_mujoco` 是 ament_cmake 包，用 `install(PROGRAMS ...)` 安装脚本。新增 `.py` 后忘了加进对应 `CMakeLists.txt`，编译不会报错，但运行时节点找不到/ModuleNotFoundError 崩溃。
-- **HID 设备互斥**：云台（Joint4-6）的 HID 只能被一个进程占用。`real.launch.py` 现行路径是单 controller_manager 经 `CameraHardwareInterface` 管 J4-6；不要同时再起独立的 `robot_gimbal_node`，会互相抢设备。`robot_camera_node` 只占 V4L2，与 HID 不冲突。
+- **云台控制路径（2026-07 融合后）**：`robot_gimbal_node` 是**唯一 HID 拥有者**且为 `real.launch.py` 必需常驻组件；机械臂侧 J4-6 经 `GimbalForwardingInterface`（无 HID 转发插件）接入。不要在插件或其他进程里直连云台 HID。`robot_camera_node` 只占 V4L2，与 HID 不冲突。详见工作空间 `docs/云台控制路径融合方案.md`。
 - **总线接口是硬约定**：新增任何上层控制节点，命令只发 `/arm_controller/joint_trajectory`（或 MoveIt 走 `/arm_controller/follow_joint_trajectory` Action），状态只从 `/joint_states` 读。不要绕过总线直连某个后端，否则破坏 Gazebo / MuJoCo / 实物三后端无感切换。
 
 ## robot_arm_driver / ros2_canopen
@@ -25,6 +25,26 @@
 - EDS（`RB200-CA.eds`）和 `bus.yml` 是按 RB200-CA 手册**自己写的**，不是厂商提供，改对象字典要对照手册（工作空间 `docs/RB200-CA*` 有手册和 SOP）。IP 插值模式的位置命令写 **60C1:01**。
 - 驱动层自测入口：`ros2 launch robot_arm_driver test_arm.launch.py`（mock / vcan 假从站 / 真机三合一），迁移细节见工作空间 `docs/ros2_canopen迁移.md`。
 - 旧 `arm_node`（自研 CANopenLinux 栈）已于 2026-07 下线，不要再往上面加功能。
+
+## git 提交与 Gerrit
+
+- **仓库结构**：`robot_arm/`、`robot_gimbal/` 是各自独立的 git 仓库（嵌套在工作空间仓库内），提交要分别在各自目录内做；工作空间根目录的 `docs/` 属于外层仓库。
+- **提交信息**：conventional commits + 中文描述（`feat(scope): ...` / `fix:` / `docs:` / `chore:`），正文写清动机和关键决策；参考 `git log` 既有风格。
+- **Change-Id 必须有**（Gerrit 拒收没有的提交），标准流程（见 `docs/SETUP.md`）：
+
+  ```bash
+  # ① 装 commit-msg 钩子（每个新克隆仓库一次；已装过跳过）
+  gitdir=$(git rev-parse --git-dir); scp -p -P 29418 zoulongyou@192.168.16.75:hooks/commit-msg ${gitdir}/hooks/
+  # ② 已有提交漏了 Change-Id 时补（钩子装好后 amend 会自动加）
+  git commit --amend --no-edit
+  # ③ 推送走 Gerrit 评审流（不是直推 master）
+  git push origin HEAD:refs/for/master
+  ```
+
+  离线时钩子也可从兄弟仓库复制：`cp ../robot_arm/.git/hooks/commit-msg <目标仓库>/.git/hooks/`。Gerrit 地址 `ssh://<user>@192.168.16.75:29418/E7009/<repo>`。
+- **推送前先同步远端**：`git fetch origin` 后若远端有新提交，`git rebase origin/master` 再推，冲突时注意语义级冲突（别只看文本——曾发生"我方废弃的功能远端正在用"的情况，要看对方代码意图再整合）。
+- **提交范围要干净**：只提交本次工作相关文件；与任务无关的脏文件（他人的 .gitignore 改动、未跟踪目录）留给对应负责人。大二进制（如 26MB 的 `RTB.mltbx` 第三方安装包）不进 git，加 `.gitignore` 并注明获取方式。
+- 提交/推送由用户明确要求时才做，不要顺手提交。
 
 ## 文档位置
 

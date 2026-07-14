@@ -30,6 +30,56 @@ robot_arm/
 
 ---
 
+## 编译
+
+> 前置：ROS + venv 环境先就绪（见下文「环境配置」）；每个新终端按顺序
+> `source /opt/ros/humble/setup.bash` → `source .venv/bin/activate`。
+>
+> **包名必须跟在选择参数后面**，直接 `colcon build xxx包名` 会报
+> `unrecognized arguments`。两个常用选择参数：
+> `--packages-select`（只编列出的包本身，依赖须已编过——日常增量用）、
+> `--packages-up-to`（连带所有未编译的依赖一起构建——新环境首次编译用，
+> 记得 `--parallel-workers 2` 限流）。
+
+### 编译（开发机完整版：调试 GUI + 仿真后端 + 实机）
+
+```bash
+colcon build --symlink-install --packages-select \
+  robot_arm_interfaces robot_arm_driver robot_arm_description \
+  robot_arm_bringup robot_arm_node robot_arm_debug robot_arm_gazebo robot_arm_mujoco \
+  robot_gimbal_interfaces robot_gimbal_driver robot_gimbal_node
+
+# 生效（注意：编译出新包后每个已开终端都要重新 source）
+source install/setup.bash
+```
+
+### 实机编译（板上部署最小集）
+
+只需 5 个 robot_arm 包 + 云台 3 包（转发插件/云台节点/接口，J4-6 依赖，
+另仓库 `robot_gimbal`）：
+
+```bash
+colcon build --symlink-install --packages-select \
+  robot_arm_interfaces robot_arm_driver robot_arm_description \
+  robot_arm_bringup robot_arm_node \
+  robot_gimbal_interfaces robot_gimbal_driver robot_gimbal_node
+
+source install/setup.bash
+```
+
+> 适用 `real.launch.py controller:=commander gui:=false` 等产品路径。
+> 若用**调试控制模式**（`joint_position` / `cartesian_*` / `spherical_orbit` 等
+> GUI，含默认的 `controller:=joint_position`）或 `visp_ibvs`、commander 测试
+> GUI，**另需编译 `robot_arm_debug`**，否则 launch 在 t=3s 拉起 GUI 时报
+> `package 'robot_arm_debug' not found` 整体退出。
+>
+> **全新工作空间首次编译**：`robot_arm_driver` 依赖 vendored 的 ros2_canopen
+>（约 10 个包），`--packages-select` 不会自动构建依赖——首次请改用
+> `--packages-up-to robot_arm_bringup robot_arm_node robot_gimbal_node`
+>（并限制并行度，编译很重）；日常增量编译用上面的列表即可。
+
+---
+
 ## 快速启动
 
 三种运行环境共用同一套接口，均以 `controller:=<模式>` 选控制方式（模式见下表，默认 `joint_position`）：
@@ -112,8 +162,8 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 ```
 
 > **实物 J1-3 驱动路径（唯一）：** ros2_control HAL —— `canopen_ros2_control/RobotSystem`
-> （ros2_canopen，CiA402/SocketCAN，总线配置见 `robot_arm_driver/arm_driver/config/canopen/bus.yml`）
-> + `arm_controller`(JTC) + 伴生 `arm_driver_services`；`real.launch.py` 单 controller_manager 管全 6 轴。
+> （ros2_canopen，CiA402/SocketCAN，总线配置见 `robot_arm_driver/arm_driver/config/canopen/bus.yml`），
+> 加上 `arm_controller`(JTC) 与伴生 `arm_driver_services`；`real.launch.py` 单 controller_manager 管全 6 轴。
 > 驱动层自测：`ros2 launch robot_arm_driver test_arm.launch.py`（mock/vcan 假从站/真机三合一，
 > 详见 docs/ros2_canopen迁移.md）。旧 `arm_node`（自研 CANopenLinux 栈）已于 2026-07 下线。
 
@@ -188,20 +238,6 @@ bash src/E7009/robot_arm/setup_venv.sh
 source /opt/ros/humble/setup.bash
 source .venv/bin/activate
 source install/setup.bash   # 编译后
-```
-
----
-
-## 编译
-
-```bash
-# 编译所有机械臂相关包
-colcon build --symlink-install --packages-select \
-  robot_arm_interfaces robot_arm_driver robot_arm_description \
-  robot_arm_bringup robot_arm_node robot_arm_debug robot_arm_gazebo robot_arm_mujoco
-
-# 生效
-source install/setup.bash
 ```
 
 ---
