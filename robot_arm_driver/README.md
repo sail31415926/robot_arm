@@ -1,6 +1,6 @@
 # robot_arm_driver — 臂 J1-3 CANopen 硬件层（ros2_canopen）
 
-eMeetArm 机械臂 J1-3（VEICHI **RB200-CA** 关节模组 ×3，CiA402/SocketCAN）的
+robot_arm 机械臂 J1-3（VEICHI **RB200-CA** 关节模组 ×3，CiA402/SocketCAN）的
 ros2_control 硬件层。自研 CANopen 栈（CANopenLinux + ArmHardwareInterface + arm_node）
 已于 2026-07 全面下线，替换为本方案。迁移全记录见 `docs/ros2_canopen迁移.md`。
 

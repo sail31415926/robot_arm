@@ -1,4 +1,4 @@
-# bus.yml — eMeetArm CANopen 总线拓扑（ros2_canopen，从站=VEICHI RB200-CA 关节模组）
+# bus.yml — robot_arm CANopen 总线拓扑（ros2_canopen，从站=VEICHI RB200-CA 关节模组）
 #
 # 构建时由 generate_dcf(canopen) 处理：
 #   1. @BUS_CONFIG_PATH@ 替换为 install 后的 share/robot_arm_driver/config/canopen

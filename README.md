@@ -1,14 +1,14 @@
-# eMeet Robot Arm — ROS 2 Package (Humble)
+# robot_arm — ROS 2 Package (Humble)
 
 ## 项目信息
 
 | 项目属性 | 详情 |
 | :--- | :--- |
-| **项目名称** | eMeet Robot Arm ROS 2 Package |
+| **项目名称** | robot_arm ROS 2 Package |
 | **版本** | v1.5.0 |
 | **发布日期** | 2026-07-13 |
 | **支持平台** | Ubuntu 22.04 LTS · ROS 2 Humble · Python 3.10 |
-| **设备** | eMeet 6 轴机械臂（Joint1-3 CANopen + Joint4-6 相机云台 HID） |
+| **设备** | robot_arm 6 轴机械臂（Joint1-3 CANopen + Joint4-6 相机云台 HID） |
 | **语言** | C++ / Python / MATLAB |
 
 ---
@@ -96,10 +96,10 @@ ros2 launch robot_arm_driver test_arm.launch.py    # 驱动层自测（mock/vcan
 ```
 
 ```bash
-# 选控制模式 / 相机型号（示例）
+# 选控制模式 / 开关调试 GUI（示例）
 ros2 launch robot_arm_gazebo gazebo.launch.py controller:=spherical_orbit
 ros2 launch robot_arm_bringup real.launch.py   controller:=commander      # 中间层（默认含测试 GUI）
-ros2 launch robot_arm_bringup real.launch.py   camera_type:=pixy          # 相机型号（默认 auto）
+ros2 launch robot_arm_bringup real.launch.py   controller:=commander gui:=false   # 无 GUI（板上部署）
 ```
 
 ---

@@ -1,109 +1,106 @@
 # robot_arm_interfaces — 消息结构文档
 
+> 结构定义的**唯一权威**是 `msg/ srv/ action/` 目录下的接口文件（含逐字段注释）；
+> 本文档只做通信拓扑速查与公共结构体展开，接口语义与执行流程详见 [README.md](README.md)。
+
 ## 通信拓扑
 
 ```
-Director ──topic(/robot_arm/pose_cmd)────► ArmNode  ← 目标姿态（收纳/观察/拍摄）
-Director ──topic(/robot_arm/motion_cmd)──► ArmNode  ← 运镜控制（抬升/推拉/横移/环绕）
-Director ──topic(/robot_arm/follow_cmd)──► ArmNode  ← 跟随速度控制（三轴速度）
-Director ──topic(/robot_arm/arm_cmd)─────► ArmNode  ← 基础高度控制（位置/速度/冻结）
-ArmNode  ──topic(/robot_arm/arm_status)──► Director ← 实时状态反馈（高度 + 到位标志）
+Director ──action(/robot_arm/move_to_pose)────► Commander   位姿切换（收纳/观察/拍摄）
+Director ──action(/robot_arm/trajectory_shot)─► Commander   运镜执行（直线/球面环绕）
+Director ──action(/robot_arm/track_target)────► Commander   视觉跟随（IBVS 启停）
+Director ──service(/robot_arm/stop)───────────► Commander   软件急停（MOVING→STOPPED）
+Director ──service(/robot_arm/enable)─────────► Driver      伺服上电/下电（Commander 透传）
+Director ──service(/robot_arm/homing)─────────► Driver      回零（Commander 透传）
+Director ──service(/robot_arm/reset_error)────► Driver      清故障 + Commander 状态复位
+Commander ──topic(/robot_arm/arm_status)──────► Director    实时状态广播（10Hz）
+Director ──topic(/robot_arm/follow_command)───► Commander   （预留）末端速度流，暂无收发方
 ```
 
 ---
 
-## ArmPoseCommand.msg（话题 `/robot_arm/pose_cmd`）
+## 公共结构体
+
+### ArmPose.msg（末端位姿，base_link 坐标系）
 
 ```
-ArmPoseCommand
+ArmPose
 │
-├── target_pose_state: uint8        目标姿态，取值为以下常量之一
-│   ├── POSE_STATE_STOWED   = 0    收纳位（关机/停机时使用）
-│   ├── POSE_STATE_OBSERVE  = 1    观察位（待机/定位状态）
-│   └── POSE_STATE_SHOOTING = 2    拍摄位（构图/录制，目标坐标由下方字段指定）
+├── x / y / z: float32              位置（米）
+├── roll: float32                   横滚角，单位：度，范围 [-180, 180]
+├── pitch: float32                  俯仰角，单位：度，范围 [-90, 90]，正值抬头
+└── yaw: float32                    水平角，单位：度，范围 [-180, 180]，正值向右转
+```
+
+### ArmTwist.msg（末端速度，base_link 坐标系）
+
+```
+ArmTwist
 │
-├── transition_speed: uint8         姿态切换速度，取值为以下常量之一
-│   ├── SPEED_SLOW   = 0           慢速
-│   ├── SPEED_NORMAL = 1           正常
-│   └── SPEED_FAST   = 2           快速
-│
-├── target_pose_x: float32          拍摄位目标坐标 x（基于机械臂底座坐标系，米）
-│   │                               仅 target_pose_state == SHOOTING 时有效
-├── target_pose_y: float32          拍摄位目标坐标 y（基于机械臂底座坐标系，米）
-├── target_pose_z: float32          拍摄位目标坐标 z（基于机械臂底座坐标系，米）
-│   │                               低/中/高位预设坐标在 Director 配置参数中定义
-│
-├── pan_deg: float32                云台水平角（Pan），单位：度，范围 [-180, 180]
-│   │                               正值向右转
-└── tilt_deg: float32               云台俯仰角（Tilt），单位：度，范围 [-90, 45]
-                                    正值向上仰
+├── vx / vy / vz: float32           线速度（米/秒），正方向：前 / 左 / 上
+└── wroll / wpitch / wyaw: float32  角速度（度/秒）
 ```
 
 ---
 
-## ArmMotionCommand.msg（话题 `/robot_arm/motion_cmd`）
-
-```
-ArmMotionCommand
-│
-├── motion_type: uint8              运镜类型，取值为以下常量之一
-│   ├── MODE_CRANE = 0             抬升/下降运镜
-│   ├── MODE_DOLLY = 1             推/拉运镜
-│   ├── MODE_TRUCK = 2             横移运镜
-│   └── MODE_ARC   = 3             环绕运镜
-│
-├── speed_profile: uint8            速度曲线
-│   ├── 0 (SMOOTH)                 缓入缓出
-│   └── 1 (LINEAR)                 匀速
-│
-├── move_distance_m: float32        移动距离（米）
-│   │                               CRANE/DOLLY/TRUCK 模式有效
-│   │                               >0 抬升 | >0 前推 | >0 右移
-│
-├── arc_radius_m: float32           环绕半径（米）
-│   │                               MODE_ARC 时有效
-└── arc_degree: float32             环绕角度（度）
-                                    MODE_ARC 时有效
-```
-
----
-
-## ArmFollowCommand.msg（话题 `/robot_arm/follow_cmd`）
-
-```
-ArmFollowCommand
-│
-├── speed_x_mps: float32            X 轴速度（米/秒）
-├── speed_y_mps: float32            Y 轴速度（米/秒）
-└── speed_z_mps: float32            Z 轴速度（米/秒）
-```
-
----
-
-## ArmCommand.msg（话题 `/robot_arm/arm_cmd`）
-
-```
-ArmCommand
-│
-├── mode: uint8                     控制模式，取值为以下常量之一
-│   ├── POSITION = 0               位置模式：平滑运动到目标高度 height_m
-│   ├── VELOCITY = 1               速度模式：以 velocity_mps 恒速运动直到外部停止
-│   └── FREEZE   = 2               冻结模式：保持当前位置，忽略 height_m/velocity_mps
-│
-├── height_m: float32               目标高度（米），有效范围 [0.3, 1.2]
-│   │                               仅 mode == POSITION 时有效；超出范围驱动层自动钳位
-└── velocity_mps: float32           运动速度（米/秒），有效范围 [0.0, 0.2]
-                                    仅 mode == VELOCITY 时有效；正值向上，负值向下
-```
-
----
-
-## /robot_arm/arm_status 话题（ArmStatus.msg）
+## ArmStatus.msg（话题 `/robot_arm/arm_status`，10Hz）
 
 ```
 ArmStatus
 │
-├── arm_height_m: float32           机械臂当前高度（米，编码器反馈）
-└── arm_at_target: bool             是否已到达目标位置
-                                    |实际高度 - 目标高度| < 容差 时为 true
+├── header: std_msgs/Header         时间戳 + frame_id（统一填 base_link）
+│
+├── current_pose_state: uint8       当前语义姿态
+│   ├── POSE_STATE_STOWED   = 0    收纳位
+│   ├── POSE_STATE_OBSERVE  = 1    观察位
+│   └── POSE_STATE_SHOOTING = 2    拍摄位
+│
+├── error_code: uint8               错误码
+│   ├── ERR_NONE    = 0            正常
+│   ├── ERR_LIMIT   = 1            触发限位
+│   ├── ERR_DRIVER  = 2            驱动层故障
+│   └── ERR_TIMEOUT = 3            运动超时
+│
+├── executing_command_id: uint32    当前/最近命令 id（0 = 上层不关心）
+├── command_result: uint8           NONE=0 / EXECUTING=1 / SUCCEEDED=2 / FAILED=3 / ABORTED=4
+│
+├── arm_pose: ArmPose               末端当前位姿
+├── arm_twist: ArmTwist             末端当前速度
+├── is_moving: bool                 是否正在运动
+├── arm_at_target: bool             已到达目标（|实际-目标| < 容差）
+├── arm_at_pose_start: bool         已到达运镜起始点（起点停顿期间为 true）
+├── camera_ready: bool              摄像头录制就绪窗口（到达运镜起点起、至运镜结束）
+├── is_tracking: bool               视觉伺服跟随中（ArmTrackTarget goal 活跃期间为 true）
+├── tracking_img_err: float32       跟随中的图像误差（归一化欧氏距离，非跟随时 0.0）
+└── tracking_depth_err_m: float32   跟随中的深度误差（米，非跟随时 0.0）
 ```
+
+---
+
+## ArmFollowCommand.msg（话题 `/robot_arm/follow_command`，**预留**）
+
+> 预留接口：当前工程中无 publisher / subscriber。保留用于未来的末端速度流控制
+> （手动点动 / 外部伺服源）；视觉跟随功能现由 `ArmTrackTarget` action 实现。
+
+```
+ArmFollowCommand
+│
+└── twist: ArmTwist                 末端目标速度（base_link 系）
+                                    线速度有效范围 [-0.2, 0.2] m/s，不使用的轴填 0
+```
+
+---
+
+## Action / Service 一览
+
+| 接口文件 | 名称 | 要点 |
+| --- | --- | --- |
+| `action/ArmMoveToPose.action` | `/robot_arm/move_to_pose` | 姿态切换；exit_reason: reached / timeout / cancelled / stopped / unreachable / error |
+| `action/ArmTrajectoryShot.action` | `/robot_arm/trajectory_shot` | 直线 / 球面环绕运镜；exit_reason: reached / timeout / cancelled / stopped / error |
+| `action/ArmTrackTarget.action` | `/robot_arm/track_target` | IBVS 跟随启停；exit_code: CONVERGED / FEATURE_LOST / TIMEOUT / CANCELLED / ERROR |
+| `srv/ArmStop.srv` | `/robot_arm/stop` | 软件急停，非 MOVING 状态为空操作 |
+| `srv/ArmEnable.srv` | `/robot_arm/enable` | 伺服上电 / 下电（透传驱动层） |
+| `srv/ArmHoming.srv` | `/robot_arm/homing` | 回零（阻塞至到位或急停） |
+| `srv/ArmResetError.srv` | `/robot_arm/reset_error` | 驱动层 recover + Commander ERROR/STOPPED→IDLE |
+
+各 action 的 Goal / Result / Feedback 字段树见接口文件内注释与 [README.md](README.md) 的接口清单章节。

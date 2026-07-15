@@ -13,7 +13,7 @@ find_package(lifecycle_msgs REQUIRED)
 find_package(lely_core_libraries REQUIRED)
 
 # ── CANopen 总线配置（ros2_canopen）──────────────────────────────────────────
-# config/canopen/{bus.yml, eMeetArm.eds} → dcfgen 生成 master.dcf，
+# config/canopen/{bus.yml, RB200-CA.eds} → dcfgen 生成 master.dcf，
 # 一并安装到 share/${PROJECT_NAME}/config/canopen/，供 URDF RobotSystem 插件引用。
 generate_dcf(canopen)
 

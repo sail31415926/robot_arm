@@ -3,7 +3,8 @@
 # 客户端：上层（Director）
 # 服务端：Arm Commander（arm_commander 节点，robot_arm_node 包）
 #
-# exit_reason: "reached" | "timeout" | "cancelled" | "error"
+# exit_reason: "reached" | "timeout" | "cancelled" | "stopped" | "unreachable" | "error"
+#   （stopped=执行中被 ArmStop 急停；unreachable=目标 IK 无解，恢复空闲）
 #
 # ─── 目标姿态常量 ───
 uint8 POSE_STATE_STOWED   = 0     # 收纳位（关节回零，Commander 内置）
@@ -23,7 +24,7 @@ ArmPose target_pose          # 目标末端位姿（base_link 坐标系，x/y/z 
 ---
 # ─── Result ────────────────────────────────────────────────────────────────
 bool    success              # 是否到达目标姿态（return_to_start=true 时表示已回到起始点）
-string  exit_reason          # "reached" | "timeout" | "cancelled" | "error"
+string  exit_reason          # "reached" | "timeout" | "cancelled" | "stopped" | "unreachable" | "error"
 uint8   error_code           # 失败时的错误码（对应 ArmStatus.ERR_*）
 ArmPose actual_pose          # 实际到达的末端位姿（return_to_start=true 时为返回后的位姿）
 ---

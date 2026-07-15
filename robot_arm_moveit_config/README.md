@@ -1,6 +1,6 @@
 # robot_arm_moveit_config
 
-eMeetArm 的 MoveIt 配置包（社区标准 `<robot>_moveit_config` 布局，手写、非 Setup Assistant 生成）。
+robot_arm 的 MoveIt 配置包（社区标准 `<robot>_moveit_config` 布局，手写、非 Setup Assistant 生成）。
 URDF 本体在 `robot_arm_description`（`.setup_assistant` 已声明来源，兼容 `MoveItConfigsBuilder`）。
 
 ## 内容

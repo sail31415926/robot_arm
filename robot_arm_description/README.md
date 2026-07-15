@@ -1,6 +1,6 @@
 # robot_arm_description
 
-eMeetArm 6 轴机械臂描述包。提供 URDF/xacro、网格、运动学配置和控制器配置。
+robot_arm 6 轴机械臂描述包。提供 URDF/xacro、网格、运动学配置和控制器配置。
 
 ---
 

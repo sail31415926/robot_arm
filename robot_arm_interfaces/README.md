@@ -16,10 +16,10 @@
                     ┌──────────────────────────────┐
                     │        Director (上层)         │
                     └──────────────────────────────┘
-  action/topic ↓         ↑ ArmStatus           ↓ service
+  action ↓                ↑ ArmStatus           ↓ service
   (MoveToPose /          │ (10Hz)               │ (运维直达驱动)
    TrajectoryShot /      │                      │
-   FollowCommand)        │                      │
+   TrackTarget)          │                      │
                  ↓       │                      │
        ┌─────────────────────────┐              │
        │    Arm Commander        │              │
@@ -89,7 +89,7 @@ Arm Commander 内部维护一个五态状态机（`CommanderState`），决定�
 
 | 模式 | 适用场景 |
 | --- | --- |
-| **Topic** | 高频连续、无需逐条确认：状态广播（`ArmStatus`）、速度流（`ArmFollowCommand`） |
+| **Topic** | 高频连续、无需逐条确认：状态广播（`ArmStatus`）、速度流（`ArmFollowCommand`，预留） |
 | **Service** | 瞬时请求-应答、立即返回：运维操作（上电/回零/清错/急停） |
 | **Action** | 有时长、需进度反馈、可取消：位姿切换、运镜执行 |
 
@@ -106,7 +106,7 @@ Arm Commander 内部维护一个五态状态机（`CommanderState`），决定�
 
 | 消息 | 方向 | 说明 |
 | --- | --- | --- |
-| `ArmFollowCommand` | Director → Commander | 末端速度跟随（`ArmTwist`），持续速度流（IBVS / 手动点动） |
+| `ArmFollowCommand` | Director → Commander | 末端速度跟随（`ArmTwist`）持续速度流 —— **预留接口，暂无收发方**（视觉跟随现由 `ArmTrackTarget` action 实现） |
 | `ArmStatus` | Commander → Director | 位姿、速度、运动状态、错误码、命令执行结果、到位标志（到达目标 / 到达运镜起始点 / 摄像头录制就绪）（10Hz 周期广播） |
 
 #### `ArmStatus` —— 状态广播（Commander → Director，10Hz）
@@ -122,6 +122,9 @@ bool     is_moving            # 是否正在运动
 bool     arm_at_target        # 是否已到达目标点（|实际 - 目标| < 容差）
 bool     arm_at_pose_start    # 是否已到达运镜起始点（见下方说明）
 bool     camera_ready         # 摄像头录制就绪（见下方说明）
+bool     is_tracking          # 视觉伺服跟随中（ArmTrackTarget goal 活跃期间为 true）
+float32  tracking_img_err     # 跟随中的图像误差（归一化欧氏距离，非跟随时 0.0）
+float32  tracking_depth_err_m # 跟随中的深度误差（m，非跟随时 0.0）
 ```
 
 - **`arm_at_target`**：到达目标点为 `true`。
@@ -171,7 +174,7 @@ Goal:
 
 Result:
   bool   success
-  string exit_reason         # "reached" | "timeout" | "cancelled" | "error"
+  string exit_reason         # "reached" | "timeout" | "cancelled" | "stopped" | "unreachable" | "error"
   uint8  error_code
   ArmPose actual_pose
 
@@ -205,7 +208,7 @@ Goal:
 
 Result:
   bool   success
-  string exit_reason         # "reached" | "timeout" | "cancelled" | "error"
+  string exit_reason         # "reached" | "timeout" | "cancelled" | "stopped" | "error"
   uint8  error_code
 
 Feedback:
@@ -232,14 +235,44 @@ Feedback:
 4. 若 `return_to_start`，Ruckig 原路返回起始球坐标
 5. 轨迹结束（任何原因）→ `camera_ready=false`
 
+#### `ArmTrackTarget` —— 目标视觉跟随（IBVS）
+
+```text
+Goal:
+  float32 desired_depth      # 期望保持距离（m），0.0 = 沿用节点默认值
+  float32 desired_x / y      # 期望目标在图像中的位置（归一化，0.0 = 画面中心）
+  bool    constrain_height   # 是否锁定相机高度（J1-J3 负责升降）
+  float32 desired_height     # 期望相机高度（arm_base 系 Z，米），constrain_height=false 时忽略
+  bool    hold_on_converge   # true=收敛后保持跟随等上层 cancel；false=收敛即 succeed 退出
+  float32 total_timeout_sec  # 总超时（s），0.0 = 永不超时
+
+Result:
+  bool    success            # converged 与 cancelled 均视为 true，lost/timeout/error 为 false
+  uint8   exit_code          # EXIT_CONVERGED=0 / FEATURE_LOST=1 / TIMEOUT=2 / CANCELLED=3 / ERROR=4
+  string  exit_reason        # "converged" | "feature_lost" | "timeout" | "cancelled" | "error"
+  float32 final_img_err      # 退出时图像误差（归一化欧氏距离）
+  float32 final_depth_err_m  # 退出时深度误差（m）
+  ArmPose final_pose         # 退出时末端位姿
+
+Feedback:（10Hz）
+  float32 img_err / depth_err_m / elapsed_sec
+  bool    is_converged
+  ArmPose current_pose
+```
+
+- `send_goal` 启动跟随（IBVS 输出速度指令），`cancel_goal` 停止跟随并保持当前位置
+- 特征丢失超 0.5s / 达到 `total_timeout_sec` 会自动退出，无需上层 cancel
+- 跟随期间 `ArmStatus.is_tracking = true`
+
 ## ROS Topic / Action / Service 汇总
 
 | 名称 | 类型 | 方向 |
 | --- | --- | --- |
 | `/robot_arm/arm_status` | `ArmStatus` topic | Commander → Director |
-| `/robot_arm/follow_command` | `ArmFollowCommand` topic | Director → Commander |
+| `/robot_arm/follow_command` | `ArmFollowCommand` topic | Director → Commander（**预留**，暂未接线） |
 | `/robot_arm/move_to_pose` | `ArmMoveToPose` action | Director → Commander |
 | `/robot_arm/trajectory_shot` | `ArmTrajectoryShot` action | Director → Commander |
+| `/robot_arm/track_target` | `ArmTrackTarget` action | Director → Commander |
 | `/robot_arm/stop` | `ArmStop` service | Director → Commander |
 | `/robot_arm/enable` | `ArmEnable` service | Director → Driver |
 | `/robot_arm/homing` | `ArmHoming` service | Director → Driver |
@@ -255,14 +288,18 @@ Feedback:
 
 ## Arm Commander 实现位置
 
+Commander 已于 2026-07 由 Python 全量移植为 C++（`robot_arm_node` 包），调试 GUI 拆到 `robot_arm_debug` 包：
+
 | 文件 | 职责 |
 | --- | --- |
-| `robot_arm_node/scripts/commander/arm_commander_node.py` | 主节点：状态机 + Action Server + ArmStatus 发布 + ArmStop 服务 |
-| `robot_arm_node/scripts/commander/move_to_pose_server.py` | `ArmMoveToPose` 执行逻辑 |
-| `robot_arm_node/scripts/commander/trajectory_shot_server.py` | `ArmTrajectoryShot` 执行逻辑（直线 / 球面轨道） |
-| `robot_arm_node/scripts/commander/motion_executor.py` | 共享运动引擎：IK / Ruckig / JointTrajectory / 速度流 |
-| `robot_arm_node/scripts/commander/status_aggregator.py` | 状态聚合：JointState + TF2 → ArmStatus |
-| `robot_arm_node/tests/commander_test_gui.py` | Director 视角调试 GUI（ArmMoveToPose + ArmTrajectoryShot + 点动 + 急停/复位） |
+| `robot_arm_node/src/commander/arm_commander_node.cpp` | 主节点：状态机 + 3 Action Server + 4 Service + ArmStatus 广播 |
+| `robot_arm_node/src/commander/move_to_pose_server.cpp` | `ArmMoveToPose` 执行逻辑 |
+| `robot_arm_node/src/commander/trajectory_shot_server.cpp` | `ArmTrajectoryShot` 执行逻辑（直线 / 球面轨道） |
+| `robot_arm_node/src/commander/track_target_server.cpp` | `ArmTrackTarget` 执行逻辑（IBVS 视觉跟随启停） |
+| `robot_arm_node/src/commander/motion_executor.cpp` | 共享运动引擎：IK / Ruckig / JointTrajectory |
+| `robot_arm_node/src/commander/execution_monitor.cpp` | 执行监视：到位判定 / 超时 / 急停联动 |
+| `robot_arm_node/src/state/status_aggregator.cpp` | 状态聚合：JointState + TF2 → ArmStatus |
+| `robot_arm_debug/python/gui/commander_test_gui.py` | Director 视角调试 GUI（三 action + 点动 + 急停/复位） |
 
 启动方式：
 
@@ -274,5 +311,5 @@ ros2 launch robot_arm_gazebo gazebo.launch.py controller:=commander
 ros2 run robot_arm_node arm_commander_node
 
 # 单独启动调试 GUI
-ros2 run robot_arm_node commander_test_gui
+ros2 run robot_arm_debug commander_test_gui
 ```

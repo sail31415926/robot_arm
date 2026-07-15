@@ -16,8 +16,8 @@
 
 
 用法：
-  ros2 run robot_arm_node mujoco_data_recorder [--output ~/dataset --prefix orbit]
-  ros2 launch robot_arm_mujoco mujoco.launch.py controller:=sphere_orbit  # 先启动仿真
+  ros2 run robot_arm_mujoco mujoco_data_recorder [--output ~/dataset --prefix orbit]
+  ros2 launch robot_arm_mujoco mujoco.launch.py controller:=spherical_orbit  # 先启动仿真
 
 @copyright Copyright (c) 2026 eMeet
 """
