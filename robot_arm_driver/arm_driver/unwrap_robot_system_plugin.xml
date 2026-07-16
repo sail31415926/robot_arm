@@ -1,0 +1,10 @@
+<library path="unwrap_robot_system">
+  <class name="robot_arm_driver/UnwrapRobotSystem"
+         type="robot_arm_driver::UnwrapRobotSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      RobotSystem + 单圈绝对编码器 2π 折算：上电反馈落在 [0,2π) 时按关节行程窗就近归位，
+      读写对称平移，保证回零/运动始终走最短方向。
+    </description>
+  </class>
+</library>

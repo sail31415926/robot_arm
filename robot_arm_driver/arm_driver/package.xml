@@ -18,15 +18,18 @@
   <depend>controller_manager_msgs</depend>
   <depend>lifecycle_msgs</depend>
 
-  <!-- 运行时硬件栈：URDF 插件 RobotSystem 及其 master/402 驱动 -->
+  <!-- UnwrapRobotSystem 插件（继承 canopen_ros2_control/RobotSystem，编译期依赖） -->
+  <depend>canopen_ros2_control</depend>
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
+
+  <!-- 运行时硬件栈：master/402 驱动 -->
   <exec_depend>canopen_core</exec_depend>
   <exec_depend>canopen_master_driver</exec_depend>
   <exec_depend>canopen_402_driver</exec_depend>
-  <exec_depend>canopen_ros2_control</exec_depend>
 
   <!-- 自测栈（launch/test_arm.launch.py）-->
   <exec_depend>controller_manager</exec_depend>
-  <exec_depend>hardware_interface</exec_depend>  <!-- mock 模式插件 mock_components/GenericSystem -->
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>canopen_fake_slaves</exec_depend>

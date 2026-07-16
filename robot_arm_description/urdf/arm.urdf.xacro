@@ -267,7 +267,8 @@
   <!-- ══ ros2_control ══════════════════════════════════════════════════════════
        Arm joints 1-3：
          backend=gazebo（默认）→ GazeboSystem（Gazebo 仿真）
-         backend=real          → canopen_ros2_control/RobotSystem（ros2_canopen，CiA402 实物）
+         backend=real          → robot_arm_driver/UnwrapRobotSystem（ros2_canopen CiA402 实物，
+                                 继承 RobotSystem + 绝对编码器 2π 折算，保证回零走最短方向）
                                  总线拓扑/换算/PDO 见 robot_arm_driver/config/canopen/bus.yml
                                  arm_sim_mode=true → mock_components/GenericSystem
                                                      （命令回显为状态，不连 CAN，干跑）
@@ -276,7 +277,7 @@
     <hardware>
       <xacro:if value="${backend == 'real'}">
         <xacro:unless value="${arm_sim_mode}">
-          <plugin>canopen_ros2_control/RobotSystem</plugin>
+          <plugin>robot_arm_driver/UnwrapRobotSystem</plugin>
           <param name="bus_config">$(find robot_arm_driver)/config/canopen/bus.yml</param>
           <param name="master_config">$(find robot_arm_driver)/config/canopen/master.dcf</param>
           <param name="can_interface_name">${can_interface}</param>

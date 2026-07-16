@@ -3,7 +3,8 @@
 # 构建时由 generate_dcf(canopen) 处理：
 #   1. @BUS_CONFIG_PATH@ 替换为 install 后的 share/robot_arm_driver/config/canopen
 #   2. dcfgen 依据本文件 + RB200-CA.eds 生成 master.dcf / joint_N.bin
-# URDF 的 canopen_ros2_control/RobotSystem 插件通过 bus_config/master_config 参数引用。
+# URDF 的 robot_arm_driver/UnwrapRobotSystem 插件（继承 canopen_ros2_control/RobotSystem，
+# 加绝对编码器 2π 折算）通过 bus_config/master_config 参数引用。
 #
 # ── RB200-CA 要点（依据简版手册 V1.0）────────────────────────────────────────
 # 支持模式(6502h=0x6D)：PP(1) PV(3) PT(4) HM(6) IP(7)

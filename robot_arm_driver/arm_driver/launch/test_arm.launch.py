@@ -70,7 +70,7 @@ def _test_urdf(mock: bool, can_interface: str, share: str) -> str:
     if mock:
         hardware = '<plugin>mock_components/GenericSystem</plugin>'
     else:
-        hardware = f"""<plugin>canopen_ros2_control/RobotSystem</plugin>
+        hardware = f"""<plugin>robot_arm_driver/UnwrapRobotSystem</plugin>
       <param name="bus_config">{share}/config/canopen/bus.yml</param>
       <param name="master_config">{share}/config/canopen/master.dcf</param>
       <param name="can_interface_name">{can_interface}</param>"""

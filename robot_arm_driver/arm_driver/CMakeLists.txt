@@ -11,11 +11,28 @@ find_package(std_srvs REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
 find_package(lely_core_libraries REQUIRED)
+find_package(canopen_ros2_control REQUIRED)
+find_package(hardware_interface REQUIRED)
+find_package(pluginlib REQUIRED)
 
 # ── CANopen 总线配置（ros2_canopen）──────────────────────────────────────────
 # config/canopen/{bus.yml, RB200-CA.eds} → dcfgen 生成 master.dcf，
 # 一并安装到 share/${PROJECT_NAME}/config/canopen/，供 URDF RobotSystem 插件引用。
 generate_dcf(canopen)
+
+# ── UnwrapRobotSystem（ros2_control 硬件插件：RobotSystem + 绝对编码器 2π 折算）──
+# 上电反馈落 [0,2π) 时按 URDF 行程窗就近归位，读写对称，保证回零走最短方向。
+# URDF real 后端与 test_arm.launch.py 均引用 robot_arm_driver/UnwrapRobotSystem。
+add_library(unwrap_robot_system SHARED src/unwrap_robot_system.cpp)
+target_include_directories(unwrap_robot_system PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+ament_target_dependencies(unwrap_robot_system
+  rclcpp canopen_ros2_control hardware_interface pluginlib)
+pluginlib_export_plugin_description_file(hardware_interface unwrap_robot_system_plugin.xml)
+install(TARGETS unwrap_robot_system
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin)
 
 # ── arm_driver_services（使能/复位伴生服务节点，Trigger → controller_manager）──
 add_executable(arm_driver_services src/arm_driver_services.cpp)
