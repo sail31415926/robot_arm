@@ -5,7 +5,7 @@
 
 ## 通信拓扑
 
-```
+```text
 Director ──action(/robot_arm/move_to_pose)────► Commander   位姿切换（收纳/观察/拍摄）
 Director ──action(/robot_arm/trajectory_shot)─► Commander   运镜执行（直线/球面环绕）
 Director ──action(/robot_arm/track_target)────► Commander   视觉跟随（IBVS 启停）
@@ -23,7 +23,7 @@ Director ──topic(/robot_arm/follow_command)───► Commander   （预�
 
 ### ArmPose.msg（末端位姿，base_link 坐标系）
 
-```
+```text
 ArmPose
 │
 ├── x / y / z: float32              位置（米）
@@ -34,7 +34,7 @@ ArmPose
 
 ### ArmTwist.msg（末端速度，base_link 坐标系）
 
-```
+```text
 ArmTwist
 │
 ├── vx / vy / vz: float32           线速度（米/秒），正方向：前 / 左 / 上
@@ -45,7 +45,7 @@ ArmTwist
 
 ## ArmStatus.msg（话题 `/robot_arm/arm_status`，10Hz）
 
-```
+```text
 ArmStatus
 │
 ├── header: std_msgs/Header         时间戳 + frame_id（统一填 base_link）
@@ -82,7 +82,7 @@ ArmStatus
 > 预留接口：当前工程中无 publisher / subscriber。保留用于未来的末端速度流控制
 > （手动点动 / 外部伺服源）；视觉跟随功能现由 `ArmTrackTarget` action 实现。
 
-```
+```text
 ArmFollowCommand
 │
 └── twist: ArmTwist                 末端目标速度（base_link 系）
