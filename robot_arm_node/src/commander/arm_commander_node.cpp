@@ -275,6 +275,13 @@ void ArmCommanderNode::em_execute(std::shared_ptr<rclcpp_action::ServerGoalHandl
     } else if (result->exit_reason == "stopped") {
       status_->set_command_state(cmd_id, ArmStatus::RESULT_ABORTED);
       gh->abort(result);
+    } else if (result->exit_reason == "unreachable") {
+      // 与 MoveToPose 一致：IK 无解是 goal 参数问题而非系统故障，
+      // 拒绝本次 goal 恢复空闲，不进 ERROR（否则需要 reset_error 才能继续）
+      RCLCPP_WARN(get_logger(), "目标不可达（IK 无解），拒绝本次 goal，恢复空闲");
+      transition(CommanderState::IDLE);
+      status_->set_command_state(cmd_id, ArmStatus::RESULT_ABORTED);
+      gh->abort(result);
     } else {
       transition(CommanderState::ERROR);
       status_->set_command_state(cmd_id, ArmStatus::RESULT_FAILED);

@@ -128,13 +128,19 @@ private:
 
     void onRecover(Trigger::Request::ConstSharedPtr, Trigger::Response::SharedPtr res)
     {
-        // inactive→active 循环：on_deactivate 失能，on_activate 内含 resetFault + 重使能
-        bool ok = setHwState(lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE, "inactive");
-        if (ok) ok = setHwState(lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE, "active");
-        if (ok) switchController({controller_}, {});
-        res->success = ok;
-        res->message = ok ? "已恢复（inactive→active，含 resetFault + arm_controller 激活）"
-                          : "恢复失败";
+        // 先停控制器释放已 claim 的接口（与 disable 一致——组件被占用时做生命周期
+        // 循环易半途失败），再 inactive→active（on_deactivate 失能，on_activate 内含
+        // resetFault + 重使能）；控制器激活不以组件循环成败为前提，避免任一步失败后
+        // 系统留在"控制器停/组件错乱"的无头状态，只能重启才能救
+        switchController({}, {controller_});
+        bool hw_ok = setHwState(lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE, "inactive");
+        if (hw_ok) hw_ok = setHwState(lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE, "active");
+        const bool ctrl_ok = switchController({controller_}, {});
+        res->success = hw_ok && ctrl_ok;
+        res->message = res->success
+            ? "已恢复（控制器停→组件 inactive→active→控制器激活，含 resetFault）"
+            : std::string("恢复失败（组件循环") + (hw_ok ? "OK" : "失败")
+              + "，控制器激活" + (ctrl_ok ? "OK" : "失败") + "，看日志定位）";
         RCLCPP_INFO(get_logger(), "recover: %s", res->message.c_str());
     }
 

@@ -8,8 +8,9 @@
 #   MOTION_ORBIT ：先移动到起始球坐标（以 orbit_center 为球心），再沿球面运动到终止球坐标
 #   两种模式下 return_to_start = true 时，完成后均原路返回出发点
 #
-# exit_reason: "reached" | "timeout" | "cancelled" | "stopped" | "error"
-#   （stopped=执行中被 ArmStop 急停；起始点 IK 无解报 "error" + ERR_LIMIT）
+# exit_reason: "reached" | "timeout" | "cancelled" | "stopped" | "unreachable" | "error"
+#   （stopped=执行中被 ArmStop 急停；unreachable=起始/终止点 IK 无解，
+#     视为 goal 参数问题拒绝本次 goal，Commander 恢复空闲、不进 ERROR）
 #
 # ─── 运动类型常量 ───
 uint8 MOTION_LINEAR = 0    # 直线运镜：升/降/推/拉/横移（相对当前位姿偏移）
@@ -49,7 +50,7 @@ float32 radius_end_m           # 球面半径终止值（米）
 ---
 # ─── Result ────────────────────────────────────────────────────────────────
 bool    success              # 运镜是否完成
-string  exit_reason          # "reached" | "timeout" | "cancelled" | "stopped" | "error"
+string  exit_reason          # "reached" | "timeout" | "cancelled" | "stopped" | "unreachable" | "error"
 uint8   error_code           # 失败时的错误码（对应 ArmStatus.ERR_*）
 ---
 # ─── Feedback ──────────────────────────────────────────────────────────────
