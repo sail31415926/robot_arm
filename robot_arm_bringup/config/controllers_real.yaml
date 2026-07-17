@@ -12,7 +12,9 @@
 
 controller_manager:
   ros__parameters:
-    update_rate: 100   # 与 bus.yml sync_period=10000µs / 0x60C2 插补周期 10ms 对齐
+    update_rate: 200   # 与 bus.yml sync_period=5000µs / 0x60C2 插补周期 5ms 对齐
+                       # （2026-07 由 100Hz 提频；Jetson 非实时内核，掉拍看 EMCY/顿挫，
+                       #   不稳就整组回退 10ms/100Hz——bus.yml 四处 + 本处联动）
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster

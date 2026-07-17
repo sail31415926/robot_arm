@@ -9,7 +9,9 @@
 # ── RB200-CA 要点（依据简版手册 V1.0）────────────────────────────────────────
 # 支持模式(6502h=0x6D)：PP(1) PV(3) PT(4) HM(6) IP(7)
 #   - IP：上位机每同步周期发绝对位置到 60C1:01（不是 607A！607A 仅 PP 用），
-#         插补周期 60C2 必须与 SYNC 周期一致（手册 3.5）→ 都是 10ms
+#         插补周期 60C2 必须与 SYNC 周期一致（手册 3.5）→ 都是 5ms/200Hz
+#         （2026-07 由 10ms 提频；60C2:01 合法范围 1~20ms，改周期四处联动：
+#           sync_period / 各关节 period / 各关节 60C2 SDO / controllers_real.yaml update_rate）
 #   - ros2_control 接口映射：position→IP(7)  velocity→PV(3)  effort→PT(4)
 #     （启用哪个命令接口 = 402 驱动自动切到对应模式）
 #   - HM 回零：6098(方式,35=当前位置为零点)/6099/609A，由上位工具经 SDO 触发
@@ -40,14 +42,14 @@ master:
   package: "canopen_master_driver"
   baudrate: 500                 # kbit/s，与实机一致（真正的位率由 ip link 设置：
                                 #   sudo ip link set can0 up type can bitrate 500000）
-  sync_period: 10000            # µs，10ms，= 60C2 插补周期 = controller update 周期
+  sync_period: 5000             # µs，5ms，= 60C2 插补周期 = controller update 周期(200Hz)
 
 joint_1:
   node_id: 1
   dcf: "RB200-CA.eds"
   driver: "ros2_canopen::Cia402Driver"
   package: "canopen_402_driver"
-  period: 10                    # ms，402 状态机轮询周期
+  period: 5                     # ms，402 状态机轮询周期（与 SYNC 一致）
   boot_timeout_ms: 2000         # CANopen boot(配置下发)等待，默认 20ms 太短必超时
   revision_number: 0
   heartbeat_producer: 1000      # 从站心跳 1s（1017h），主站自动监测
@@ -61,8 +63,8 @@ joint_1:
   sdo:                          # 上线时主站自动下发
     - {index: 0x6091, sub_index: 1, value: 1}        # 电子齿轮 1:1（指令单位=编码器单位）
     - {index: 0x6091, sub_index: 2, value: 1}
-    - {index: 0x60C2, sub_index: 1, value: 10}       # 插补周期 10 ×
-    - {index: 0x60C2, sub_index: 2, value: -3}       #   10^-3 s = 10ms（与 SYNC 一致，硬要求）
+    - {index: 0x60C2, sub_index: 1, value: 5}        # 插补周期 5 ×
+    - {index: 0x60C2, sub_index: 2, value: -3}       #   10^-3 s = 5ms（与 SYNC 一致，硬要求）
     - {index: 0x6081, sub_index: 0, value: 83443}    # PP 轮廓速度 ≈1 rad/s
     - {index: 0x6083, sub_index: 0, value: 83443}    # 轮廓加速度 ≈1 rad/s²（PP/PV）
     - {index: 0x6084, sub_index: 0, value: 83443}    # 轮廓减速度 ≈1 rad/s²（PP/PV）
@@ -115,7 +117,7 @@ joint_2:
   dcf: "RB200-CA.eds"
   driver: "ros2_canopen::Cia402Driver"
   package: "canopen_402_driver"
-  period: 10
+  period: 5
   boot_timeout_ms: 2000
   revision_number: 0
   heartbeat_producer: 1000
@@ -129,7 +131,7 @@ joint_2:
   sdo:
     - {index: 0x6091, sub_index: 1, value: 1}
     - {index: 0x6091, sub_index: 2, value: 1}
-    - {index: 0x60C2, sub_index: 1, value: 10}
+    - {index: 0x60C2, sub_index: 1, value: 5}
     - {index: 0x60C2, sub_index: 2, value: -3}
     - {index: 0x6081, sub_index: 0, value: 83443}
     - {index: 0x6083, sub_index: 0, value: 83443}
@@ -183,7 +185,7 @@ joint_3:
   dcf: "RB200-CA.eds"
   driver: "ros2_canopen::Cia402Driver"
   package: "canopen_402_driver"
-  period: 10
+  period: 5
   boot_timeout_ms: 2000
   revision_number: 0
   heartbeat_producer: 1000
@@ -197,7 +199,7 @@ joint_3:
   sdo:
     - {index: 0x6091, sub_index: 1, value: 1}
     - {index: 0x6091, sub_index: 2, value: 1}
-    - {index: 0x60C2, sub_index: 1, value: 10}
+    - {index: 0x60C2, sub_index: 1, value: 5}
     - {index: 0x60C2, sub_index: 2, value: -3}
     - {index: 0x6081, sub_index: 0, value: 83443}
     - {index: 0x6083, sub_index: 0, value: 83443}
