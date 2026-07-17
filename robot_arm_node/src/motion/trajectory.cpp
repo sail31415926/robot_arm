@@ -2,10 +2,12 @@
  * @file trajectory.cpp
  * @brief decimate / build_joint_trajectory / solve_and_send 实现
  *
- * decimate 降采样；build_joint_trajectory 中央差分算关节速度构建消息；solve_and_send
- * 逐点 IK（种子延续 / 首帧零种子重试 / 失败沿用上帧）后一次性发布整条 JointTrajectory。
+ * decimate 降采样；build_joint_trajectory 中央差分算关节速度构建消息（刻意不补加速度，
+ * 见函数内注释）；solve_and_send 逐点 IK（种子延续 / 首帧零种子重试 / 失败沿用上帧）后，
+ * 首点前插入当前关节作起步融合段（消化指令起点与实际位姿的到位容差偏差，
+ * 避免起步速度尖峰——实机运镜段起步抖动的主因），一次性发布整条 JointTrajectory。
  *
- * @version 1.0
+ * @version 1.1
  * @date 2026-07-01
  * @copyright Copyright (c) 2026 eMeet
  */
@@ -20,6 +22,14 @@ namespace robot_arm_node::motion
 {
 
 using namespace std::chrono_literals;
+
+namespace
+{
+// 起步融合段时长：首点（当前关节）→ 首个规划路点之间留出的过渡时间。
+// JTC 用它柔性消化「实际位姿 ↔ 指令起点」的到位容差偏差（≤1cm/2°），避免压缩在
+// 首个 10ms 段里造成起步速度尖峰。
+constexpr double START_BLEND_SEC = 0.2;
+}  // namespace
 
 std::vector<Waypoint> decimate(const std::vector<Waypoint> & pts, int k)
 {
@@ -44,7 +54,10 @@ trajectory_msgs::msg::JointTrajectory build_joint_trajectory(
   const size_t n = joint_pos.size();
   const size_t dof = joint_names.size();
 
-  // 中央差分算关节速度，端点为零
+  // 中央差分算关节速度（支持非均匀间距），端点为零（Ruckig 轨迹静止起止）。
+  // 刻意只给位置+速度（JTC 三次样条）：Ruckig 轮廓在恒 jerk 段内位置本就是三次多项式，
+  // 三次 Hermite 已近似最优；补中央差分加速度换五次样条经数值验证反而更差
+  //（差分加速度自带 O(j·h) 误差 + IK 噪声 /h² 放大，五次样条被迫穿过带误差端点）。
   std::vector<std::vector<double>> jvel(n, std::vector<double>(dof, 0.0));
   for (size_t i = 1; i + 1 < n; ++i) {
     const double dt2 = joint_t[i + 1] - joint_t[i - 1];
@@ -147,6 +160,12 @@ bool solve_and_send(
     joint_pos.push_back(std::move(sol));
     joint_t.push_back(w.t);
   }
+
+  // 起步融合：首点插入当前关节（IK 种子 = 规划时刻的实测关节），其余整体后移
+  // START_BLEND_SEC，由 JTC 在融合段内柔性对齐指令起点，消除起步速度尖峰
+  joint_pos.insert(joint_pos.begin(), seed);
+  joint_t.insert(joint_t.begin(), 0.0);
+  for (size_t i = 1; i < joint_t.size(); ++i) joint_t[i] += START_BLEND_SEC;
 
   auto msg = build_joint_trajectory(joint_pos, joint_t, joint_names,
                                     node.get_clock()->now());

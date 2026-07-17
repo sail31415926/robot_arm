@@ -4,8 +4,11 @@
  *
  * 对应 Python arm_motion/trajectory.py 的 decimate / build_joint_trajectory / solve_and_send：
  *   decimate               100Hz 路点降采样（每 k 取 1，保留首末点），减少 IK 求解次数
- *   build_joint_trajectory 关节序列 + 时间序列 → JointTrajectory（中央差分算速度，端点零）
- *   solve_and_send         路点批量 IK（种子延续 / 首帧零种子重试 / 失败沿用上帧）→ 发布
+ *                          （30ms 间距兼作 IK 数值噪声的低通，加密路点会放大速度差分噪声）
+ *   build_joint_trajectory 关节序列 + 时间序列 → JointTrajectory（中央差分算速度，端点零；
+ *                          刻意不补加速度，五次样条经验证劣于三次，见 .cpp 注释）
+ *   solve_and_send         路点批量 IK（种子延续 / 首帧零种子重试 / 失败沿用上帧）
+ *                          → 首点前插入当前关节作起步融合段 → 发布
  * 依赖注入（seed / stop_check），无 StatusAggregator / is_stopped 硬耦合。
  *
  * @version 1.0
