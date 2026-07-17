@@ -2,8 +2,9 @@
  * @file trajectory_shot_server.cpp
  * @brief TrajectoryShotServer 实现 —— MOTION_LINEAR / MOTION_ORBIT
  *
- * LINEAR：move_and_wait 分段（起点→终点[→返回]）。ORBIT：PTP 到起始球坐标→dwell→
- * plan_orbit_ruckig 球面轨道→wait_at_pose[→原路返回]。sphere_to_pose 复用 motion 几何。
+ * LINEAR：PTP 到起点→dwell→plan_line_ruckig 笛卡尔直线→wait_at_pose[→直线返回]。
+ * ORBIT：PTP 到起始球坐标→dwell→plan_orbit_ruckig 球面轨道→wait_at_pose[→原路返回]。
+ * 运镜段均为密集笛卡尔路点 + 批量 IK（末端严格贴合几何路径）；sphere_to_pose 复用 motion 几何。
  *
  * @version 1.0
  * @date 2026-07-01
@@ -80,24 +81,45 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
   RCLCPP_INFO(logger_, "LINEAR 起始=(%.3f,%.3f,%.3f) 终止=(%.3f,%.3f,%.3f)",
               start.x, start.y, start.z, end.x, end.y, end.z);
 
-  // 步骤 1：移到起始位姿
+  // 用户取消或急停均视为应中止
+  auto cancelled = [this, gh]() { return gh->is_canceling() || (is_stopped_ && is_stopped_()); };
+
+  Action::Result result;
+
+  // 步骤 1：PTP 移到起始位姿（去程不要求直线）
   auto r = move_and_wait(gh, start, speed, "LINEAR 起始位",
                          0.0, goal.return_to_start ? 33.0 : 50.0);
   if (!r.success) return r;
   if (!dwell_at_start(gh, "LINEAR")) {
-    Action::Result res; res.success = false; res.exit_reason = "cancelled";
-    return res;
+    result.exit_reason = "cancelled";
+    return result;
   }
 
-  // 步骤 2：移到终止位姿
+  // 步骤 2：笛卡尔直线 起点→终点（Ruckig 路点流 + 批量 IK，末端严格走直线；
+  // 直线以指令起点为基准 —— 与 ORBIT 用指令球坐标一致，步骤 1 已把误差压进到位容差）
+  if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }
+  RCLCPP_INFO(logger_, "LINEAR 直线运镜开始（Ruckig 直线路点流）");
+  if (!motion_.plan_line_ruckig(start, end, speed, cancelled)) {
+    result.success     = false;
+    result.exit_reason = cancelled() ? "cancelled" : "error";
+    result.error_code  = ArmStatus::ERR_DRIVER;
+    return result;
+  }
   const double p2_end = goal.return_to_start ? 67.0 : 100.0;
-  r = move_and_wait(gh, end, speed, "LINEAR 终止位",
-                    goal.return_to_start ? 33.0 : 50.0, p2_end);
+  r = wait_at_pose(gh, end, "LINEAR 终止到位",
+                   goal.return_to_start ? 33.0 : 50.0, p2_end);
   if (!r.success || !goal.return_to_start) return r;
 
-  // 步骤 3：返回起始位姿
-  RCLCPP_INFO(logger_, "LINEAR return_to_start: 返回起始位姿");
-  return move_and_wait(gh, start, speed, "LINEAR 返回起始", 67.0, 100.0);
+  // 步骤 3：笛卡尔直线原路返回
+  RCLCPP_INFO(logger_, "LINEAR return_to_start: 直线返回起始位姿");
+  if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }
+  if (!motion_.plan_line_ruckig(end, start, speed, cancelled)) {
+    result.success     = false;
+    result.exit_reason = cancelled() ? "cancelled" : "error";
+    result.error_code  = ArmStatus::ERR_DRIVER;
+    return result;
+  }
+  return wait_at_pose(gh, start, "LINEAR 返回到位", 67.0, 100.0);
 }
 
 // ── MOTION_ORBIT ─────────────────────────────────────────────────────────────────

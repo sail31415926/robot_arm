@@ -1,11 +1,12 @@
 /**
  * @file planning.cpp
- * @brief plan_orbit_waypoints 实现 —— Ruckig 1-DOF 球面轨道路点生成
+ * @brief plan_orbit_waypoints / plan_line_waypoints 实现 —— Ruckig 1-DOF 路点生成
  *
- * 对归一化路径参数 s∈[0,1] 做 Ruckig jerk-limited 规划，逐步插值 (theta,phi,r) →
- * sphere_to_cart 求相机位置 + aim_quat 求朝向球心姿态，输出统一路点。stop_check 中途放弃。
+ * 对归一化路径参数 s∈[0,1] 做 Ruckig jerk-limited 规划：orbit 逐步插值 (theta,phi,r) →
+ * sphere_to_cart + aim_quat 朝向球心；line 位置沿线插值 + 姿态 slerp（末端严格直线）。
+ * 输出统一路点。stop_check 中途放弃。
  *
- * @version 1.0
+ * @version 1.1
  * @date 2026-07-01
  * @copyright Copyright (c) 2026 eMeet
  */
@@ -20,6 +21,31 @@
 
 namespace robot_arm_node::motion
 {
+
+namespace
+{
+// 四元数球面插值（取最短路径），u∈[0,1]
+Quat quat_slerp(const Quat & a, Quat b, double u)
+{
+  double dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+  if (dot < 0.0) {                 // 反号取短弧
+    for (auto & c : b) c = -c;
+    dot = -dot;
+  }
+  if (dot > 0.9995) {              // 夹角极小：线性插值 + 归一化，避免 sin(θ)≈0
+    Quat r{a[0] + u * (b[0] - a[0]), a[1] + u * (b[1] - a[1]),
+           a[2] + u * (b[2] - a[2]), a[3] + u * (b[3] - a[3])};
+    const double n = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3]);
+    for (auto & c : r) c /= n;
+    return r;
+  }
+  const double th = std::acos(std::clamp(dot, -1.0, 1.0));
+  const double s0 = std::sin((1.0 - u) * th) / std::sin(th);
+  const double s1 = std::sin(u * th) / std::sin(th);
+  return {s0 * a[0] + s1 * b[0], s0 * a[1] + s1 * b[1],
+          s0 * a[2] + s1 * b[2], s0 * a[3] + s1 * b[3]};
+}
+}  // namespace
 
 std::optional<std::vector<Waypoint>> plan_orbit_waypoints(
     double ox, double oy, double oz,
@@ -61,6 +87,70 @@ std::optional<std::vector<Waypoint>> plan_orbit_waypoints(
     const Vec3 p = sphere_to_cart(theta, phi, r, ox, oy, oz);
     const Quat q = aim_quat(p[0], p[1], p[2], ox, oy, oz);
     pts.push_back(Waypoint{t_acc, p[0], p[1], p[2], q[0], q[1], q[2], q[3]});
+
+    out.pass_to_input(inp);
+    if (res == ruckig::Result::Finished) break;
+    if (res == ruckig::Result::Error) return std::nullopt;
+  }
+  return pts;
+}
+
+std::optional<std::vector<Waypoint>> plan_line_waypoints(
+    double x0, double y0, double z0, const Quat & q0,
+    double x1, double y1, double z1, const Quat & q1,
+    double v_pos, double a_pos, double j_pos,
+    double v_ori, double a_ori, double j_ori,
+    const std::function<bool()> & stop_check)
+{
+  const double dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+  const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+  // 起止姿态夹角（最短路径，|dot| 消除双倍覆盖号差）
+  const double dot = std::fabs(q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3]);
+  const double ang = 2.0 * std::acos(std::clamp(dot, 0.0, 1.0));
+
+  constexpr double EPS = 1e-6;
+  if (dist < EPS && ang < EPS) {   // 起止重合：单路点直接收尾
+    return std::vector<Waypoint>{Waypoint{STREAM_DT, x1, y1, z1, q1[0], q1[1], q1[2], q1[3]}};
+  }
+
+  // 归一化 s∈[0,1] 的限制 = 位置/姿态两组约束的更严者（limit / extent）
+  double s_vel = 1e9, s_acc = 1e9, s_jerk = 1e9;
+  if (dist > EPS) {
+    s_vel  = std::min(s_vel,  v_pos / dist);
+    s_acc  = std::min(s_acc,  a_pos / dist);
+    s_jerk = std::min(s_jerk, j_pos / dist);
+  }
+  if (ang > EPS) {
+    s_vel  = std::min(s_vel,  v_ori / ang);
+    s_acc  = std::min(s_acc,  a_ori / ang);
+    s_jerk = std::min(s_jerk, j_ori / ang);
+  }
+
+  ruckig::Ruckig<1> otg{STREAM_DT};
+  ruckig::InputParameter<1> inp;
+  ruckig::OutputParameter<1> out;
+  inp.current_position     = {0.0};
+  inp.current_velocity     = {0.0};
+  inp.current_acceleration = {0.0};
+  inp.target_position      = {1.0};
+  inp.target_velocity      = {0.0};
+  inp.target_acceleration  = {0.0};
+  inp.max_velocity         = {s_vel};
+  inp.max_acceleration     = {s_acc};
+  inp.max_jerk             = {s_jerk};
+
+  std::vector<Waypoint> pts;
+  double t_acc = 0.0;
+  while (true) {
+    if (stop_check && stop_check()) return std::nullopt;
+
+    const ruckig::Result res = otg.update(inp, out);
+    t_acc += STREAM_DT;
+    const double s = std::clamp(out.new_position[0], 0.0, 1.0);
+
+    const Quat q = quat_slerp(q0, q1, s);
+    pts.push_back(Waypoint{t_acc, x0 + s * dx, y0 + s * dy, z0 + s * dz,
+                           q[0], q[1], q[2], q[3]});
 
     out.pass_to_input(inp);
     if (res == ruckig::Result::Finished) break;

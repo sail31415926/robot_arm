@@ -15,6 +15,7 @@
  *   go_to_joints      关节空间直驱（STOWED / 回零，跳过 IK）
  *   solve_and_send    批量 IK → 多点 JointTrajectory（委托 motion::solve_and_send）
  *   plan_orbit_ruckig 球面环绕运镜（相机始终朝向球心）
+ *   plan_line_ruckig  笛卡尔直线运镜（位置沿线 + 姿态 slerp，末端严格直线）
  *   stop              急停：当前位置发零速度 JointTrajectory
  *
  * 线程：IK 阻塞等 future，须由 MultiThreadedExecutor 的执行线程调用
@@ -92,6 +93,11 @@ public:
                          double theta1, double phi1, double r1,
                          double s_vel, double s_acc, double s_jerk,
                          std::function<bool()> cancel_check = nullptr);
+
+  // 笛卡尔直线运镜：plan_line_waypoints + solve_and_send
+  //（位置沿线插值、姿态 slerp，末端严格走直线；限制取 speed 位置/姿态分量的更严者）
+  bool plan_line_ruckig(const ArmPose & start, const ArmPose & end, const Speed & speed,
+                        std::function<bool()> cancel_check = nullptr);
 
 private:
   rclcpp::Node &            node_;

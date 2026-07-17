@@ -194,4 +194,21 @@ bool MotionExecutor::plan_orbit_ruckig(double ox, double oy, double oz,
   return solve_and_send(*pts, cancel_check);
 }
 
+bool MotionExecutor::plan_line_ruckig(const ArmPose & start, const ArmPose & end,
+                                      const Speed & speed, std::function<bool()> cancel_check)
+{
+  auto stop_check = [this, cancel_check]() {
+    return (is_stopped_ && is_stopped_()) || (cancel_check && cancel_check());
+  };
+  constexpr double D2R = M_PI / 180.0;
+  const auto q0 = motion::rpy_to_quat(start.roll * D2R, start.pitch * D2R, start.yaw * D2R);
+  const auto q1 = motion::rpy_to_quat(end.roll * D2R, end.pitch * D2R, end.yaw * D2R);
+  auto pts = motion::plan_line_waypoints(start.x, start.y, start.z, q0,
+                                         end.x, end.y, end.z, q1,
+                                         speed.v_pos, speed.a_pos, speed.j_pos,
+                                         speed.v_ori, speed.a_ori, speed.j_ori, stop_check);
+  if (!pts) return false;
+  return solve_and_send(*pts, cancel_check);
+}
+
 }  // namespace robot_arm_node::commander

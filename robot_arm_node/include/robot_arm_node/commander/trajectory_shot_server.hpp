@@ -3,9 +3,9 @@
  * @brief ArmTrajectoryShot Action 执行逻辑（C++）—— 直线运镜 / 球面环绕运镜
  *
  * 对应 Python commander/trajectory_shot_server.py。同 MoveToPose：只提供 execute→Result，
- * 终态由 commander 决定。MOTION_LINEAR 走相对直线（PTP 分段）；MOTION_ORBIT 先 PTP 到起始
- * 球坐标、再 Ruckig 1-DOF 球面轨道；均支持 return_to_start。is_stopped 注入（dwell / orbit
- * 取消判据用）。
+ * 终态由 commander 决定。MOTION_LINEAR 先 PTP 到起点、再 Ruckig 笛卡尔直线路点流（末端
+ * 严格直线）；MOTION_ORBIT 先 PTP 到起始球坐标、再 Ruckig 1-DOF 球面轨道；均支持
+ * return_to_start。is_stopped 注入（dwell / 运镜段取消判据用）。
  *
  * @version 1.0
  * @date 2026-07-01
