@@ -21,6 +21,10 @@ namespace robot_arm_node::motion
 // ── 机器人拓扑 ──────────────────────────────────────────────────────────────
 inline const std::vector<std::string> JOINT_NAMES{
     "Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"};
+// 前 3 个是机械臂 CANopen 关节（J1-3，实时反馈），后 3 个是云台关节（J4-6，
+// 经 GimbalForwardingInterface 转发回读，云台未上电/无反馈时位置不收敛）。
+// 关节空间的到位/回零判据只看前 ARM_JOINT_COUNT 个，云台状态不阻塞机械臂动作。
+constexpr size_t ARM_JOINT_COUNT = 3;
 inline const std::string PLANNING_GROUP = "arm";
 inline const std::string EEF_LINK       = "tool0";
 inline const std::string BASE_FRAME     = "arm_base_link";

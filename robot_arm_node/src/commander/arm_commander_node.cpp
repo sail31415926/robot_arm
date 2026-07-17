@@ -16,6 +16,8 @@
 #include <cmath>
 #include <thread>
 
+#include "robot_arm_node/motion/constants.hpp"
+
 namespace robot_arm_node::commander
 {
 
@@ -396,10 +398,13 @@ void ArmCommanderNode::on_arm_homing(
   motion_->go_to_joints(HOMING_JOINTS, HOMING_DURATION);
 
   // 回零无 goal_handle / 无 Feedback：仅等关节回零或急停
+  // 只判臂 J1-3：云台 J4-6 转发回读在云台未上电时不收敛，不阻塞回零
   ExecutionMonitor::WaitParams p;
   p.arrived = [this]() {
+    const auto cur = motion_->get_current_joints();
     double m = 0.0;
-    for (double j : motion_->get_current_joints()) m = std::max(m, std::fabs(j));
+    for (size_t i = 0; i < motion::ARM_JOINT_COUNT; ++i)
+      m = std::max(m, std::fabs(cur[i]));
     return m < 0.05;
   };
   p.timeout_sec = HOMING_DURATION + 2.0;

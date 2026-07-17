@@ -16,6 +16,7 @@
 #include <robot_arm_interfaces/msg/arm_status.hpp>
 
 #include "robot_arm_node/commander/motion_policy.hpp"
+#include "robot_arm_node/motion/constants.hpp"
 
 namespace robot_arm_node::commander
 {
@@ -26,7 +27,8 @@ namespace
 {
 constexpr double DEFAULT_TIMEOUT_SEC = 30.0;
 constexpr double FEEDBACK_RATE_HZ    = 10.0;
-const std::vector<double> STOWED_JOINTS(6, 0.0);
+const std::vector<double> STOWED_JOINTS(6, 0.0);                            // 下发目标：全 6 轴回零
+const std::vector<double> STOWED_ARM_TARGET(motion::ARM_JOINT_COUNT, 0.0);  // 到位判据：仅臂 J1-3
 constexpr double STOWED_DURATION_SEC = 2.0;
 }  // namespace
 
@@ -88,15 +90,21 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute_stowed(const std::sha
   RCLCPP_INFO(logger_, "STOWED: 全关节回零");
   motion_.go_to_joints(STOWED_JOINTS, STOWED_DURATION_SEC);
 
+  // 到位/进度只判臂 J1-3（STOWED_ARM_TARGET）：J4-6 云台命令仍随轨迹下发，
+  // 但其转发回读在云台未上电时永不收敛，不应阻塞机械臂回收
   ExecutionMonitor::WaitParams p;
-  p.arrived = [this]() { return is_at_joints(motion_.get_current_joints(), STOWED_JOINTS); };
+  p.arrived = [this]() {
+    auto cur = motion_.get_current_joints();
+    cur.resize(STOWED_ARM_TARGET.size());
+    return is_at_joints(cur, STOWED_ARM_TARGET);
+  };
   p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
   p.on_feedback = [this, gh](double /*elapsed*/) {
     // 反馈基于关节接近度（非 elapsed 比例）
     const auto current = motion_.get_current_joints();
     double max_err = 0.0;
-    for (size_t i = 0; i < STOWED_JOINTS.size(); ++i)
-      max_err = std::max(max_err, std::fabs(current[i] - STOWED_JOINTS[i]));
+    for (size_t i = 0; i < STOWED_ARM_TARGET.size(); ++i)
+      max_err = std::max(max_err, std::fabs(current[i] - STOWED_ARM_TARGET[i]));
     const double progress = std::max(0.0, 100.0 - max_err / 0.1 * 100.0);
     auto fb = std::make_shared<Action::Feedback>();
     fb->progress_percent = static_cast<float>(std::min(progress, 99.9));
