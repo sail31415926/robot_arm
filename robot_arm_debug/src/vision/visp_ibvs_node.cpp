@@ -20,6 +20,10 @@
  *   J1-3  → arm_node（PV 模式）直接写电机速度（CANopen 0x60FF）
  *   J4-6  → gimbal_controller（JTC open_loop）位置+速度前馈写云台硬件接口
  *
+ * 安全约束（恒开，非参数）：
+ *   末端高度硬地板 EE_FLOOR_Z：末端世界 Z 不得低于该值，逼近时下行速度平滑收敛到 0；
+ *   与 constrain_height（软设定点）无关，防相机怼到桌面/地面。
+ *
  * 参数：
  *   robot_description  [string]  URDF XML，由 launch 传入（必填）
  *   feature_topic      [string]  特征话题名，默认 /red_detector/feature
@@ -31,6 +35,13 @@
  *   desired_height     [double]  期望相机高度，arm_base 系 Z（m）← 支持 ros2 param set
  *   constrain_height   [bool]    是否启用高度约束               ← 支持 ros2 param set
  *   paused             [bool]    暂停 IBVS（手动调位时使用）     ← 支持 ros2 param set
+ *   collision_check    [bool]    碰撞守护开关（默认 true）       ← 支持 ros2 param set
+ *
+ * 碰撞守护（须 move_group 在跑，提供 /check_state_validity）：
+ *   10Hz 把「当前关节 + 上一拍 q_dot × 前瞻 0.4s」的预测状态丢给 MoveIt
+ *   PlanningScene 做完整碰撞检查（SRDF 自碰撞 + 场景障碍物），预测碰撞则
+ *   停止伺服并封锁，连续 3 次检查通过后自动恢复。服务不可用时 fail-open：
+ *   节流告警但不拦截（IBVS 在无 MoveIt 场景下仍可用，此时无碰撞保护）。
  *
  * 启动：
  *   ros2 launch robot_arm_bringup real.launch.py controller:=visp_ibvs
@@ -45,6 +56,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include <moveit_msgs/srv/get_state_validity.hpp>
 #ifdef HAS_PERCEPTION_REPORT
 #include <ros2_algo_vision_interfaces/msg/perception_report.hpp>
 #endif
@@ -106,6 +118,9 @@ static constexpr double HEIGHT_IMG_GATE       = 0.13;
 static constexpr double K_LEVEL               = 4.0;
 // 单关节速度上限（rad/s）
 static constexpr double MAX_JOINT_VEL         = 1.5;
+// 末端高度硬地板（arm_base 系 Z，m）：末端(相机=tool0，camera_optical_joint 零平移)
+// 世界 Z 不得低于此值。安全约束，恒开，与 constrain_height（软设定点）无关。
+static constexpr double EE_FLOOR_Z            = 0.10;
 // 控制周期（s）— 与 create_wall_timer 一致
 static constexpr double CTRL_DT               = 0.02;   // 50 Hz
 // 特征超时：超过此时间无新特征则停止运动
@@ -115,6 +130,12 @@ static constexpr double IMG_STOP_TH           = 0.005;
 static constexpr double DEPTH_STOP_TH         = 0.02;
 // Pinocchio 使用的相机帧名
 static constexpr const char* CAM_FRAME        = "camera_optical_frame";
+// ── 碰撞守护（/check_state_validity 预测检查）────────────────────────────────
+static constexpr double COLLISION_CHECK_DT    = 0.1;    // s，检查周期 10Hz
+static constexpr double COLLISION_LOOKAHEAD   = 0.4;    // s，按当前 q_dot 前瞻的时间
+static constexpr int    COLLISION_RESUME_N    = 3;      // 连续通过 N 次检查后解除封锁
+static constexpr double COLLISION_REQ_TIMEOUT = 1.0;    // s，单次服务应答超时（超时重发）
+static constexpr const char* PLANNING_GROUP   = "arm";  // SRDF 组（arm_base_link→tool0 全 6 关节）
 // ─────────────────────────────────────────────────────────────────────────────
 
 // 控制器关节顺序（与 arm_controller/controllers.yaml 一致）
@@ -131,7 +152,8 @@ public:
     VispIbvsNode()
     : Node("visp_ibvs_node"),
       q_curr_(Eigen::VectorXd::Zero(6)),
-      pin_q_(Eigen::VectorXd::Zero(6))
+      pin_q_(Eigen::VectorXd::Zero(6)),
+      q_dot_last_(Eigen::VectorXd::Zero(6))
     {
         // ── ROS2 参数 ────────────────────────────────────────────────────────
         this->declare_parameter("robot_description", std::string(""));
@@ -148,12 +170,14 @@ public:
         // 也可在 launch 中用 remappings 重定向，无需修改此参数
         this->declare_parameter("feature_topic",     std::string("/red_detector/feature"));
         this->declare_parameter("perception_topic",  std::string(""));
+        this->declare_parameter("collision_check",   true);
 
         desired_depth_ = this->get_parameter("desired_depth").as_double();
         desired_x_     = this->get_parameter("desired_x").as_double();
         desired_y_     = this->get_parameter("desired_y").as_double();
         desired_height_   = this->get_parameter("desired_height").as_double();
         constrain_height_ = this->get_parameter("constrain_height").as_bool();
+        collision_check_  = this->get_parameter("collision_check").as_bool();
 
         param_cb_ = this->add_on_set_parameters_callback(
             [this](const std::vector<rclcpp::Parameter>& params) {
@@ -165,6 +189,10 @@ public:
                     else if (p.get_name() == "control_depth")        control_depth_       = p.as_bool();
                     else if (p.get_name() == "desired_height")       desired_height_      = p.as_double();
                     else if (p.get_name() == "constrain_height")     constrain_height_    = p.as_bool();
+                    else if (p.get_name() == "collision_check") {
+                        collision_check_ = p.as_bool();
+                        if (!collision_check_) collision_blocked_ = false;   // 关守护同时解除封锁
+                    }
                 }
                 updateDesired();
                 RCLCPP_INFO(get_logger(), "desired updated: x=%.3f y=%.3f depth=%.3fm height=%.3fm[%s]",
@@ -221,6 +249,13 @@ public:
         ctrl_timer_ = create_wall_timer(
             std::chrono::milliseconds(static_cast<int>(CTRL_DT * 1000)),
             [this]() { controlLoop(); });
+
+        // ── 碰撞守护：10Hz 预测状态检查（move_group 提供 /check_state_validity）─
+        validity_cli_ = create_client<moveit_msgs::srv::GetStateValidity>(
+            "/check_state_validity");
+        collision_timer_ = create_wall_timer(
+            std::chrono::milliseconds(static_cast<int>(COLLISION_CHECK_DT * 1000)),
+            [this]() { collisionCheckTick(); });
 
         RCLCPP_INFO(get_logger(),
             "visp_ibvs_node ready | %d DOF | desired=(%.2f,%.2f) depth=%.2fm",
@@ -305,6 +340,10 @@ private:
     {
         if (paused_) return;   // 手动位置指令期间挂起，避免覆盖轨迹
         if (!q_valid_) return;
+        if (collision_blocked_) {   // 碰撞守护封锁：保持停止，等待预测检查解除
+            publishStop();
+            return;
+        }
         if (!has_feat_ || (now() - last_feat_time_).seconds() > FEATURE_TIMEOUT) {
             publishStop();
             return;
@@ -410,7 +449,85 @@ private:
             q_dot[i] = std::clamp(q_dot[i], -MAX_JOINT_VEL, MAX_JOINT_VEL);
         }
 
+        // ── 末端高度硬地板（安全 override，置于限幅之后以保证生效）──────────
+        // 预测下一拍末端世界 Z；若下行将跌破 EE_FLOOR_Z，用世界 Z 行雅可比
+        // 的最小范数伪逆只抵消越界的下行分量，其余运动不受扰动。z_dot_min 随
+        // 逼近地板线性收敛到 0：相机平滑贴地板即停、不反弹。为保证地板不被突破，
+        // 允许该修正在极端下行时瞬时略超 MAX_JOINT_VEL（下层 JTC/驱动仍有硬限）。
+        {
+            const Eigen::RowVectorXd Jz = T_cam.rotation().row(2) * J.topRows(3);  // ∂z_world/∂q
+            const double z_curr    = T_cam.translation().z();
+            const double z_dot     = (Jz * q_dot).value();
+            const double z_dot_min = (EE_FLOOR_Z - z_curr) / CTRL_DT;  // 允许的最负 Z 速度
+            const double JzJzT     = (Jz * Jz.transpose()).value();
+            if (z_dot < z_dot_min && JzJzT > 1e-9)
+                q_dot += Jz.transpose() * ((z_dot_min - z_dot) / JzJzT);
+        }
+
+        q_dot_last_ = q_dot;   // 供碰撞守护做前瞻预测
         publishTrajectory(q_dot);
+    }
+
+    // ── 碰撞守护：预测状态送 MoveIt PlanningScene 完整碰撞检查 ────────────────
+    // 预测状态 = 当前关节 + 上一拍 q_dot × COLLISION_LOOKAHEAD（钳到关节限位），
+    // 在到达碰撞构型之前提前封锁；封锁期间 q_dot=0，预测退化为当前状态，
+    // 当前状态合法（我们停在碰撞前）则连续 N 次通过后自动恢复伺服。
+    void collisionCheckTick()
+    {
+        if (!collision_check_ || !q_valid_) return;
+
+        if (!validity_cli_->service_is_ready()) {
+            // fail-open：move_group 未运行时不拦截（无 MoveIt 场景 IBVS 仍可用），节流告警
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                "/check_state_validity 不可用（move_group 未运行？）— IBVS 正在无碰撞守护运行");
+            collision_blocked_ = false;
+            return;
+        }
+        if (check_inflight_) {
+            if ((now() - check_sent_time_).seconds() < COLLISION_REQ_TIMEOUT) return;
+            validity_cli_->prune_pending_requests();   // 上一次应答丢失，重置后重发
+            check_inflight_ = false;
+        }
+
+        auto req = std::make_shared<moveit_msgs::srv::GetStateValidity::Request>();
+        req->group_name = PLANNING_GROUP;
+        req->robot_state.joint_state.name.assign(JOINT_NAMES.begin(), JOINT_NAMES.end());
+        req->robot_state.joint_state.position.resize(6);
+        const auto& lb = pin_model_.lowerPositionLimit;
+        const auto& ub = pin_model_.upperPositionLimit;
+        for (int i = 0; i < 6; ++i) {
+            req->robot_state.joint_state.position[i] =
+                std::clamp(q_curr_[i] + q_dot_last_[i] * COLLISION_LOOKAHEAD, lb[i], ub[i]);
+        }
+
+        check_inflight_  = true;
+        check_sent_time_ = now();
+        validity_cli_->async_send_request(req,
+            [this](rclcpp::Client<moveit_msgs::srv::GetStateValidity>::SharedFuture fut) {
+                check_inflight_ = false;
+                const auto res = fut.get();
+                if (res->valid) {
+                    if (collision_blocked_ &&
+                        ++collision_valid_streak_ >= COLLISION_RESUME_N) {
+                        collision_blocked_      = false;
+                        collision_valid_streak_ = 0;
+                        RCLCPP_INFO(get_logger(), "碰撞预测解除，恢复伺服");
+                    }
+                    return;
+                }
+                collision_valid_streak_ = 0;
+                if (!collision_blocked_) {
+                    std::string pair;
+                    if (!res->contacts.empty()) {
+                        pair = "：" + res->contacts[0].contact_body_1 +
+                               " <-> " + res->contacts[0].contact_body_2;
+                    }
+                    RCLCPP_WARN(get_logger(), "前瞻 %.1fs 预测碰撞%s — 停止伺服",
+                                COLLISION_LOOKAHEAD, pair.c_str());
+                }
+                collision_blocked_ = true;
+                publishStop();
+            });
     }
 
 
@@ -466,6 +583,7 @@ private:
     // 原地保持当前位置，速度为零
     void publishStop()
     {
+        q_dot_last_.setZero();   // 停止后碰撞守护的前瞻预测退化为当前状态
         trajectory_msgs::msg::JointTrajectory msg;
         msg.header.stamp = now();
         msg.joint_names.assign(JOINT_NAMES.begin(), JOINT_NAMES.end());
@@ -497,9 +615,17 @@ private:
     // ── 状态缓存 ──────────────────────────────────────────────────────────────
     Eigen::VectorXd q_curr_;        // 关节位置（Pinocchio 速度顺序 = 控制器顺序）
     Eigen::VectorXd pin_q_;         // Pinocchio 配置向量（用于 FK/Jacobian）
+    Eigen::VectorXd q_dot_last_;    // 上一拍下发的关节速度（碰撞守护前瞻用）
     bool paused_{false};
     bool q_valid_{false};
     bool control_depth_{false};
+
+    // ── 碰撞守护 ──────────────────────────────────────────────────────────────
+    bool collision_check_{true};
+    bool collision_blocked_{false};
+    int  collision_valid_streak_{0};
+    bool check_inflight_{false};
+    rclcpp::Time check_sent_time_;
 
     double feat_x_{0.0}, feat_y_{0.0}, feat_z_{0.5};
     bool has_feat_{false};
@@ -518,6 +644,8 @@ private:
 #endif
     rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr traj_pub_;
     rclcpp::TimerBase::SharedPtr ctrl_timer_;
+    rclcpp::Client<moveit_msgs::srv::GetStateValidity>::SharedPtr validity_cli_;
+    rclcpp::TimerBase::SharedPtr collision_timer_;
 };
 
 int main(int argc, char* argv[])

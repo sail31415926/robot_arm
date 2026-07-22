@@ -37,9 +37,11 @@ from launch_ros.actions import Node
 
 
 # ── 模式分组（单一来源，供 backend 复用）─────────────────────────────────────────
-# 需要 IK / move_group 的模式（含 commander）
+# 需要 IK / move_group 的模式（含 commander；visp 两模式靠 move_group 的
+# /check_state_validity 提供 IBVS 碰撞守护，缺了则守护 fail-open 无保护）
 MOVEIT_MODES = ['cartesian_moveit', 'cartesian_realtime_ik',
-                'cartesian_trajectory', 'spherical_orbit', 'commander']
+                'cartesian_trajectory', 'spherical_orbit', 'commander',
+                'visp_ibvs', 'visp_ibvs_control']
 # 需要 MoveIt Servo + 安全预移动的模式
 SERVO_MODES  = ['cartesian_velocity']
 

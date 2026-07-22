@@ -65,6 +65,7 @@ find_package(pinocchio QUIET)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
+find_package(moveit_msgs REQUIRED)   # 碰撞守护 /check_state_validity
 find_package(ros2_algo_vision_interfaces QUIET)
 
 if(VISP_FOUND AND pinocchio_FOUND)
@@ -76,11 +77,11 @@ if(VISP_FOUND AND pinocchio_FOUND)
   if(ros2_algo_vision_interfaces_FOUND)
     target_compile_definitions(visp_ibvs_node PRIVATE HAS_PERCEPTION_REPORT)
     ament_target_dependencies(visp_ibvs_node
-      rclcpp geometry_msgs sensor_msgs trajectory_msgs ros2_algo_vision_interfaces)
+      rclcpp geometry_msgs sensor_msgs trajectory_msgs moveit_msgs ros2_algo_vision_interfaces)
     message(STATUS "ros2_algo_vision_interfaces found — PerceptionReport support enabled")
   else()
     ament_target_dependencies(visp_ibvs_node
-      rclcpp geometry_msgs sensor_msgs trajectory_msgs)
+      rclcpp geometry_msgs sensor_msgs trajectory_msgs moveit_msgs)
     message(STATUS "ros2_algo_vision_interfaces not found — PerceptionReport support disabled")
   endif()
   target_link_libraries(visp_ibvs_node ${VISP_LIBRARIES} pinocchio::pinocchio)

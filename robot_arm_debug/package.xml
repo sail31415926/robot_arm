@@ -18,11 +18,11 @@
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>trajectory_msgs</depend>
+  <depend>moveit_msgs</depend>
   <depend>pinocchio</depend>
 
   <!-- Python 调试控制器 / GUI（ruckig python 绑定走 pip，见 requirements.txt） -->
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>moveit_msgs</exec_depend>
   <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>

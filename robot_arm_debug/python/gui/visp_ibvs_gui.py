@@ -146,6 +146,8 @@ class App:
         self._desired_x     = tk.DoubleVar(value=0.0)
         self._desired_y     = tk.DoubleVar(value=0.0)
         self._desired_depth = tk.DoubleVar(value=0.3)
+        # 深度控制开关（对应节点 control_depth；关时节点清零相机 Vz，只居中不控距离）
+        self._depth_ctrl_en = tk.BooleanVar(value=False)
         self._status_var    = tk.StringVar(value='等待节点启动…')
         # 拍摄高度约束（相机 arm_base 系 Z，m）
         self._height_en  = tk.BooleanVar(value=False)
@@ -223,6 +225,10 @@ class App:
                              textvariable=var, width=9, format='%.3f')
             sb.grid(row=i, column=1, padx=4, pady=3)
             sb.bind('<Return>', lambda _e: self._apply_desired())
+
+        # 深度控制开关：紧邻“距离”行（fields 中 index 2），随“应用”一起推送
+        ttk.Checkbutton(des, text='启用深度控制', variable=self._depth_ctrl_en).grid(
+            row=2, column=2, sticky='w', padx=(2, 6))
 
         ttk.Button(des, text='✔  应用', command=self._apply_desired).grid(
             row=len(fields), column=0, columnspan=2, pady=(6, 4), ipadx=8)
@@ -366,15 +372,20 @@ class App:
 
     # ── 参数推送 ──────────────────────────────────────────────────────────────
     def _apply_desired(self):
-        x = self._desired_x.get()
-        y = self._desired_y.get()
-        d = self._desired_depth.get()
+        x  = self._desired_x.get()
+        y  = self._desired_y.get()
+        d  = self._desired_depth.get()
+        dc = self._depth_ctrl_en.get()
         for param, val in [('desired_x', x), ('desired_y', y), ('desired_depth', d)]:
             subprocess.Popen(
                 ['ros2', 'param', 'set', VISP_NODE, param, f'{val:.4f}'],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(
+            ['ros2', 'param', 'set', VISP_NODE, 'control_depth', 'true' if dc else 'false'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self._status_var.set(
-            f'已推送 → desired_x={x:.3f}  desired_y={y:.3f}  desired_depth={d:.3f} m')
+            f'已推送 → desired_x={x:.3f}  desired_y={y:.3f}  '
+            f'desired_depth={d:.3f} m  深度控制={"启" if dc else "停"}')
 
     # ── 100 ms 轮询 ───────────────────────────────────────────────────────────
     def _poll(self):
