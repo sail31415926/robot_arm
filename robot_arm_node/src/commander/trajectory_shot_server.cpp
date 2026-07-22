@@ -81,6 +81,19 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
   RCLCPP_INFO(logger_, "LINEAR 起始=(%.3f,%.3f,%.3f) 终止=(%.3f,%.3f,%.3f)",
               start.x, start.y, start.z, end.x, end.y, end.z);
 
+  // 步骤 0：预判起点→终点直线能否规划成功（纯几何 Ruckig 检查，无 IK / 无下发），
+  // 规划注定失败时直接返回，避免先耗时把机械臂搬到起点再落空
+  if (!motion_.can_plan_line(start, end, speed)) {
+    RCLCPP_ERROR(logger_, "LINEAR 起点到终点无法规划成功，拒绝执行");
+    Action::Result result;
+    result.success     = false;
+    result.exit_reason = "unreachable";
+    result.error_code  = ArmStatus::RESULT_ABORTED;
+    return result;
+  }
+  RCLCPP_INFO(logger_, "LINEAR 已检查可以规划，起始=(%.3f,%.3f,%.3f) 终止=(%.3f,%.3f,%.3f)",
+              start.x, start.y, start.z, end.x, end.y, end.z);
+
   // 用户取消或急停均视为应中止
   auto cancelled = [this, gh]() { return gh->is_canceling() || (is_stopped_ && is_stopped_()); };
 

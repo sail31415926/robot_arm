@@ -211,4 +211,32 @@ bool MotionExecutor::plan_line_ruckig(const ArmPose & start, const ArmPose & end
   return solve_and_send(*pts, cancel_check);
 }
 
+bool MotionExecutor::can_plan_line(const ArmPose & start, const ArmPose & end,
+                                   const Speed & speed)
+{
+  constexpr double D2R = M_PI / 180.0;
+  const auto q0 = motion::rpy_to_quat(start.roll * D2R, start.pitch * D2R, start.yaw * D2R);
+  const auto q1 = motion::rpy_to_quat(end.roll * D2R, end.pitch * D2R, end.yaw * D2R);
+
+  // Ruckig 仅对归一化参数 s∈[0,1] 做时间最优规划，与实际距离无关，任意起止点都能
+  // 生成合法的运动曲线——它不判断末端是否落在机械臂可达域内，因此不能单独作为可行性依据
+  if (!motion::plan_line_waypoints(start.x, start.y, start.z, q0,
+                                   end.x, end.y, end.z, q1,
+                                   speed.v_pos, speed.a_pos, speed.j_pos,
+                                   speed.v_ori, speed.a_ori, speed.j_ori).has_value()) {
+    return false;
+  }
+
+  // 起点/终点必须先各自过一次 IK，才能确认直线两端都在可达域内
+  // （中间路点仍可能因奇异位形失败，交由 solve_and_send 批量 IK 兜底处理）
+  const auto now = node_.get_clock()->now();
+  const auto ps0 = motion::make_pose_stamped(start.x, start.y, start.z,
+                                             q0[0], q0[1], q0[2], q0[3],
+                                             motion::BASE_FRAME, now);
+  const auto ps1 = motion::make_pose_stamped(end.x, end.y, end.z,
+                                             q1[0], q1[1], q1[2], q1[3],
+                                             motion::BASE_FRAME, now);
+  return ik_sync(ps0).first.has_value() && ik_sync(ps1).first.has_value();
+}
+
 }  // namespace robot_arm_node::commander

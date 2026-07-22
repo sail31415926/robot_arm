@@ -99,6 +99,10 @@ public:
   bool plan_line_ruckig(const ArmPose & start, const ArmPose & end, const Speed & speed,
                         std::function<bool()> cancel_check = nullptr);
 
+  // 可行性预判（Ruckig 几何规划 + 起点/终点 IK 可达性检查，不下发轨迹）：
+  // 用于执行前判断 start→end 直线能否规划成功，规划失败时避免先把机械臂搬到起点再落空
+  bool can_plan_line(const ArmPose & start, const ArmPose & end, const Speed & speed);
+
 private:
   rclcpp::Node &            node_;
   rclcpp::Logger            logger_;
