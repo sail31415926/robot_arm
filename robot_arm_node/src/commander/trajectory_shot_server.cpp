@@ -43,6 +43,18 @@ const char * outcome_reason(WaitOutcome o)
     default:                     return "timeout";
   }
 }
+
+// 规划期 PlanResult → exit_reason 字符串。Unreachable 映射为 "unreachable"，
+// 命中 commander 的干净分支（恢复 IDLE + ABORTED，秒回、不进 ERROR、不空等到位超时）；
+// Error 保留原行为：与并发取消竞态时仍按 cancelled 归类。
+const char * plan_exit_reason(motion::PlanResult pr, bool cancelled)
+{
+  switch (pr) {
+    case motion::PlanResult::Cancelled:   return "cancelled";
+    case motion::PlanResult::Unreachable: return "unreachable";
+    default:                              return cancelled ? "cancelled" : "error";
+  }
+}
 }  // namespace
 
 TrajectoryShotServer::TrajectoryShotServer(rclcpp::Node & node, MotionExecutor & motion,
@@ -88,7 +100,7 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
     Action::Result result;
     result.success     = false;
     result.exit_reason = "unreachable";
-    result.error_code  = ArmStatus::RESULT_ABORTED;
+    result.error_code  = ArmStatus::ERR_LIMIT;   // error_code 用 ERR_*，与运镜段兜底分支一致
     return result;
   }
   RCLCPP_INFO(logger_, "LINEAR 已检查可以规划，起始=(%.3f,%.3f,%.3f) 终止=(%.3f,%.3f,%.3f)",
@@ -112,11 +124,15 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
   // 直线以指令起点为基准 —— 与 ORBIT 用指令球坐标一致，步骤 1 已把误差压进到位容差）
   if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }
   RCLCPP_INFO(logger_, "LINEAR 直线运镜开始（Ruckig 直线路点流）");
-  if (!motion_.plan_line_ruckig(start, end, speed, cancelled)) {
-    result.success     = false;
-    result.exit_reason = cancelled() ? "cancelled" : "error";
-    result.error_code  = ArmStatus::ERR_DRIVER;
-    return result;
+  {
+    const auto pr = motion_.plan_line_ruckig(start, end, speed, cancelled);
+    if (pr != motion::PlanResult::Success) {
+      result.success     = false;
+      result.exit_reason = plan_exit_reason(pr, cancelled());
+      result.error_code  = (pr == motion::PlanResult::Unreachable)
+                               ? ArmStatus::ERR_LIMIT : ArmStatus::ERR_DRIVER;
+      return result;
+    }
   }
   const double p2_end = goal.return_to_start ? 67.0 : 100.0;
   r = wait_at_pose(gh, end, "LINEAR 终止到位",
@@ -126,11 +142,15 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
   // 步骤 3：笛卡尔直线原路返回
   RCLCPP_INFO(logger_, "LINEAR return_to_start: 直线返回起始位姿");
   if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }
-  if (!motion_.plan_line_ruckig(end, start, speed, cancelled)) {
-    result.success     = false;
-    result.exit_reason = cancelled() ? "cancelled" : "error";
-    result.error_code  = ArmStatus::ERR_DRIVER;
-    return result;
+  {
+    const auto pr = motion_.plan_line_ruckig(end, start, speed, cancelled);
+    if (pr != motion::PlanResult::Success) {
+      result.success     = false;
+      result.exit_reason = plan_exit_reason(pr, cancelled());
+      result.error_code  = (pr == motion::PlanResult::Unreachable)
+                               ? ArmStatus::ERR_LIMIT : ArmStatus::ERR_DRIVER;
+      return result;
+    }
   }
   return wait_at_pose(gh, start, "LINEAR 返回到位", 67.0, 100.0);
 }
@@ -168,12 +188,16 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
   // 步骤 2：Ruckig 1-DOF 球面轨道（起 → 终）
   if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }
   RCLCPP_INFO(logger_, "ORBIT 球面轨道开始（Ruckig 1-DOF）");
-  if (!motion_.plan_orbit_ruckig(ox, oy, oz, az0, el0, r0, az1, el1, r1,
-                                 s_vel, s_acc, s_jerk, cancelled)) {
-    result.success = false;
-    result.exit_reason = cancelled() ? "cancelled" : "error";
-    result.error_code = ArmStatus::ERR_DRIVER;
-    return result;
+  {
+    const auto pr = motion_.plan_orbit_ruckig(ox, oy, oz, az0, el0, r0, az1, el1, r1,
+                                              s_vel, s_acc, s_jerk, cancelled);
+    if (pr != motion::PlanResult::Success) {
+      result.success = false;
+      result.exit_reason = plan_exit_reason(pr, cancelled());
+      result.error_code = (pr == motion::PlanResult::Unreachable)
+                              ? ArmStatus::ERR_LIMIT : ArmStatus::ERR_DRIVER;
+      return result;
+    }
   }
 
   if (!goal.return_to_start) {
@@ -185,12 +209,16 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
   // 步骤 3：Ruckig 1-DOF 原路返回（终 → 起）
   if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }
   RCLCPP_INFO(logger_, "ORBIT return_to_start: 原路返回");
-  if (!motion_.plan_orbit_ruckig(ox, oy, oz, az1, el1, r1, az0, el0, r0,
-                                 s_vel, s_acc, s_jerk, cancelled)) {
-    result.success = false;
-    result.exit_reason = cancelled() ? "cancelled" : "error";
-    result.error_code = ArmStatus::ERR_DRIVER;
-    return result;
+  {
+    const auto pr = motion_.plan_orbit_ruckig(ox, oy, oz, az1, el1, r1, az0, el0, r0,
+                                              s_vel, s_acc, s_jerk, cancelled);
+    if (pr != motion::PlanResult::Success) {
+      result.success = false;
+      result.exit_reason = plan_exit_reason(pr, cancelled());
+      result.error_code = (pr == motion::PlanResult::Unreachable)
+                              ? ArmStatus::ERR_LIMIT : ArmStatus::ERR_DRIVER;
+      return result;
+    }
   }
   return wait_at_pose(gh, start_pose, "ORBIT 返回到位", 90.0, 100.0,
                       goal.azimuth_start_deg, goal.elevation_start_deg, r0);

@@ -29,6 +29,12 @@ namespace
 // JTC 用它柔性消化「实际位姿 ↔ 指令起点」的到位容差偏差（≤1cm/2°），避免压缩在
 // 首个 10ms 段里造成起步速度尖峰。
 constexpr double START_BLEND_SEC = 0.2;
+
+// 连续 IK 无解阈值：达到即判定路径成片驶出可达域，提前放弃（不再空跑完剩余无解点，
+// 每个无解点最坏要阻塞 2×ik_timeout）。低于此值的零星漏解仍沿用上帧容忍。
+// 降采样后的路点粒度（decimate_k×STREAM_DT）下，连续这么多点无解已是明确的边界越界，
+// 而非求解器偶发抖动。
+constexpr int MAX_CONSEC_IK_FAIL = 10;
 }  // namespace
 
 std::vector<Waypoint> decimate(const std::vector<Waypoint> & pts, int k)
@@ -86,7 +92,7 @@ trajectory_msgs::msg::JointTrajectory build_joint_trajectory(
   return msg;
 }
 
-bool solve_and_send(
+PlanResult solve_and_send(
     rclcpp::Node & node,
     const rclcpp::Client<GetPositionIK>::SharedPtr & ik_client,
     const rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr & traj_pub,
@@ -101,12 +107,12 @@ bool solve_and_send(
     const std::function<bool()> & stop_check,
     rclcpp::Logger logger)
 {
-  if (all_pts_in.empty()) return false;
+  if (all_pts_in.empty()) return PlanResult::Error;
 
   // 服务可用性只在批量开始检查一次（之后逐点用廉价 service_is_ready）
   if (!ik_client->wait_for_service(1s)) {
     RCLCPP_ERROR(logger, "solve_and_send: /compute_ik 服务不可用");
-    return false;
+    return PlanResult::Error;
   }
 
   const auto stopped = [&stop_check]() -> bool {
@@ -123,10 +129,15 @@ bool solve_and_send(
   joint_pos.reserve(all_pts.size());
   joint_t.reserve(all_pts.size());
 
+  // 可达性统计：区分「零星漏解（沿用上帧容忍）」与「成片/首末无解（判定不可达）」
+  int    consec_fail    = 0;      // 当前连续无解计数
+  size_t first_fail_idx = 0;      // 本段连续无解的起始 step
+  bool   last_pt_failed = false;  // 最近处理的这一点是否无解
+
   for (size_t idx = 0; idx < all_pts.size(); ++idx) {
     if (stopped()) {
       RCLCPP_INFO(logger, "solve_and_send: 中止（cancel / 急停）");
-      return false;
+      return PlanResult::Cancelled;
     }
 
     const Waypoint & w = all_pts[idx];
@@ -145,20 +156,42 @@ bool solve_and_send(
     std::vector<double> sol;
     if (res.joints) {
       sol = std::move(*res.joints);
+      consec_fail    = 0;
+      last_pt_failed = false;
     } else if (!joint_pos.empty()) {
-      // 降级：沿用上一帧
+      // 零星漏解：沿用上一帧继续；成片连续无解：路径成片驶出可达域 → 判定不可达
       sol = joint_pos.back();
+      if (consec_fail == 0) first_fail_idx = idx;
+      ++consec_fail;
+      last_pt_failed = true;
       RCLCPP_WARN(logger, "IK 失败 step=%zu err=%d  pos=(%.3f,%.3f,%.3f)，沿用上帧",
                   idx, res.error_code, w.x, w.y, w.z);
+      if (consec_fail >= MAX_CONSEC_IK_FAIL) {
+        const Waypoint & wf = all_pts[first_fail_idx];
+        RCLCPP_ERROR(logger,
+            "连续 %d 点 IK 无解（自 step=%zu pos=(%.3f,%.3f,%.3f) 起），"
+            "判定目标超出可达域，放弃本段运镜",
+            consec_fail, first_fail_idx, wf.x, wf.y, wf.z);
+        return PlanResult::Unreachable;
+      }
     } else {
-      RCLCPP_ERROR(logger, "IK 首帧失败 err=%d  pos=(%.3f,%.3f,%.3f)，放弃",
+      // 首帧（含零种子重试）即无解：起点不可达
+      RCLCPP_ERROR(logger, "IK 首帧无解 err=%d  pos=(%.3f,%.3f,%.3f)，目标不可达",
                    res.error_code, w.x, w.y, w.z);
-      return false;
+      return PlanResult::Unreachable;
     }
 
     cur_seed = sol;
     joint_pos.push_back(std::move(sol));
     joint_t.push_back(w.t);
+  }
+
+  // 末点无解（哪怕连续数未到阈值）：整段走不到终点 → 不可达，不下发退化轨迹
+  if (last_pt_failed) {
+    const Waypoint & wl = all_pts.back();
+    RCLCPP_ERROR(logger, "运镜末点 IK 无解 pos=(%.3f,%.3f,%.3f)，终点不可达，放弃本段运镜",
+                 wl.x, wl.y, wl.z);
+    return PlanResult::Unreachable;
   }
 
   // 起步融合：首点插入当前关节（IK 种子 = 规划时刻的实测关节），其余整体后移
@@ -173,7 +206,7 @@ bool solve_and_send(
   // 批量 IK 期间若已急停/取消，放弃下发整条轨迹
   if (stopped()) {
     RCLCPP_INFO(logger, "solve_and_send: 急停生效，放弃下发轨迹");
-    return false;
+    return PlanResult::Cancelled;
   }
   traj_pub->publish(msg);
 
@@ -182,7 +215,7 @@ bool solve_and_send(
   RCLCPP_INFO(logger,
               "solve_and_send: 下发 %zu 个路点（原 %zu，降采样 1/%d），时长=%.2fs，IK 规划耗时=%.0fms",
               joint_pos.size(), n_raw, decimate_k, joint_t.back(), plan_ms);
-  return true;
+  return PlanResult::Success;
 }
 
 }  // namespace robot_arm_node::motion

@@ -42,14 +42,26 @@ trajectory_msgs::msg::JointTrajectory build_joint_trajectory(
     const std::vector<std::string> & joint_names,
     const builtin_interfaces::msg::Time & stamp);
 
+// 规划期批量 IK 的结果：区分「成功 / 被取消 / 目标不可达 / 其它错误」，
+// 供上层把「IK 无解」映射为 action 的 "unreachable"（秒回、不进 ERROR），
+// 而不是硬发退化轨迹再靠执行期超时兜底。
+enum class PlanResult
+{
+  Success,      // 全程 IK 有解，已下发 JointTrajectory
+  Cancelled,    // 规划期间被急停 / 取消
+  Unreachable,  // 首帧 / 末帧 / 成片连续 IK 无解 —— 路径驶出可达域，未下发
+  Error,        // 服务不可用 / 空路点等其它失败
+};
+
 // 批量 IK + JointTrajectory 下发（对应 Python solve_and_send）。
-//   路点降采样 → 逐点 IK（种子延续，首帧失败零种子重试，失败沿用上帧）
+//   路点降采样 → 逐点 IK（种子延续，首帧失败零种子重试，零星漏解沿用上帧）
 //   → 中央差分算关节速度 → 构建并发布 JointTrajectory。
 // 依赖注入、无状态：seed 由调用方提供，stop_check 由调用方注入（急停 / 取消合成一个判据）。
 //   node    仅用于 get_clock()（时间戳），不读其它状态。
 //   逐点 IK 阻塞等 future，须由 MultiThreadedExecutor 的执行线程调用（见 kinematics.hpp）。
-// 返回 true 表示成功下发，false 表示失败 / 中止。
-bool solve_and_send(
+// 可达性判定（规划期即知，不下发退化轨迹）：首帧无解 / 末帧无解 / 连续无解达阈值
+//   → 返回 Unreachable；零星单点漏解仍沿用上帧容忍。见 PlanResult 各枚举语义。
+PlanResult solve_and_send(
     rclcpp::Node & node,
     const rclcpp::Client<GetPositionIK>::SharedPtr & ik_client,
     const rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr & traj_pub,

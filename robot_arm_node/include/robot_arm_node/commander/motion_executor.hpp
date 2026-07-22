@@ -41,6 +41,7 @@
 #include <robot_arm_interfaces/msg/arm_pose.hpp>
 
 #include "robot_arm_node/motion/planning.hpp"           // Waypoint
+#include "robot_arm_node/motion/trajectory.hpp"          // PlanResult
 #include "robot_arm_node/state/status_aggregator.hpp"
 #include "robot_arm_node/commander/motion_policy.hpp"    // Speed
 
@@ -84,20 +85,21 @@ public:
 
   // 批量 IK + JointTrajectory 下发（委托 motion::solve_and_send）。
   // cancel_check 与内部 is_stopped 合成一个急停判据。
-  bool solve_and_send(const std::vector<motion::Waypoint> & all_pts,
-                      std::function<bool()> cancel_check = nullptr);
+  // 返回 PlanResult：Unreachable 表示 IK 无解（供上层映射为 "unreachable"）。
+  motion::PlanResult solve_and_send(const std::vector<motion::Waypoint> & all_pts,
+                                    std::function<bool()> cancel_check = nullptr);
 
   // 球面轨道运镜：plan_orbit_waypoints + solve_and_send（相机始终朝向球心）
-  bool plan_orbit_ruckig(double ox, double oy, double oz,
-                         double theta0, double phi0, double r0,
-                         double theta1, double phi1, double r1,
-                         double s_vel, double s_acc, double s_jerk,
-                         std::function<bool()> cancel_check = nullptr);
+  motion::PlanResult plan_orbit_ruckig(double ox, double oy, double oz,
+                                       double theta0, double phi0, double r0,
+                                       double theta1, double phi1, double r1,
+                                       double s_vel, double s_acc, double s_jerk,
+                                       std::function<bool()> cancel_check = nullptr);
 
   // 笛卡尔直线运镜：plan_line_waypoints + solve_and_send
   //（位置沿线插值、姿态 slerp，末端严格走直线；限制取 speed 位置/姿态分量的更严者）
-  bool plan_line_ruckig(const ArmPose & start, const ArmPose & end, const Speed & speed,
-                        std::function<bool()> cancel_check = nullptr);
+  motion::PlanResult plan_line_ruckig(const ArmPose & start, const ArmPose & end, const Speed & speed,
+                                      std::function<bool()> cancel_check = nullptr);
 
   // 可行性预判（Ruckig 几何规划 + 起点/终点 IK 可达性检查，不下发轨迹）：
   // 用于执行前判断 start→end 直线能否规划成功，规划失败时避免先把机械臂搬到起点再落空
