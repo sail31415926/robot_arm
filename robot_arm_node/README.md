@@ -137,7 +137,7 @@ ros2 action send_goal /robot_arm/trajectory_shot \
   robot_arm_interfaces/action/ArmTrajectoryShot \
   "{motion_type: 0, transition_speed: 1, return_to_start: false,
     linear_start_pose: {x: 0.30, y: 0.0, z: 0.60, roll: 90.0, pitch: 0.0, yaw: 0.0},
-    linear_end_pose:   {x: 0.30, y: 0.0, z: 0.40, roll: 90.0, pitch: 0.0, yaw: 0.0}}"
+    linear_end_pose:   {x: 0.60, y: 0.0, z: 0.60, roll: 90.0, pitch: 0.0, yaw: 0.0}}"
 
 # 球面环绕运镜 ORBIT：末端始终朝向球心
 ros2 action send_goal /robot_arm/trajectory_shot \
