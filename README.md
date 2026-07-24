@@ -119,6 +119,46 @@ ros2 launch robot_arm_bringup real.launch.py   controller:=commander gui:=false 
 
 > 前 6 种为 Python 调试模式（节点被 GUI 进程内 import，故保留 Python）；`commander`（产品中间层）与 `visp_ibvs_control`（视觉伺服）为 C++ 产品栈。
 > ¹ 实物后端该模式参数名为 `visp_ibvs`（见 `real.launch.py`）。
+>
+> **注意：`controller:=` 与「控制模式」是两个正交的轴。** `controller:=` 选的是**上层控制方式**
+> （哪个 GUI / 规划器 / 中间层，多数产出 JointTrajectory）；下面的 `ControlMode` 是**底层作动模式**
+> （position / velocity / effort，即哪个 ros2_control 控制器 active）。上表大多数运行在 `TRAJECTORY` 模式下。
+
+---
+
+## 控制模式仲裁（ModeManager）
+
+**「位置 / 速度 / 力矩」是一根贯穿各层的正交维度**：驱动器层是 CiA402 的 IP/PV/PT，ros2_control 层是
+`position`/`velocity`/`effort` 命令接口，应用层是不同任务意图。`RobotSystem` 硬约束「每关节同一时刻只能
+claim 一个命令接口 = 只能处于一种 402 模式」，故**模式切换 = ros2_control 控制器切换**。
+
+`mode_manager_node`（C++，`robot_arm_node`，`real`/`gazebo` 常驻）是**语义控制模式的唯一权威、后端无感**：
+上层只调一个服务切模式，不关心底层控制器名 / 402 模式。
+
+| ControlMode | 控制器（active） | 402 模式 | 命令总线（上层发） | 状态 |
+| :--- | :--- | :--- | :--- | :--- |
+| `TRAJECTORY`（0，默认） | `arm_controller`(JTC) | IP(7) | `/arm_controller/joint_trajectory` | ✅ |
+| `JOINT_VELOCITY`（1） | `arm_velocity_controller` | PV(3) | `/robot_arm/cmd/joint_velocity`（Float64MultiArray，J1-3，带看门狗） | ✅ |
+| `JOINT_EFFORT`（2） | `arm_effort_controller` | PT(4) | `/robot_arm/cmd/joint_effort` | ⏳ P3（需 URDF 加 effort 接口） |
+| `ADMITTANCE`（3） | `arm_controller`(JTC) | IP(7) | 末端力 → 位置微调，底层仍走位置总线 | ⏳ P3（需 F/T 传感器） |
+
+```bash
+# 查询当前模式（latched，随时可读）
+ros2 topic echo /robot_arm/control_mode --once            # mode: 0=TRAJECTORY 1=VELOCITY ...
+# 切换模式（唯一入口；必须静止时调用）
+ros2 service call /robot_arm/switch_control_mode robot_arm_interfaces/srv/SwitchControlMode "{target_mode: 1}"
+# 速度点动（切到 VELOCITY 后，发到产品总线；断流 >300ms 自动归零兜底）
+ros2 topic pub -r 50 /robot_arm/cmd/joint_velocity std_msgs/msg/Float64MultiArray "{data: [0.3, 0.0, 0.0]}"
+```
+
+ModeManager 职责：① 唯一切换入口 `/robot_arm/switch_control_mode`（串行化）；② bumpless 播种（切到速度/力矩
+前先喂 0，切回轨迹由 JTC 自动锁当前位姿）；③ 原子切换 `controller_manager/switch_controller`(STRICT)；
+④ latched 广播 `/robot_arm/control_mode`（Commander 汇入 `arm_status.active_control_mode`）；⑤ 速度/力矩
+总线看门狗（`ForwardCommandController` 不自动归零，断流即失控，必须兜底）。
+
+> **约定**：必须静止时切换；速度/力矩模式下**云台 J4-6 不受控**（`arm_controller` 被停），保持当前位置。
+> 驱动层 `/arm_node/set_mode_pp|ip`（402 profile 微调，不换控制器）仍是实物专属细化，与 ModeManager 不冲突。
+> `JOINT_EFFORT` / `ADMITTANCE` 为 P3 预留（`effort_controller` 默认未配置，切换会被明确拒绝）。
 
 ---
 
@@ -149,8 +189,11 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
                 [ViSP+Pinocchio]visp_ibvs_node (C++)  IBVS 视觉闭环
                                 └ red_box_detector  图像 → /red_detector/feature
 ═══════════════════════════════════════════════════════════════════════════════════
-   ▼ 命令总线  /arm_controller/joint_trajectory            (trajectory_msgs/JointTrajectory)
-              /arm_controller/follow_joint_trajectory     (Action，MoveIt 执行轨迹用)
+   ⊕ 模式仲裁  mode_manager_node   /robot_arm/switch_control_mode (Srv) · /robot_arm/control_mode (latched)
+                                   切模式 = switch_controller（TRAJECTORY↔VELOCITY↔EFFORT，后端无感）
+   ▼ 命令总线  [位置] /arm_controller/joint_trajectory       (trajectory_msgs/JointTrajectory)
+              [位置] /arm_controller/follow_joint_trajectory (Action，MoveIt 执行轨迹用)
+              [速度] /robot_arm/cmd/joint_velocity          (Float64MultiArray，J1-3，ModeManager relay+看门狗)
    ▲ 反馈总线  /joint_states                               (sensor_msgs/JointState, 6 轴)
 ═══════════════════════════════════════════════════════════════════════════════════
  L1 控制/后端层（三选一，总线接口一致，上层无感切换）
@@ -184,6 +227,7 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 | 节点（可执行） | 包·语言 | 职责 | 关键输入 → 输出 |
 | :--- | :--- | :--- | :--- |
 | `arm_commander_node` | robot_arm_node · C++ | 产品中间层状态机，把「拍摄/姿态」意图翻译成轨迹 | `/robot_arm/{move_to_pose,trajectory_shot,track_target}` Action、`/joint_states`、`/compute_ik` → `/arm_controller/joint_trajectory`、`/robot_arm/arm_status` |
+| `mode_manager_node` | robot_arm_node · C++ | 语义控制模式仲裁（TRAJECTORY/JOINT_VELOCITY/…），后端无感；切模式 = switch_controller + bumpless 播种 + 速度总线看门狗 | `/robot_arm/switch_control_mode`(Srv)、`/robot_arm/cmd/joint_velocity` → `controller_manager/switch_controller`、`/arm_velocity_controller/commands`、`/robot_arm/control_mode`(latched) |
 | `controllers ×6` | robot_arm_debug · py | 调试控制：关节滑块 / 笛卡尔 / 实时 IK / Ruckig 点到点 / 球面运镜 / 速度点动 | GUI 滑块、`/joint_states`、`/compute_ik`·`/compute_cartesian_path` → `/arm_controller/joint_trajectory`（`cartesian_velocity` 改发 `/servo_node/delta_twist_cmds`） |
 | `visp_ibvs_node` | robot_arm_debug · C++ | ViSP+Pinocchio 图像伺服，加权 Jacobian 直接算关节速度 | `/red_detector/feature`（或外部 `perception_topic`）、`/joint_states` → `/arm_controller/joint_trajectory` |
 | `red_box_detector` | robot_arm_debug · py | OpenCV 红块检测，产出归一化像素特征 + 深度 | `/camera/camera_sensor/image_raw` → `/red_detector/feature`、`/red_detector/image` |

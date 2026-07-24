@@ -115,6 +115,20 @@ ament_target_dependencies(arm_commander_node rclcpp)
 target_link_libraries(arm_commander_node robot_arm_commander)
 install(TARGETS arm_commander_node DESTINATION lib/${PROJECT_NAME})
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 控制模式仲裁器：语义控制模式（TRAJECTORY/JOINT_VELOCITY/JOINT_EFFORT/ADMITTANCE）的
+#   唯一权威，后端无感。切换 = controller_manager/switch_controller；带 bumpless 播种 +
+#   速度/力矩总线看门狗。独立可执行，不依赖 commander 库。
+# ══════════════════════════════════════════════════════════════════════════════
+find_package(std_msgs REQUIRED)
+find_package(controller_manager_msgs REQUIRED)
+
+add_executable(mode_manager_node src/mode/mode_manager_node.cpp)
+target_compile_features(mode_manager_node PRIVATE cxx_std_17)
+ament_target_dependencies(mode_manager_node
+  rclcpp std_msgs controller_manager_msgs robot_arm_interfaces)
+install(TARGETS mode_manager_node DESTINATION lib/${PROJECT_NAME})
+
 install(DIRECTORY include/ DESTINATION include)
 
 # 注：本包为**产品层**（C++ motion/state/commander）。

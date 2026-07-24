@@ -41,6 +41,14 @@ StatusAggregator::StatusAggregator(rclcpp::Node & node)
       JOINT_STATE_TOPIC, 10,
       [this](const sensor_msgs::msg::JointState & msg) { this->on_joint_state(msg); });
 
+  // 当前控制模式：mode_manager_node latched 广播，晚订阅也能立刻拿到当前值
+  mode_sub_ = node_.create_subscription<ControlMode>(
+      "/robot_arm/control_mode", rclcpp::QoS(1).transient_local().reliable(),
+      [this](const ControlMode & msg) {
+        std::lock_guard<std::mutex> lk(state_mtx_);
+        active_control_mode_ = msg.mode;
+      });
+
   // ── TF2 ──────────────────────────────────────────────────────────────────────
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_.get_clock());
   // 传裸指针而非 shared_from_this()：后者在「node 自身构造期内创建本对象」时会抛
@@ -244,6 +252,7 @@ ArmStatus StatusAggregator::build_status_message() const
   std::lock_guard<std::mutex> lk(state_mtx_);
   msg.current_pose_state   = current_pose_state_;
   msg.error_code           = error_code_;
+  msg.active_control_mode  = active_control_mode_;
   msg.executing_command_id = executing_command_id_;
   msg.command_result       = command_result_;
   msg.is_moving            = is_moving_;

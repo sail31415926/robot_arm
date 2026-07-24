@@ -263,6 +263,18 @@ def generate_launch_description():
         arguments=['arm_controller', '--controller-manager-timeout', '30'] + base_log,
     )
 
+    # JOINT_VELOCITY 模式备用：只 load+configure 不 activate（--inactive），
+    # 与 real 对齐；activate 由 mode_manager_node 经 /robot_arm/switch_control_mode 管
+    arm_velocity_controller_loader = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['arm_velocity_controller', '--inactive',
+                   '--controller-manager-timeout', '30'] + base_log,
+    )
+
+    # 控制模式仲裁器（常驻基础设施）
+    mode_manager = common.mode_manager_node(use_sim_time=True)
+
     camera_view = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(bringup_share, 'launch', 'camera_view.launch.py')
@@ -294,9 +306,11 @@ def generate_launch_description():
         RegisterEventHandler(
             OnProcessExit(
                 target_action=spawn_entity,
-                on_exit=[joint_state_broadcaster_spawner, arm_controller_spawner],
+                on_exit=[joint_state_broadcaster_spawner, arm_controller_spawner,
+                         arm_velocity_controller_loader],
             )
         ),
+        mode_manager,   # 常驻，惰性等 controller_manager，切换时才调 switch_controller
         # arm_controller 起来后启动选中的控制方式（条件互斥，仅一个生效）
         RegisterEventHandler(
             OnProcessExit(

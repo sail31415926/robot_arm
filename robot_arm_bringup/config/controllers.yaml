@@ -8,6 +8,12 @@ controller_manager:
     arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
+    # JOINT_VELOCITY 模式用：claim J1-3 velocity 接口（Gazebo 直接速度驱动）。
+    # 与 real 同名同型，保证 mode_manager 切换逻辑「后端无感」；
+    # launch 只 --inactive 加载，activate 由 mode_manager_node 管，与 arm_controller 互斥。
+    arm_velocity_controller:
+      type: velocity_controllers/JointGroupVelocityController
+
     gimbal_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
@@ -31,6 +37,13 @@ arm_controller:
     allow_partial_joints_goal: false
     open_loop_control: false
     allow_nonzero_velocity_at_trajectory_end: true
+
+arm_velocity_controller:
+  ros__parameters:
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
 
 # 实物模式专用：仅控制摄像头云台 Joint4/5/6
 # arm_motor_node（CANopen）独立管理 Joint1-3，不经过此控制器

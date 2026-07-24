@@ -173,14 +173,18 @@ def _setup(context, *args, **kwargs):
     )
     # gimbal_controller 不再 spawn：arm_controller 已 claim 全 6 轴（含云台 J4-6）
 
-    # PV 模式备用：只 load+configure 不 activate（--inactive），
-    # 由 /arm_node/set_mode_pv 与 arm_controller 互斥切换
+    # JOINT_VELOCITY 模式备用：只 load+configure 不 activate（--inactive），
+    # 由 mode_manager_node 经 /robot_arm/switch_control_mode 与 arm_controller 互斥切换
+    # （旧 /arm_node/set_mode_pv 仍可用，但推荐走 mode_manager 的语义模式接口）
     vel_ctrl_loader = Node(
         package='controller_manager', executable='spawner',
         arguments=['arm_velocity_controller', '--inactive',
                    '--controller-manager', '/controller_manager'] + base_log,
         output='screen',
     )
+
+    # 控制模式仲裁器（常驻基础设施，实物无 /clock → use_sim_time=False）
+    mode_manager = common.mode_manager_node(use_sim_time=False)
 
     # ── GUI controller nodes（复用共享工厂）─────────────────────────────────────
     # use_sim_time=False：实物无 /clock，若为 True 节点内定时器永不触发（TF 位姿面板卡 '--'）
@@ -306,6 +310,7 @@ def _setup(context, *args, **kwargs):
         robot_gimbal_node,         # 先于 spawner 拉起，回读就绪前转发插件回显兜底
         ros2_control_node,
         arm_driver_services,
+        mode_manager,              # 控制模式仲裁器（常驻，/robot_arm/switch_control_mode）
         move_group_node,           # cartesian_moveit / realtime_ik / trajectory / orbit / commander
         spawn_controllers,
         set_mode_pp,               # t=6s，仅 joint_position 模式（402 切 PP）

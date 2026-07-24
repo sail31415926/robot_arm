@@ -18,6 +18,7 @@
 - **新增 Python 脚本必须手动登记安装**：`robot_arm_debug`、`robot_arm_mujoco` 是 ament_cmake 包，用 `install(PROGRAMS ...)` 安装脚本。新增 `.py` 后忘了加进对应 `CMakeLists.txt`，编译不会报错，但运行时节点找不到/ModuleNotFoundError 崩溃。
 - **云台控制路径（2026-07 融合后）**：`robot_gimbal_node` 是**唯一 HID 拥有者**且为 `real.launch.py` 必需常驻组件；机械臂侧 J4-6 经 `GimbalForwardingInterface`（无 HID 转发插件）接入。不要在插件或其他进程里直连云台 HID。`robot_camera_node` 只占 V4L2，与 HID 不冲突。详见工作空间 `docs/云台控制路径融合方案.md`。
 - **总线接口是硬约定**：新增任何上层控制节点，命令只发 `/arm_controller/joint_trajectory`（或 MoveIt 走 `/arm_controller/follow_joint_trajectory` Action），状态只从 `/joint_states` 读。不要绕过总线直连某个后端，否则破坏 Gazebo / MuJoCo / 实物三后端无感切换。
+- **控制模式只经 `mode_manager_node` 切**（2026-07 新增，见 README「控制模式仲裁」）：切位置/速度/力矩 = 调 `/robot_arm/switch_control_mode`（内部 `switch_controller`），**不要**自己直调 `controller_manager/switch_controller` 或旧 `/arm_node/set_mode_pv` 抢控制器，否则与 ModeManager 打架。速度命令发产品总线 `/robot_arm/cmd/joint_velocity`（ModeManager relay 到控制器 + 断流看门狗），别直发 `/arm_velocity_controller/commands`。`real`/`gazebo` 的控制器名（`arm_controller` / `arm_velocity_controller`）必须一致，否则破坏后端无感。`JOINT_EFFORT`/`ADMITTANCE` 是 P3 预留（effort 接口/控制器未配置，切换会被拒）。
 
 ## robot_arm_driver / ros2_canopen
 

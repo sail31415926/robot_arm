@@ -34,15 +34,17 @@
 #include <robot_arm_interfaces/msg/arm_pose.hpp>
 #include <robot_arm_interfaces/msg/arm_twist.hpp>
 #include <robot_arm_interfaces/msg/arm_status.hpp>
+#include <robot_arm_interfaces/msg/control_mode.hpp>
 
 #include "robot_arm_node/motion/constants.hpp"
 
 namespace robot_arm_node::state
 {
 
-using ArmPose   = robot_arm_interfaces::msg::ArmPose;
-using ArmTwist  = robot_arm_interfaces::msg::ArmTwist;
-using ArmStatus = robot_arm_interfaces::msg::ArmStatus;
+using ArmPose     = robot_arm_interfaces::msg::ArmPose;
+using ArmTwist    = robot_arm_interfaces::msg::ArmTwist;
+using ArmStatus   = robot_arm_interfaces::msg::ArmStatus;
+using ControlMode = robot_arm_interfaces::msg::ControlMode;
 
 // 末端速度估算：保留最近 N 个位姿样本做数值微分（100Hz 下 ≈0.1s 窗口）
 constexpr size_t VELOCITY_WINDOW_SIZE = 10;
@@ -94,6 +96,7 @@ private:
   rclcpp::Logger logger_;
 
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_sub_;
+  rclcpp::Subscription<ControlMode>::SharedPtr                  mode_sub_;
   std::shared_ptr<tf2_ros::Buffer>            tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
@@ -112,6 +115,7 @@ private:
   uint8_t  command_result_{ArmStatus::RESULT_NONE};
   uint8_t  current_pose_state_{ArmStatus::POSE_STATE_OBSERVE};
   uint8_t  error_code_{ArmStatus::ERR_NONE};
+  uint8_t  active_control_mode_{ControlMode::TRAJECTORY};   // 由 /robot_arm/control_mode 更新
   bool     is_moving_{false};
   bool     at_pose_start_{false};
   bool     camera_ready_{false};

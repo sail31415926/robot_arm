@@ -38,6 +38,11 @@ ArmPose  arm_pose
 # 末端当前速度
 ArmTwist arm_twist
 
+# ── 当前控制模式（取值见 ControlMode 常量）─────────────────────────────
+# 0=TRAJECTORY 1=JOINT_VELOCITY 2=JOINT_EFFORT 3=ADMITTANCE
+# 由 mode_manager_node 经 /robot_arm/control_mode 广播，Commander 汇入本字段
+uint8   active_control_mode
+
 # 机械臂是否正在运动
 bool    is_moving
 

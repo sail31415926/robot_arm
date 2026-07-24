@@ -22,6 +22,8 @@
   <depend>tf2</depend>
   <depend>trajectory_msgs</depend>
   <depend>builtin_interfaces</depend>
+  <depend>std_msgs</depend>                   <!-- mode_manager_node 速度/力矩总线 Float64MultiArray -->
+  <depend>controller_manager_msgs</depend>    <!-- mode_manager_node switch_controller -->
   <depend>ruckig</depend>          <!-- MotionExecutor OTG，CMake find_package(ruckig REQUIRED) -->
 
   <export>

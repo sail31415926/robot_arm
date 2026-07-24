@@ -147,6 +147,18 @@ def safe_pose_action(condition):
         output='screen', condition=condition)
 
 
+# ── 控制模式仲裁器（基础设施，所有模式常驻）──────────────────────────────────────
+def mode_manager_node(use_sim_time):
+    """语义控制模式的唯一权威（TRAJECTORY/JOINT_VELOCITY/...），后端无感。
+
+    非模式相关基础设施，与 ctrl 无关、常驻启动：上层通过
+    /robot_arm/switch_control_mode 切模式，本节点做 switch_controller + 播种 + 看门狗。
+    仅需 controller_manager 存在（gazebo/real 均有；mujoco 无 → 切换会明确报错，不崩）。
+    """
+    return Node(package='robot_arm_node', executable='mode_manager_node', output='screen',
+                parameters=[{'use_sim_time': use_sim_time}])
+
+
 # ── commander + test_gui ─────────────────────────────────────────────────────────
 def commander_nodes(ctrl, gui, use_sim_time):
     return [

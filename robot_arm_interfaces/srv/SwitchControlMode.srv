@@ -1,0 +1,19 @@
+# SwitchControlMode.srv
+# 切换机械臂语义控制模式的唯一入口（/robot_arm/switch_control_mode）。
+# 由 mode_manager_node 提供，内部串行化执行：
+#   ① 校验（非 fault、目标控制器已加载）
+#   ② bumpless 播种（切到速度/力矩前先喂 0，切回轨迹由 JTC 自动锁当前位姿）
+#   ③ controller_manager/switch_controller（STRICT，原子停旧启新）
+#   ④ 更新并 latched 广播 /robot_arm/control_mode
+#
+# 约定：必须在机械臂静止时调用；速度/力矩模式下云台 J4-6 不受控（保持当前位置）。
+
+# 目标模式（取 ControlMode 常量：TRAJECTORY/JOINT_VELOCITY/JOINT_EFFORT/ADMITTANCE）
+uint8 target_mode
+---
+# 切换是否成功
+bool   success
+# 人类可读的结果/失败原因
+string message
+# 切换后实际所处模式（失败时为切换前的模式，取 ControlMode 常量）
+uint8  active_mode
