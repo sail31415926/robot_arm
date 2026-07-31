@@ -8,7 +8,7 @@
 | **版本** | v1.5.0 |
 | **发布日期** | 2026-07-13 |
 | **支持平台** | Ubuntu 22.04 LTS · ROS 2 Humble · Python 3.10 |
-| **设备** | robot_arm 6 轴机械臂（Joint1-3 CANopen + Joint4-6 相机云台 HID） |
+| **设备** | robot_arm 6 轴机械臂（Joint1-3 CANopen + Joint4-6 云台 V2：C-200T 三轴 GCU，串口，执行节点在云台板端） |
 | **语言** | C++ / Python / MATLAB |
 
 ---
@@ -49,7 +49,7 @@ robot_arm/
 colcon build --symlink-install --packages-select \
   robot_arm_interfaces robot_arm_driver robot_arm_description robot_arm_moveit_config \
   robot_arm_bringup robot_arm_node robot_arm_debug robot_arm_gazebo robot_arm_mujoco \
-  robot_gimbal_interfaces robot_gimbal_driver robot_gimbal_node
+  robot_gimbal_interfaces_v2 robot_gimbal_driver_v2 robot_gimbal_description_v2
 
 # 生效（注意：编译出新包后每个已开终端都要重新 source）
 source install/setup.bash
@@ -57,18 +57,27 @@ source install/setup.bash
 
 ### 实机编译（板上部署最小集）
 
-只需 6 个 robot_arm 包 + 云台 3 包（转发插件/云台节点/接口，J4-6 依赖，
-另仓库 `robot_gimbal`）：
+只需 6 个 robot_arm 包 + 云台 V2 的 3 包（接口/转发插件/描述，J4-6 依赖，
+另仓库 `robot_gimbal_V2`）：
 
 ```bash
 colcon build --symlink-install --packages-select \
   robot_arm_interfaces robot_arm_driver robot_arm_description robot_arm_moveit_config \
   robot_arm_bringup robot_arm_node \
-  robot_gimbal_interfaces robot_gimbal_driver robot_gimbal_node
+  robot_gimbal_interfaces_v2 robot_gimbal_driver_v2 robot_gimbal_description_v2
 
 source install/setup.bash
 ```
 
+> **`robot_gimbal_node_v2` 不在臂侧编译清单里**（这是 V2 与 V1 最大的部署差异）：
+> 云台执行节点是串口唯一拥有者，跑在**云台板端**（LubanCat，`/dev/ttyS0`），
+> 臂侧只经话题与它收发（板端**原生**订阅 `forward_cmd` / 发布 `joint_states_raw`，
+> 转发插件直连，不需要中间适配节点）。臂侧要的是接口（`robot_arm_driver` 编译期依赖）、
+> 转发插件（URDF 加载）、描述包（`arm.urdf.xacro` include 云台 macro）三样。
+> 因此**臂侧与云台板是两台机器**，必须同网段 + 同 `ROS_DOMAIN_ID`
+> 且**不能设** `ROS_LOCALHOST_ONLY=1`，否则回读收不到（转发插件会一直警告
+> `No feedback from robot_gimbal_node yet`，退化为指令回显）。
+>
 > 适用 `real.launch.py controller:=commander gui:=false` 等产品路径。
 > 若用**调试控制模式**（`joint_position` / `cartesian_*` / `spherical_orbit` 等
 > GUI，含默认的 `controller:=joint_position`）或 `visp_ibvs`、commander 测试
@@ -77,7 +86,7 @@ source install/setup.bash
 >
 > **全新工作空间首次编译**：`robot_arm_driver` 依赖 vendored 的 ros2_canopen
 >（约 10 个包），`--packages-select` 不会自动构建依赖——首次请改用
-> `--packages-up-to robot_arm_bringup robot_arm_node robot_gimbal_node`
+> `--packages-up-to robot_arm_bringup robot_arm_node robot_gimbal_driver_v2`
 >（并限制并行度，编译很重）；日常增量编译用上面的列表即可。
 
 ---
@@ -200,9 +209,10 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
    [Gazebo]  gazebo_ros2_control → arm_controller (JTC, 6 轴) → 物理仿真
    [MuJoCo]  mujoco_node (py 桥)   订阅轨迹 / Servo，回填 joint_states + 相机图像
    [Real]    ros2_control 单 CM：J1-3 → RobotSystem（CANopen）
-             J4-6 → GimbalForwardingInterface（转发）⇄ robot_gimbal_node（HID 独占）
+             J4-6 → GimbalForwardingInterface（转发，变化检测）
+                    → 〖跨机 DDS〗→ 云台板端 robot_gimbal_node_v2（串口独占）
 ───────────────────────────────────────────────────────────────────────────────────
- L0 物理/驱动     Gazebo 物理引擎   │   MuJoCo 物理   │   SocketCAN can0 + 云台 HID/V4L2
+ L0 物理/驱动     Gazebo 物理引擎   │   MuJoCo 物理   │   SocketCAN can0 + 云台板端 GCU 串口
 ═══════════════════════════════════════════════════════════════════════════════════
 ```
 
@@ -220,7 +230,7 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 | 关节 | 驱动（硬件组件） | 反馈来源 | 命令入口 |
 | :--- | :--- | :--- | :--- |
 | Joint1–3 | `canopen_ros2_control/RobotSystem`（ros2_canopen，CiA402/SocketCAN） | `joint_state_broadcaster` → `/joint_states` | `/arm_controller/joint_trajectory` |
-| Joint4–6 | `robot_gimbal_driver/GimbalForwardingInterface`（转发插件，无 HID）⇄ `robot_gimbal_node`（唯一 HID 拥有者，真实回读） | `joint_state_broadcaster` → `/joint_states` | `/arm_controller/joint_trajectory`（同一控制器） |
+| Joint4–6 | `robot_gimbal_driver_v2/GimbalForwardingInterface`（转发插件，不碰串口）→〖跨机 DDS〗→ 云台板端 `robot_gimbal_node_v2`（唯一串口拥有者，真实回读） | `joint_state_broadcaster` → `/joint_states`（J4-6 为板端真实回读；跨机不通时退化为开环回显） | `/arm_controller/joint_trajectory`（同一控制器） |
 
 ### 各节点职责与数据传输
 
@@ -234,10 +244,11 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 | `mujoco_node` | robot_arm_mujoco · py | MuJoCo 仿真桥：物理步进 + 相机渲染 | `/arm_controller/joint_trajectory`、`/servo_node/delta_twist_cmds` → `/joint_states`、`/camera/camera_sensor/image_raw` |
 | `move_group` | MoveIt | 运动规划 / IK / 笛卡尔路径 | 规划请求 → `/compute_ik`、`/compute_cartesian_path` 服务；`/arm_controller/follow_joint_trajectory` 执行 |
 | `servo_node` | MoveIt Servo | 实时笛卡尔速度 → 关节增量 | `/servo_node/delta_twist_cmds` → `/arm_controller/joint_trajectory` |
-| `ros2_control_node` + `arm_controller`(JTC) | controller_manager · C++ | 【实物】单 CM 管全 6 轴：J1-3 CANopen（RobotSystem，position→IP 模式）+ J4-6 云台（GimbalForwardingInterface 转发 ⇄ robot_gimbal_node，见 docs/云台控制路径融合方案.md） | `/arm_controller/joint_trajectory`、`/arm_controller/follow_joint_trajectory` Action → CAN/HID + `/joint_states`(6 轴) |
+| `ros2_control_node` + `arm_controller`(JTC) | controller_manager · C++ | 【实物】单 CM 管全 6 轴：J1-3 CANopen（RobotSystem，position→IP 模式）+ J4-6 云台 V2（GimbalForwardingInterface 变化检测转发，见 docs/云台控制路径融合方案.md） | `/arm_controller/joint_trajectory`、`/arm_controller/follow_joint_trajectory` Action → CAN + `/robot_gimbal_v2/forward_cmd` + `/joint_states`(6 轴) |
 | `arm_driver_services` | robot_arm_driver · C++ | 【实物】使能/失能/故障恢复服务（转发 controller_manager 硬件组件状态） | `/arm_node/{enable,disable,recover}`(Trigger) → CM 组件 active↔inactive |
 | `arm_controller` (JTC) | Gazebo / ros2_control | 【Gazebo】6 轴关节轨迹控制器驱动仿真模型 | `/arm_controller/joint_trajectory` → 物理 + `/joint_states` |
-| `robot_camera_node` | robot_gimbal_node · C++ | 【实物】V4L2 视频流（仅占 V4L2，与 HID 不冲突） | 相机 → `/camera/image_raw/compressed` |
+| ~~`gimbal_v2_bridge`~~ | robot_arm_driver · C++ | 【2026-07-31 停止启用，源码保留】云台 V2 适配节点。板端 `robot_gimbal_node_v2` 已**原生**收发臂侧转发约定，再经它翻译一遍会双重驱动：命令送两遍，且它把「转发流」升级成 `GimbalCommand.POSITION`——板端 POSITION 会解冻 FROZEN，等于让 JTC 的保持流解冻 FREEZE，破坏仲裁优先级。其 `absolute_mode`（相对关节角 ⇄ IMU 绝对姿态角）若要重启用，须改成不与板端原生话题重叠的接法 | — |
+| ~~`robot_camera_node`~~ | — | 【已下线】V1 二轴云台的 V4L2 视频流节点，随 2026-07-28 云台换代 V2 一并删除；V2 主相机（Cam0）由**云台板端**自行发布 | — |
 | `robot_state_publisher` | ROS 2 | URDF + 关节角 → TF 树 | `/joint_states` → `/tf` |
 
 ### 数据流（三条链路）
@@ -252,7 +263,7 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 
 **系统基础**：Ubuntu 22.04 + ROS 2 Humble + Python 3.10；`colcon` / `ament_cmake` 编译（接口包用 `rosidl`）；C++ 驱动基于内核 SocketCAN + 随包编译的 CANopen 协议栈。
 
-**ROS 2（apt，不进 venv）**：`rclcpp` / `rclpy` / `rclcpp_action`、消息包（`sensor_msgs` `geometry_msgs` `trajectory_msgs` `control_msgs` `moveit_msgs` 等）、`ros-humble-moveit` + `pick_ik`、`ros2_control` / `ros2_controllers`、`gazebo_ros` / `gazebo_ros2_control`、`cv_bridge` / `image_transport`、`tf2_ros` / `tf-transformations`、`robot_state_publisher` / `xacro`、`robot_gimbal_driver`（云台插件）、`python3-tk`。
+**ROS 2（apt，不进 venv）**：`rclcpp` / `rclpy` / `rclcpp_action`、消息包（`sensor_msgs` `geometry_msgs` `trajectory_msgs` `control_msgs` `moveit_msgs` 等）、`ros-humble-moveit` + `pick_ik`、`ros2_control` / `ros2_controllers`、`gazebo_ros` / `gazebo_ros2_control`、`cv_bridge` / `image_transport`、`tf2_ros` / `tf-transformations`、`robot_state_publisher` / `xacro`、`robot_gimbal_driver_v2`（云台 V2 转发插件，源码在 `robot_gimbal_V2` 仓库）、`python3-tk`。
 
 **Python（pip，见 [`requirements.txt`](requirements.txt)）** —— 核心运行依赖：
 

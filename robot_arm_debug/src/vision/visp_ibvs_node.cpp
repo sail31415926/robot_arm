@@ -118,7 +118,7 @@ static constexpr double HEIGHT_IMG_GATE       = 0.13;
 static constexpr double K_LEVEL               = 4.0;
 // 单关节速度上限（rad/s）
 static constexpr double MAX_JOINT_VEL         = 1.5;
-// 末端高度硬地板（arm_base 系 Z，m）：末端(相机=tool0，camera_optical_joint 零平移)
+// 末端高度硬地板（arm_base 系 Z，m）：末端(相机=Cam0，camera_optical_joint 零平移)
 // 世界 Z 不得低于此值。安全约束，恒开，与 constrain_height（软设定点）无关。
 static constexpr double EE_FLOOR_Z            = 0.10;
 // 控制周期（s）— 与 create_wall_timer 一致
@@ -135,7 +135,7 @@ static constexpr double COLLISION_CHECK_DT    = 0.1;    // s，检查周期 10Hz
 static constexpr double COLLISION_LOOKAHEAD   = 0.4;    // s，按当前 q_dot 前瞻的时间
 static constexpr int    COLLISION_RESUME_N    = 3;      // 连续通过 N 次检查后解除封锁
 static constexpr double COLLISION_REQ_TIMEOUT = 1.0;    // s，单次服务应答超时（超时重发）
-static constexpr const char* PLANNING_GROUP   = "arm";  // SRDF 组（arm_base_link→tool0 全 6 关节）
+static constexpr const char* PLANNING_GROUP   = "arm";  // SRDF 组（arm_base_link→gimbal_tool0 全 6 关节）
 // ─────────────────────────────────────────────────────────────────────────────
 
 // 控制器关节顺序（与 arm_controller/controllers.yaml 一致）
@@ -285,8 +285,8 @@ private:
         if (pin_model_.existFrame(CAM_FRAME)) {
             cam_frame_id_ = pin_model_.getFrameId(CAM_FRAME);
         } else {
-            RCLCPP_WARN(get_logger(), "Frame '%s' not found, fallback to tool0", CAM_FRAME);
-            cam_frame_id_ = pin_model_.getFrameId("tool0");
+            RCLCPP_WARN(get_logger(), "Frame '%s' not found, fallback to Cam0", CAM_FRAME);
+            cam_frame_id_ = pin_model_.getFrameId("Cam0");
         }
 
         // 关节名 → Pinocchio 速度向量下标

@@ -60,8 +60,8 @@ def default_can_interface() -> str:
 # 关节限位与 robot_arm_description/urdf/arm.urdf.xacro 保持一致
 JOINT_LIMITS = {
     'Joint1': (-2.618, 2.618),
-    'Joint2': (-0.8, 3.14),
-    'Joint3': (-3.14, 0.05),
+    'Joint2': (-0.981, 2.959),
+    'Joint3': (-2.5, 0.02),
 }
 
 

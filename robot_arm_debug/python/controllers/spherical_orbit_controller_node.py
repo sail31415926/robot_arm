@@ -43,7 +43,7 @@ from arm_utils import (rpy_to_quat, quat_to_rpy, quat_normalize, quat_dot, quat_
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 JOINT_NAMES    = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
 PLANNING_GROUP = 'arm'
-EEF_LINK       = 'tool0'
+EEF_LINK       = 'gimbal_tool0'   # 2026-07-28 云台换 V2：MoveIt 规划组 tip
 BASE_FRAME     = 'arm_base_link'
 
 STREAM_DT    = 0.01    # Ruckig 步长，100 Hz
@@ -58,7 +58,11 @@ DEFAULT_S_JERK = 1.50
 DEFAULT_V_POS = 0.05;  DEFAULT_A_POS = 0.10;  DEFAULT_J_POS = 1.00
 DEFAULT_V_ORI = 0.10;  DEFAULT_A_ORI = 0.20;  DEFAULT_J_ORI = 2.00
 
-READY_POSE = dict(x=0.3, y=0.0, z=0.6, roll=90.0, pitch=10.0, yaw=0.0)
+# 2026-07-28 云台换 V2 后重算：末端 = gimbal_tool0（SRDF 规划组 tip）。
+# 取值来自位形 [0, 1.2, -1.2, 0, 0, 0] 的 FK —— J2=-J3 时前臂保持水平，
+# 末端姿态恰为中性 (0, 0.29°, 0)，故姿态角取 0；老值 (roll=90°, pitch=10°)
+# 是 V1 云台时代的约定，在新末端坐标系下已无意义。
+READY_POSE = dict(x=0.315, y=-0.036, z=0.548, roll=0.0, pitch=0.0, yaw=0.0)
 
 
 # ── ROS 节点 ──────────────────────────────────────────────────────────────────

@@ -96,7 +96,7 @@ class MuJoCoNode(Node):
         self._twist_vel  = np.zeros(6)   # [vx, vy, vz, wx, wy, wz]，世界系
         self._twist_time = 0.0           # time.monotonic() 时间戳
         self._ee_body_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_BODY, 'tool0')
+            self.model, mujoco.mjtObj.mjOBJ_BODY, 'gimbal_tool0')
         self._dof_addrs  = [self.model.jnt_dofadr[jid] for jid in self._jnt_ids]
 
         # --- active FJT goal handle (for cancellation) ---

@@ -33,8 +33,10 @@ endLink  = 'camera_optical_frame';   % 相机光学系（+z = 光轴）
 modelFile = 'eMeetArm_reach_model.mat';
 
 % Joint1~Joint6 关节限位（来自 robot_arm_description 的 URDF）
-lower = [-2.618, -0.8,   -3.14, -3.1,  -0.7854, -1.5];
-upper = [ 2.618,  3.14,   0.05,  3.1,   0.7854,  0.5];
+% 2026-07-28 实机重标定：J2 新零点 = 旧 +0.181 rad，J3 = 旧 -0.176 rad，限位随刻度平移；
+% 同日 J3 行程按新零点收紧为 [-2.5, 0]
+lower = [-2.618, -0.981, -2.5,  -3.1,  -0.7854, -1.5];
+upper = [ 2.618,  2.959,  0.02,  3.1,   0.7854,  0.5];
 
 %% 1. 加载机器人模型 -----------------------------------------------------
 urdfPath = fullfile('..', 'robot_arm_description', 'urdf', 'eMeetArm_models.urdf');

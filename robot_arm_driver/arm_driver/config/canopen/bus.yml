@@ -142,8 +142,10 @@ joint_2:
                                                      #   新驱动出厂 6098=1(找限位开关,会动!)，标零走 set_encoder_zero）
     - {index: 0x6072, sub_index: 0, value: 3000}     # 最大转矩 300.0%
     - {index: 0x6065, sub_index: 0, value: 524288}   # 位置偏差过大阈值 ≈2π rad
-    - {index: 0x607D, sub_index: 1, value: -70927}   # 软限位 min ≈-0.85 rad（URDF -0.8 外留 0.05 余量）
-    - {index: 0x607D, sub_index: 2, value: 266184}   # 软限位 max ≈3.19 rad（URDF 3.14 外留 0.05 余量）
+    - {index: 0x607D, sub_index: 1, value: -86030}   # 软限位 min ≈-1.031 rad（URDF -0.981 外留 0.05 余量）
+    - {index: 0x607D, sub_index: 2, value: 251081}   # 软限位 max ≈3.009 rad（URDF 2.959 外留 0.05 余量）
+                                                     #   2026-07-28 重标定：新零点 = 旧 +0.181 rad，
+                                                     #   窗口整体平移 -0.181·83443 = -15103 counts
   tpdo:
     1:
       enabled: true
@@ -210,8 +212,10 @@ joint_3:
                                                      #   新驱动出厂 6098=1(找限位开关,会动!)，标零走 set_encoder_zero）
     - {index: 0x6072, sub_index: 0, value: 3000}     # 最大转矩 300.0%
     - {index: 0x6065, sub_index: 0, value: 524288}   # 位置偏差过大阈值 ≈2π rad
-    - {index: 0x607D, sub_index: 1, value: -266184}  # 软限位 min ≈-3.19 rad（URDF -3.14 外留 0.05 余量）
-    - {index: 0x607D, sub_index: 2, value: 8345}     # 软限位 max ≈0.10 rad（URDF 0.05 外留 0.05 余量）
+    - {index: 0x607D, sub_index: 1, value: -212780}  # 软限位 min ≈-2.55 rad（URDF -2.5 外留 0.05 余量）
+    - {index: 0x607D, sub_index: 2, value: 5841}     # 软限位 max ≈0.07 rad（URDF 0.02 外留 0.05 余量）
+                                                     #   2026-07-28 重标定：新零点 = 旧 -0.176 rad；
+                                                     #   同日按新零点把行程收紧为 URDF [-2.5, 0]
   tpdo:
     1:
       enabled: true

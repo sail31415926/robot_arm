@@ -26,7 +26,9 @@ inline const std::vector<std::string> JOINT_NAMES{
 // 关节空间的到位/回零判据只看前 ARM_JOINT_COUNT 个，云台状态不阻塞机械臂动作。
 constexpr size_t ARM_JOINT_COUNT = 3;
 inline const std::string PLANNING_GROUP = "arm";
-inline const std::string EEF_LINK       = "tool0";
+// 2026-07-28 云台换 V2：末端 = 云台 Joint6 后的安装板 gimbal_tool0（= SRDF 规划组 tip），
+// 臂自身的 tool0 只是 Link3 +X 300mm 的机械法兰，不是规划末端。
+inline const std::string EEF_LINK       = "gimbal_tool0";
 inline const std::string BASE_FRAME     = "arm_base_link";
 
 // ── Ruckig / IK 时序 ────────────────────────────────────────────────────────

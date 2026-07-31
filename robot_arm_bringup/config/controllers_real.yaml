@@ -2,8 +2,9 @@
 # 实物 ros2_control 控制器配置（单 controller_manager 管全 6 轴）：
 #   arm_controller(JTC) 一个控制器 claim 全 6 轴，跨两个硬件组件——
 #     臂 J1-3   → canopen_ros2_control/RobotSystem（ros2_canopen，CiA402）
-#     云台 J4-6 → robot_gimbal_driver/GimbalForwardingInterface（转发插件，无 HID；
-#                 实际执行者是 robot_gimbal_node，见 docs/云台控制路径融合方案.md）
+#     云台 J4-6 → robot_gimbal_driver_v2/GimbalForwardingInterface（转发插件，无串口；
+#                 2026-07-28 云台换 V2：实际执行者 robot_gimbal_node_v2 跑在云台板端，
+#                 臂侧经 gimbal_v2_bridge 翻译成 GimbalCommand/GimbalStatus）
 #   与 Gazebo/MuJoCo 后端的「单一 6 轴命令总线 /arm_controller/joint_trajectory」对齐，
 #   上层（GUI/commander/MoveIt/visp）6 关节轨迹直接可用，无需分流。
 #   gimbal_controller 仅保留定义供云台单独调试（real.launch 不 spawn；

@@ -334,7 +334,9 @@ class App:
         self._mtp_xyz, self._mtp_rpy = {}, {}
         for col, (k, dflt, lo, hi, unit) in enumerate([
             ('X',0.30,-0.8,0.8,'m'),('Y',0.00,-0.8,0.8,'m'),('Z',0.50,-0.1,0.8,'m'),
-            ('Roll',90.,-180.,180.,'°'),('Pitch',10.,-90.,90.,'°'),('Yaw',0.,-180.,180.,'°'),
+            # 2026-07-29 云台换 V2：画面水平的 EEF roll 由 90° 变为 0°
+            #（见 arm_utils.EEF_LEVEL_ROLL）；位置与 pitch 不变，只改 roll。
+            ('Roll',0.,-180.,180.,'°'),('Pitch',10.,-90.,90.,'°'),('Yaw',0.,-180.,180.,'°'),
         ]):
             ttk.Label(row, text=f'{k}({unit}):').pack(side=tk.LEFT, padx=(4, 1))
             v = tk.DoubleVar(value=dflt)
@@ -451,14 +453,15 @@ class App:
         ttk.Label(r1, text='起始位姿', foreground='#2266aa', width=8).pack(side=tk.LEFT)
         ttk.Button(r1, text='↩ 移到起始位', width=12,
                    command=self._goto_linear_start).pack(side=tk.RIGHT, padx=4)
-        self._tss_lin_start = self._pose_row(tab, [0.30, 0.0, 0.60, 90., 0., 0.])
+        # roll 90.→0.：云台 V2 下 0° 才是画面水平（见 arm_utils.EEF_LEVEL_ROLL）
+        self._tss_lin_start = self._pose_row(tab, [0.30, 0.0, 0.60, 0., 0., 0.])
 
         # 终止位姿
         r2 = ttk.Frame(tab); r2.pack(fill=tk.X, pady=(4, 0))
         ttk.Label(r2, text='终止位姿', foreground='#aa4422', width=8).pack(side=tk.LEFT)
         ttk.Button(r2, text='→ 移到终止位', width=12,
                    command=self._goto_linear_end).pack(side=tk.RIGHT, padx=4)
-        self._tss_lin_end = self._pose_row(tab, [0.30, 0.0, 0.40, 90., 0., 0.])
+        self._tss_lin_end = self._pose_row(tab, [0.30, 0.0, 0.40, 0., 0., 0.])
 
     def _build_tss_orbit_tab(self, nb):
         tab = ttk.Frame(nb, padding=6); nb.add(tab, text='球面环绕 ORBIT')

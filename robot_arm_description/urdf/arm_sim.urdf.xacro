@@ -13,7 +13,8 @@
     world
       └─ arm_base_joint (fixed)
            └─ arm_base_link
-                └─ Joint1 → ... → tool0 → camera_optical_frame
+                └─ Joint1..3 → tool0（臂法兰）→ gimbal_base_link（云台 V2）
+                     → Joint4..6 → gimbal_tool0 → Cam0 → camera_optical_frame
 -->
 <robot name="eMeetArm_models" xmlns:xacro="http://www.ros.org/wiki/xacro">
 

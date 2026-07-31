@@ -74,17 +74,31 @@ inline Vec3 cart_to_sphere(double px, double py, double pz,
   return {theta, phi, r};   // (theta, phi, r)
 }
 
-// EEF X 轴朝向目标、roll 固定 90°（相机光轴沿 EEF X 的安装方式）
+// 画面水平所需的 EEF roll（rad）——必须与 Python 侧 arm_utils.EEF_LEVEL_ROLL 保持一致。
+//
+// 推导：设 R_c = R(EEF→相机光学系)。画面水平 ⇔ 图像右向量（光学 +X）水平
+//       ⇔ (R_eef · R_c)[2][0] == 0，其中 R_eef = Rz(yaw)Ry(pitch)Rx(roll)。
+//       对任意 pitch/yaw 都成立的 roll 即本常量。
+//
+//   V1（tool0 → camera_optical_frame，rpy = 0, -π/2, π）  → roll = π/2  ✔ 旧值
+//   V2（gimbal_tool0 → Cam0，       rpy = -π/2, 0, -π/2） → roll = 0
+//
+// 2026-07-29：云台换 V2 后仍用 π/2，导致环绕运镜画面歪斜 90°，且逼云台 roll 轴
+// （Joint5，±1.5 rad）去凑该姿态 → IK 大面积无解，故改为 0。
+// 两代的光轴都是 EEF 的 +X 轴，所以下面 pitch/yaw 的算法不变。
+inline constexpr double EEF_LEVEL_ROLL = 0.0;
+
+// EEF X 轴朝向目标（= 相机光轴指向目标），roll 取 EEF_LEVEL_ROLL 保证画面水平
 inline Quat aim_quat(double cam_x, double cam_y, double cam_z,
                      double tgt_x, double tgt_y, double tgt_z)
 {
   double dx = tgt_x - cam_x, dy = tgt_y - cam_y, dz = tgt_z - cam_z;
   const double n = std::sqrt(dx * dx + dy * dy + dz * dz);
-  if (n < 1e-9) return rpy_to_quat(M_PI / 2, 0.0, 0.0);
+  if (n < 1e-9) return rpy_to_quat(EEF_LEVEL_ROLL, 0.0, 0.0);
   dx /= n; dy /= n; dz /= n;
   const double pitch = std::asin(std::clamp(-dz, -1.0, 1.0));
   const double yaw   = std::atan2(dy, dx);
-  return rpy_to_quat(M_PI / 2, pitch, yaw);
+  return rpy_to_quat(EEF_LEVEL_ROLL, pitch, yaw);
 }
 
 }  // namespace robot_arm_node::motion

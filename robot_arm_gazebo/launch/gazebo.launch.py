@@ -81,6 +81,10 @@ def generate_launch_description():
     gazebo_share     = get_package_share_directory('robot_arm_gazebo')
     moveit_share     = get_package_share_directory('robot_arm_moveit_config')
     arm_share_parent = os.path.dirname(desc_share)   # Gazebo 解析 package://robot_arm_description/... 需要
+    # 云台 V2 的网格在另一个包/另一个 share 根，Gazebo 解析
+    # package://robot_gimbal_description_v2/... 同样需要它的父目录
+    gimbal_share_parent = os.path.dirname(
+        get_package_share_directory('robot_gimbal_description_v2'))
     moveit_cfg       = os.path.join(moveit_share, 'config')
     xacro_path        = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
     controllers_yaml_path = os.path.join(bringup_share, 'config', 'controllers.yaml')
@@ -293,7 +297,12 @@ def generate_launch_description():
         SetEnvironmentVariable('GAZEBO_MODEL_DATABASE_URI', ''),
         SetEnvironmentVariable(
             name='GAZEBO_MODEL_PATH',
+            # 2026-07-28 云台换 V2：云台网格在 robot_gimbal_description_v2 包里，
+            # 与 robot_arm_description 不同 share 根，必须一并加入，
+            # 否则 gzserver 解析 package://robot_gimbal_description_v2/meshes/... 失败
+            # （症状：云台各 link 不可见 / spawn 报找不到 mesh）。
             value=(arm_share_parent
+                   + ':' + gimbal_share_parent
                    + ':' + os.path.join(gazebo_share, 'models')
                    + ':/usr/share/gazebo-11/models'),
         ),

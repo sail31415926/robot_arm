@@ -10,15 +10,28 @@
        单个 controller_manager 管全 6 轴。
        v2.1（2026-07-13 控制路径融合）：J4-6 换 GimbalForwardingInterface（无 HID
        转发插件），robot_gimbal_node 为唯一 HID 拥有者、本 launch 常驻拉起。
+       v3.0（2026-07-28 云台换 V2）：云台由 V1（二轴 eMeetCamera / USB HID）换为
+       V2（C-200T 三轴 GCU 云台，robot_gimbal_V2）。**云台执行节点不在本工作空间运行**
+       （串口唯一拥有者跑在云台板端），臂侧只经话题收发。
+       v3.1（2026-07-31）：**去掉 gimbal_v2_bridge**。板端 robot_gimbal_node_v2 已原生收发
+       臂侧转发约定（直接订阅 forward_cmd、直接发布 joint_states_raw），再经桥翻译一遍会
+       双重驱动：命令送两遍，且桥把「转发流」升级成 GimbalCommand.POSITION —— 板端 POSITION
+       会解冻 FROZEN，等于让 JTC 的保持流能解冻 FREEZE，破坏仲裁优先级。现在转发插件直连板端。
+       （桥的源码保留在 robot_arm_driver 里未删，其 absolute_mode 相对⇄绝对姿态换算日后若要
+        重启用，须改成不与板端原生话题重叠的接法，见 docs/云台控制路径融合方案.md 第 0 节。）
 
 启动拓扑（单 arm_controller 管全 6 轴，与 Gazebo/MuJoCo 命令总线一致）：
   arm_controller（JTC，claim Joint1-6 position，跨两个硬件组件）
     ├─ Joint1-3  →  canopen_ros2_control/RobotSystem（ros2_canopen，CiA402/SocketCAN，position→IP）
-    └─ Joint4-6  →  robot_gimbal_driver/GimbalForwardingInterface（转发插件，无 HID）
-                      ├ 指令：变化检测 → /robot_gimbal/forward_cmd → robot_gimbal_node（唯一 HID 拥有者）
-                      └ 状态：/robot_gimbal/joint_states_raw（50Hz 真实回读）回填 → jsb 统一发 6 轴 /joint_states
-  robot_gimbal_node：本 launch 常驻必需组件（云台执行者 + Director 语义接口），
-                     详见 docs/云台控制路径融合方案.md
+    └─ Joint4-6  →  robot_gimbal_driver_v2/GimbalForwardingInterface（转发插件，无串口）
+                      ├ 指令：变化检测 → /robot_gimbal_v2/forward_cmd ──┐
+                      └ 状态：/robot_gimbal_v2/joint_states_raw 回填 ←──┤（跨机 DDS）
+                              → jsb 统一发 6 轴 /joint_states           │
+  云台板端 robot_gimbal_node_v2：**另行在云台板上启动** ←────────────────┘
+                     （串口 /dev/ttyS0 唯一拥有者，原生收发上面两个话题），本 launch 不拉起。
+                     前提：与本机同网段、同 ROS_DOMAIN_ID，且两侧都不能设 ROS_LOCALHOST_ONLY=1，
+                     否则转发插件收不到回读，会刷 "No feedback from robot_gimbal_node yet"
+                     并退化为指令回显（J4-6 的 /joint_states 是开环值，不是真实回读）。
   /arm_node/{enable,disable,recover} → arm_driver_services（转发 controller_manager）
   注：gimbal_controller 仅在 controllers_real.yaml 保留定义（云台单独调试用），本 launch 不 spawn。
 
@@ -38,8 +51,8 @@
 前置条件（真机）：
   sudo ip link set can0 up type can bitrate 500000 && sudo ip link set can0 txqueuelen 128
 
-视频流由 robot_camera_node（robot_gimbal_node 包）单独启动，仅占用 V4L2，
-不与云台控制路径（robot_gimbal_node 独占 HID）冲突，可同时运行。
+视频流：云台 V2 的主相机（Cam0）由云台板端自行发布，本 launch 不再拉相机节点
+（V1 的 robot_camera_node / camera_view 随云台换代一并下线）。
 
 @copyright Copyright (c) 2026 eMeet
 """
@@ -78,7 +91,6 @@ def _default_can_interface() -> str:
 def _setup(context, *args, **kwargs):
     desc_share       = get_package_share_directory('robot_arm_description')
     bringup_share    = get_package_share_directory('robot_arm_bringup')
-    gimbal_share     = get_package_share_directory('robot_gimbal_node')
     moveit_cfg       = os.path.join(
         get_package_share_directory('robot_arm_moveit_config'), 'config')
     controllers_yaml = os.path.join(bringup_share, 'config', 'controllers_real.yaml')
@@ -136,29 +148,9 @@ def _setup(context, *args, **kwargs):
         package='robot_arm_driver', executable='arm_driver_services', output='screen',
     )
 
-    # 云台执行节点（唯一 HID 拥有者）：消费转发插件的 /robot_gimbal/forward_cmd，
-    # 回发 /robot_gimbal/joint_states_raw 真实回读；同时提供 Director 语义接口
-    # （gimbal_cmd / cmd_vel / rotate_to_angle）。融合后为本 launch 必需常驻组件。
-    gimbal_params = os.path.join(gimbal_share, 'config', 'params.yaml')
-    robot_gimbal_node = Node(
-        package='robot_gimbal_node', executable='robot_gimbal_node',
-        name='robot_gimbal_node', output='screen',
-        parameters=[gimbal_params],
-    )
-
-    # 相机视频流节点：仅 V4L2，不占用 HID，与 ros2_control 无冲突
-    camera_params = os.path.join(gimbal_share, 'config', 'params.yaml')
-    robot_camera_node = Node(
-        package='robot_gimbal_node', executable='robot_camera_node',
-        name='robot_camera_node', output='screen',
-        parameters=[camera_params, {'publish_raw': True, 'publish_compressed': True}],
-    )
-    camera_view_node = Node(
-        package='robot_gimbal_node', executable='camera_view',
-        name='camera_view_gui', output='screen',
-        condition=IfCondition(gui),
-    )
-    _ = (robot_camera_node, camera_view_node)   # 默认不启（保留定义，需要时加回列表）
+    # 云台 V2 无需臂侧适配节点：板端 robot_gimbal_node_v2 原生订阅 /robot_gimbal_v2/forward_cmd、
+    # 原生发布 /robot_gimbal_v2/joint_states_raw，转发插件直接与它对接（见文件头 v3.1）。
+    # 原 gimbal_v2_bridge 已停止启用（双重驱动 + 破坏 FREEZE 仲裁），源码保留未删。
 
     # ── Controller spawners ───────────────────────────────────────────────────
     jsb_spawner = Node(
@@ -307,7 +299,6 @@ def _setup(context, *args, **kwargs):
 
     return [
         robot_state_publisher,
-        robot_gimbal_node,         # 先于 spawner 拉起，回读就绪前转发插件回显兜底
         ros2_control_node,
         arm_driver_services,
         mode_manager,              # 控制模式仲裁器（常驻，/robot_arm/switch_control_mode）

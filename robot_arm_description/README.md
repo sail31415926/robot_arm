@@ -49,7 +49,7 @@ world
 | 关节 | 类型 | 驱动 | 仿真 |
 | --- | --- | --- | --- |
 | Joint1–3 | revolute | CANopen（`canopen_ros2_control/RobotSystem`，ros2_canopen） | GazeboSystem |
-| Joint4–6 | revolute | `GimbalForwardingInterface`（转发插件，无 HID；实际执行者 robot_gimbal_node，见 docs/云台控制路径融合方案.md） | GazeboSystem（`gazebo_camera=true`） |
+| Joint4–6 | revolute | `robot_gimbal_driver_v2/GimbalForwardingInterface`（转发插件，不碰串口；实际执行者是**云台板端**的 robot_gimbal_node_v2，见 docs/云台控制路径融合方案.md） | GazeboSystem（`gazebo_camera=true`） |
 
 ---
 
@@ -78,7 +78,7 @@ world
 | `parent` | —（必填） | 挂载父 link 名称 |
 | `xyz` | `0 0 0.31` | 安装位置偏移（m） |
 | `rpy` | `0 0 0` | 安装姿态偏移（rad） |
-| `sim_mode` | `true` | `false`=转发模式（须运行 robot_gimbal_node），`true`=纯指令回显（无实物场景） |
+| `sim_mode` | `true` | `false`=转发模式（须有云台板端 robot_gimbal_node_v2 且跨机 DDS 通），`true`=纯指令回显（无实物场景） |
 | `gazebo_camera` | `false` | `true`=Gazebo 托管 Joint4-6，`false`=GimbalForwardingInterface（转发插件） |
 | `controllers_yaml` | `''` | 非空时注入 `gazebo_ros2_control` 插件 |
 

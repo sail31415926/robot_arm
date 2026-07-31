@@ -34,7 +34,7 @@ monitored_planning_scene_topic: "/move_group/monitored_planning_scene"
 # 关联到 MoveIt 规划组与帧
 move_group_name:           arm
 planning_frame:            arm_base_link
-ee_frame_name:             tool0
+ee_frame_name:             gimbal_tool0   # 2026-07-28 云台换 V2：末端由臂法兰 tool0 改为云台 Joint6 后的安装板
 robot_link_command_frame:  arm_base_link
 
 # 命令超时：超过此秒数没收到 Twist 则停止伺服

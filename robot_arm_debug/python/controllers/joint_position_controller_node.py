@@ -8,7 +8,8 @@
 纯控制逻辑，不依赖任何 GUI 框架：
          - 发布 JointTrajectory 至 /arm_controller/joint_trajectory
          - 订阅 /joint_states，通过可选回调上报关节位置/速度
-         - 通过 TF2 查询末端 tool0 在 base_link 下位姿，通过可选回调上报
+         - 通过 TF2 查询末端 gimbal_tool0 在 base_link 下位姿，通过可选回调上报
+           （2026-07-28 云台换 V2：末端 = 云台 Joint6 后的安装板，不是臂法兰 tool0）
 
 被 joint_position_gui.py（PyQt 调试 GUI）import 使用；也可独立运行：
   ros2 run robot_arm_node joint_position_controller_node.py
@@ -59,7 +60,7 @@ class JointPositionControllerNode(Node):
 
     def _publish_end_effector(self):
         try:
-            t = self.tf_buffer.lookup_transform('arm_base_link', 'tool0', rclpy.time.Time())
+            t = self.tf_buffer.lookup_transform('arm_base_link', 'gimbal_tool0', rclpy.time.Time())
             tr = t.transform.translation
             q = t.transform.rotation
             # quaternion → RPY (rad)

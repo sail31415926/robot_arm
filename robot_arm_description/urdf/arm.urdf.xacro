@@ -2,13 +2,20 @@
 <!--
   arm.urdf.xacro — eMeetArm 机械臂可复用 xacro macro
 
+  2026-07-28：云台由 V1（二轴 eMeetCamera / USB HID）换为 V2（C-200T 三轴 GCU 云台）。
+  本文件只描述机械臂 J1-3 + 末端法兰 tool0；Joint4-6 及相机/ToF 全部来自
+  robot_gimbal_description_v2 的 robot_gimbal_v2 macro，由下方 with_gimbal 开关注入。
+
   参数：
     parent           挂载父 link 名称（必填，例如 "base_link"）
     xyz              机械臂基座相对父 link 的位置偏移（默认 "0 0 0.31"）
     rpy              机械臂基座相对父 link 的姿态偏移（默认 "0 0 0"）
-    sim_mode         eMeetCamera 硬件插件是否仿真模式（默认 "true"）
-                       true  → 回显指令作为状态，不连接 USB HID（Gazebo）
-                       false → 连接实物 USB HID 设备（真实硬件）
+    with_gimbal      是否挂载云台 V2（默认 "true"；false = 只出 3 轴臂）
+    sim_mode         云台 V2 转发插件是否仿真模式（默认 "true"）
+                       true  → 回显指令作为状态，不发 ROS 话题（无实物场景）
+                       false → 经 /robot_gimbal_v2/forward_cmd 转发（实物，须云台板端节点在跑）
+    gazebo_camera    Joint4-6 是否交给 GazeboSystem（Gazebo 仿真设 true）
+    emit_camera_control 是否生成云台 J4-6 的 ros2_control 块
     controllers_yaml gazebo_ros2_control 控制器配置文件路径
                        非空时插入 gazebo_ros2_control 插件
                        空字符串时跳过（由外层组合 xacro 统一注入）
@@ -30,20 +37,29 @@
                        controllers_yaml="$(find robot_arm_bringup)/config/controllers.yaml"/>
     </robot>
 
-  TF 树（挂载到底盘时）：
+  TF 树（挂载到底盘、with_gimbal=true 时）：
     ${parent}（底盘根节点）
       └─ arm_base_joint (fixed, offset = xyz/rpy)
            └─ arm_base_link
                 └─ Joint1 → Link1
                      └─ Joint2 → Link2
                           └─ Joint3 → Link3
-                               └─ Joint4 → Link4
-                                    └─ Joint5 → Link5
-                                         └─ Joint6 → Link6
-                                              └─ tool0_joint → tool0
-                                                   └─ camera_optical_joint → camera_optical_frame
+                               └─ tool0_joint (fixed, Link3 +X 300mm) → tool0   ← 臂末端法兰
+                                    └─ gimbal_base_joint (fixed, 零偏移) → gimbal_base_link
+                                         ├─ Cam1_joint (fixed) → Cam1     广角相机（基座固定）
+                                         ├─ Tof_joint  (fixed) → Tof      ToF（基座固定）
+                                         └─ Joint4 → Link4
+                                              └─ Joint5 → Link5
+                                                   └─ Joint6 → Link6
+                                                        └─ gimbal_tool0_joint → gimbal_tool0
+                                                             └─ Cam0_joint → Cam0  主相机（光学系）
+                                                                  └─ camera_optical_joint
+                                                                       → camera_optical_frame（零偏移别名）
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<!-- 云台 V2（Joint4-6 + Cam0/Cam1/Tof）由独立描述包提供，见下方 with_gimbal -->
+<xacro:include filename="$(find robot_gimbal_description_v2)/urdf/gimbal.urdf.xacro"/>
 
 <xacro:macro name="emeet_arm"
              params="parent
@@ -55,6 +71,7 @@
                      arm_sim_mode:='false'
                      can_interface:='can0'
                      emit_camera_control:='true'
+                     with_gimbal:='true'
                      controllers_yaml:=''">
 
   <!-- ══ 挂载关节：连接父 link 与机械臂基座 ══════════════════════════════════ -->
@@ -139,62 +156,11 @@
     </collision>
   </link>
 
-  <link name="Link4">
-    <inertial>
-      <origin xyz="-0.0101264888829805 -9.43656253071801E-06 0.0183147239415546" rpy="0 0 0"/>
-      <mass value="0.096843847451149"/>
-      <inertia ixx="3.90651033692534E-05" ixy="-7.03126515657744E-09" ixz="1.31677639794987E-05"
-               iyy="4.72677970007942E-05" iyz="-4.24198916633624E-09" izz="5.03679132119555E-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="package://robot_arm_description/meshes/Link4.STL"/></geometry>
-      <material name=""><color rgba="0.30 0.30 0.30 1"/></material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="package://robot_arm_description/meshes/Link4.STL"/></geometry>
-    </collision>
-  </link>
-
-  <link name="Link5">
-    <inertial>
-      <origin xyz="0.0012638 0.00010623 0.021049" rpy="0 0 0"/>
-      <mass value="0.045324"/>
-      <inertia ixx="9.6597E-06" ixy="4.2023E-08"  ixz="1.6641E-06"
-               iyy="1.3078E-05" iyz="-8.5768E-08" izz="8.9202E-06"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="package://robot_arm_description/meshes/Link5.STL"/></geometry>
-      <material name=""><color rgba="0.27 0.28 0.27 1"/></material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="package://robot_arm_description/meshes/Link5.STL"/></geometry>
-    </collision>
-  </link>
-
-  <link name="Link6">
-    <inertial>
-      <origin xyz="-0.000391828204109268 -5.10898276429028E-05 8.72654266097506E-05" rpy="0 0 0"/>
-      <mass value="0.0550538676063611"/>
-      <inertia ixx="1.97473690747458E-05" ixy="2.97287907271867E-08"  ixz="-3.3993136804071E-08"
-               iyy="1.6757375365036E-05"  iyz="-1.34242857049597E-07" izz="1.07644206564509E-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="package://robot_arm_description/meshes/Link6.STL"/></geometry>
-      <material name=""><color rgba="0.24 0.24 0.26 1"/></material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="package://robot_arm_description/meshes/Link6.STL"/></geometry>
-    </collision>
-  </link>
-
+  <!-- 臂末端法兰：云台（robot_gimbal_V2）的挂载面。
+       2026-07-28 云台换 V2 后，原 Link4-6（V1 二轴云台几何）连同 J4-6 一并移出本文件，
+       由 robot_gimbal_description_v2 的 robot_gimbal_v2 macro 提供。
+       Link4-6/Link4-6.STL 的旧网格文件保留在 meshes/ 下未删（eMeetArm_models.urdf 仍引用）。 -->
   <link name="tool0"/>
-  <link name="camera_optical_frame"/>
 
   <!-- ══ Joints ═══════════════════════════════════════════════════════════════ -->
 
@@ -208,60 +174,44 @@
   </joint>
 
   <joint name="Joint2" type="revolute">
-    <origin xyz="0 -0.0625 0.1502" rpy="1.5708 -0.30769 -3.1416"/>
+    <!-- 2026-07-28 实机重标定：新零点 = 旧 +0.181 rad。
+         Origin_new = Origin_old·Rz(0.181)；roll=+π/2 使右乘 Rz 折叠为 pitch -= 0.181
+         （-0.30769 → -0.48869）。限位随刻度整体平移 -0.181（物理行程不变）。 -->
+    <origin xyz="0 -0.0625 0.1502" rpy="1.5708 -0.48869 -3.1416"/>
     <parent link="Link1"/>
     <child link="Link2"/>
     <axis xyz="0 0 1"/>
-    <limit lower="-0.8" upper="3.14" effort="30" velocity="3.14"/>
+    <limit lower="-0.981" upper="2.959" effort="30" velocity="3.14"/>
     <dynamics damping="5.0" friction="0.0"/>
   </joint>
 
   <joint name="Joint3" type="revolute">
-    <origin xyz="0.35 0 0.089" rpy="0 0 2.8339"/>
+    <!-- 2026-07-28 实机重标定：新零点 = 旧 -0.176 rad。
+         Origin_new = Origin_old·Rz(-0.176)；rpy 最右即 Rz，故 yaw += -0.176
+         （2.8339 → 2.6579）。
+         限位：按新零点收紧为 [-2.5, 0]（物理行程 [-2.964, 0.226] 内的人为限制）。
+         2026-07-29 上限由 0.0 放宽到 0.02：上限精确压在工作点 0 上时，控制器稳态误差
+         会让实测值一半的时间落在限位外，MoveIt 的 IK 会丢弃种子状态（刷
+         "Initial guess exceeds joint limits"）、规划则报 Start state out of bounds。
+         实测零位抖动 3.2e-5 rad，0.02 rad 留了 600 倍余量。 -->
+    <origin xyz="0.35 0 0.089" rpy="0 0 2.6579"/>
     <parent link="Link2"/>
     <child link="Link3"/>
     <axis xyz="0 0 1"/>
-    <limit lower="-3.14" upper="0.05" effort="5" velocity="3.14"/>
+    <limit lower="-2.5" upper="0.02" effort="5" velocity="3.14"/>
     <dynamics damping="3.0" friction="0.0"/>
   </joint>
 
-  <joint name="Joint4" type="revolute">
-    <origin xyz="0.339 -0.024975 -0.04" rpy="1.5708 0 0"/>
-    <parent link="Link3"/>
-    <child link="Link4"/>
-    <axis xyz="0 0 -1"/>
-    <limit lower="-3.1" upper="3.1" effort="1" velocity="1"/>
-    <dynamics damping="0.5" friction="0.0"/>
-  </joint>
-
-  <joint name="Joint5" type="revolute">
-    <origin xyz="-0.022739 0 0.048353" rpy="-1.5708 0 -1.5708"/>
-    <parent link="Link4"/>
-    <child link="Link5"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-0.7854" upper="0.7854" effort="1" velocity="1"/>
-    <dynamics damping="0.5" friction="0.0"/>
-  </joint>
-
-  <joint name="Joint6" type="revolute">
-    <origin xyz="0 0 0.03484" rpy="3.1416 -1.5708 0"/>
-    <parent link="Link5"/>
-    <child link="Link6"/>
-    <axis xyz="0 0 -1"/>
-    <limit lower="-1.5" upper="0.5" effort="1" velocity="1"/>
-    <dynamics damping="0.5" friction="0.0"/>
-  </joint>
-
+  <!-- 臂末端法兰 tool0：Link3 坐标系 +X 方向 300 mm，绕 X 轴 +90°。
+       云台 V2 的 gimbal_base_link 与本坐标系**完全重合**（gimbal_base_joint 零偏移零旋转），
+       所以安装姿态一律写在这里，不写在 gimbal_base_joint 上——tool0 就是机械接口面的
+       权威定义，改安装姿态只改这一处。
+       注：与旧 Joint4 原点（xyz 0.339 -0.024975 -0.04 / rpy 1.5708 0 0）不同，
+       这是换 V2 云台后重新定义的机械接口面。 -->
   <joint name="tool0_joint" type="fixed">
-    <parent link="Link6"/>
+    <parent link="Link3"/>
     <child link="tool0"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-  </joint>
-
-  <joint name="camera_optical_joint" type="fixed">
-    <parent link="tool0"/>
-    <child link="camera_optical_frame"/>
-    <origin xyz="0 0 0" rpy="0 -1.5708 3.1416"/>
+    <origin xyz="0.3 0 0" rpy="1.5708 0 0"/>
   </joint>
 
   <!-- ══ ros2_control ══════════════════════════════════════════════════════════
@@ -303,8 +253,8 @@
     <joint name="Joint2">
       <param name="device_name">joint_2</param>
       <command_interface name="position">
-        <param name="min">-0.8</param>
-        <param name="max">3.14</param>
+        <param name="min">-0.981</param>
+        <param name="max">2.959</param>
       </command_interface>
       <command_interface name="velocity"/>
       <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
@@ -313,8 +263,8 @@
     <joint name="Joint3">
       <param name="device_name">joint_3</param>
       <command_interface name="position">
-        <param name="min">-3.14</param>
-        <param name="max">0.05</param>
+        <param name="min">-2.5</param>
+        <param name="max">0.02</param>
       </command_interface>
       <command_interface name="velocity"/>
       <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
@@ -322,63 +272,35 @@
     </joint>
   </ros2_control>
 
-  <!-- ══ ros2_control ══════════════════════════════════════════════════════════
-       Camera joints 4-6：
-         gazebo_camera=true  → GazeboSystem（Gazebo 仿真，物理由 Gazebo 托管）
-         gazebo_camera=false → GimbalForwardingInterface（实物/MuJoCo/display）
-                               无 HID：write 变化检测转发给 robot_gimbal_node
-                              （唯一 HID 拥有者），read 回填其真实回读，
-                               详见 docs/云台控制路径融合方案.md
-                               sim_mode=true  纯指令回显（无 ROS 话题，无实物场景用）
-                               sim_mode=false 转发模式（实物，须运行 robot_gimbal_node）
+  <!-- ══ 云台 V2（robot_gimbal_V2 / C-200T 三轴 GCU 云台）════════════════════════
+       Joint4-6 的 link/joint/ros2_control 全部由 robot_gimbal_description_v2 的
+       robot_gimbal_v2 macro 提供，本文件不再自带云台几何（2026-07-28 换 V2）。
+       gimbal_base_link 与臂末端法兰 tool0 重合挂接（零偏移）。
+       tool_link 改名为 gimbal_tool0：避免与臂侧 tool0 法兰重名。
+       sim_mode / gazebo_camera / emit_camera_control 三个参数原样透传，
+       下游 launch 的 mappings 不需要改。
        ═══════════════════════════════════════════════════════════════════════ -->
-  <xacro:if value="${emit_camera_control}">
-  <ros2_control name="eMeetCamera_hardware" type="system">
-    <hardware>
-      <xacro:if value="${gazebo_camera}">
-        <plugin>gazebo_ros2_control/GazeboSystem</plugin>
-      </xacro:if>
-      <xacro:unless value="${gazebo_camera}">
-        <plugin>robot_gimbal_driver/GimbalForwardingInterface</plugin>
-        <param name="forward_cmd_topic">/robot_gimbal/forward_cmd</param>
-        <param name="states_topic">/robot_gimbal/joint_states_raw</param>
-        <param name="cmd_change_threshold">0.01</param>
-        <xacro:if value="${sim_mode}">
-          <param name="sim_mode">true</param>
-        </xacro:if>
-        <xacro:unless value="${sim_mode}">
-          <param name="sim_mode">false</param>
-        </xacro:unless>
-      </xacro:unless>
-    </hardware>
-    <joint name="Joint4">
-      <command_interface name="position">
-        <param name="min">-3.1</param>
-        <param name="max">3.1</param>
-      </command_interface>
-      <command_interface name="velocity"/>
-      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
-      <state_interface name="velocity"/>
+  <xacro:if value="${with_gimbal}">
+    <!-- 与 tool0 完全重合：安装姿态写在 tool0_joint 上（见上），这里保持全零 -->
+    <xacro:robot_gimbal_v2
+        parent="tool0"
+        xyz="0 0 0"
+        rpy="0 0 0"
+        sim_mode="${sim_mode}"
+        gazebo_camera="${gazebo_camera}"
+        emit_camera_control="${emit_camera_control}"
+        tool_link="gimbal_tool0"
+        controllers_yaml=""/>
+
+    <!-- 兼容别名：V2 以 Cam0 的 link 系为光学系（REP-103，z 光轴 / y 下 / x 右），
+         下游（IBVS、person_detector、planner、rviz 等）仍按 camera_optical_frame
+         查 TF，这里做零偏移别名，语义完全等价。 -->
+    <link name="camera_optical_frame"/>
+    <joint name="camera_optical_joint" type="fixed">
+      <parent link="Cam0"/>
+      <child link="camera_optical_frame"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
     </joint>
-    <joint name="Joint5">
-      <command_interface name="position">
-        <param name="min">-0.7854</param>
-        <param name="max">0.7854</param>
-      </command_interface>
-      <command_interface name="velocity"/>
-      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
-      <state_interface name="velocity"/>
-    </joint>
-    <joint name="Joint6">
-      <command_interface name="position">
-        <param name="min">-1.5</param>
-        <param name="max">0.5</param>
-      </command_interface>
-      <command_interface name="velocity"/>
-      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
-      <state_interface name="velocity"/>
-    </joint>
-  </ros2_control>
   </xacro:if>
 
   <!-- ══ Gazebo 材质 ══════════════════════════════════════════════════════════ -->
@@ -406,39 +328,7 @@
       <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
     </material></visual>
   </gazebo>
-  <gazebo reference="Link4">
-    <visual><material>
-      <ambient>0.55 0.57 0.60 1</ambient><diffuse>0.75 0.77 0.80 1</diffuse>
-      <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
-    </material></visual>
-  </gazebo>
-  <gazebo reference="Link5">
-    <visual><material>
-      <ambient>0.55 0.57 0.60 1</ambient><diffuse>0.75 0.77 0.80 1</diffuse>
-      <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
-    </material></visual>
-  </gazebo>
-  <gazebo reference="Link6">
-    <visual><material>
-      <ambient>0.55 0.57 0.60 1</ambient><diffuse>0.75 0.77 0.80 1</diffuse>
-      <specular>0.95 0.95 0.95 80</specular><emissive>0 0 0 1</emissive>
-    </material></visual>
-    <sensor name="camera_sensor" type="camera">
-      <pose>0 0 0 -1.5708 0 0</pose>
-      <camera name="head">
-        <horizontal_fov>1.518</horizontal_fov>
-        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
-        <clip><near>0.05</near><far>10.0</far></clip>
-      </camera>
-      <plugin name="camera_controller" filename="libgazebo_ros_camera.so">
-        <frame_name>camera_optical_frame</frame_name>
-        <ros><namespace>/camera</namespace></ros>
-      </plugin>
-      <always_on>1</always_on>
-      <update_rate>30</update_rate>
-      <visualize>true</visualize>
-    </sensor>
-  </gazebo>
+  <!-- 云台 V2 的 link 材质与 Cam0 相机 sensor 由 robot_gimbal_v2 macro 自带，此处不重复。 -->
 
   <!-- ══ Gazebo ros2_control 插件 ══════════════════════════════════════════════
        controllers_yaml 非空时才插入，避免组合时重复注入

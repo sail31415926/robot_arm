@@ -49,6 +49,7 @@ VISP_NODE     = '/visp_ibvs_node'
 JOINT_NAMES  = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
 TRAJ_TOPIC   = '/arm_controller/joint_trajectory'
 # 与 cartesian_velocity_controller_node.py 保持一致
+# 关节空间预备位姿；J2=-J3 使前臂水平、末端(gimbal_tool0)姿态中性，换 V2 后仍成立
 READY_JOINTS = [0.0, 0.5, -0.5, 0.0, 0.0, 0.0]
 HOME_JOINTS  = [0.0, 0.0,  0.0, 0.0, 0.0, 0.0]
 

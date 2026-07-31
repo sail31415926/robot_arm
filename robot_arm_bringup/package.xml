@@ -26,8 +26,11 @@
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>moveit_ros_move_group</exec_depend>
   <exec_depend>moveit_servo</exec_depend>
-  <exec_depend>robot_gimbal_node</exec_depend>         <!-- 云台执行节点，real 常驻必需 -->
-  <exec_depend>robot_gimbal_driver</exec_depend>       <!-- URDF 插件 GimbalForwardingInterface -->
+  <!-- 云台 V2（2026-07-28 换代）：执行节点 robot_gimbal_node_v2 跑在云台板端、不在此依赖；
+       臂侧只需 URDF 转发插件 + 描述包，转发插件直连板端原生话题
+       （2026-07-31 起不再拉 gimbal_v2_bridge，理由见 real.launch.py 文件头 v3.1） -->
+  <exec_depend>robot_gimbal_driver_v2</exec_depend>    <!-- URDF 插件 GimbalForwardingInterface -->
+  <exec_depend>robot_gimbal_description_v2</exec_depend><!-- arm.urdf.xacro include 云台 macro -->
   <exec_depend>xacro</exec_depend>
 
   <!-- 调试/可视化 launch（display / camera_view） -->

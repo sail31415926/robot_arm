@@ -114,7 +114,7 @@ Joint1 三秒走到 0.1 rad 再回零。
   ```bash
   ros2 run robot_arm_driver set_motor_limits can0 1                       # 只读显示（pp↔rad 双单位）
   ros2 run robot_arm_driver set_motor_limits can0 1 --vel 1.5 --acc 2.0   # 改 PP 速度/加速度
-  ros2 run robot_arm_driver set_motor_limits can0 2 --min -0.8 --max 3.14 --save  # 软限位并固化
+  ros2 run robot_arm_driver set_motor_limits can0 2 --min -0.981 --max 2.959 --save  # 软限位并固化
   # 选项：--vel --maxvel --acc --dec --qstop (rad/s, rad/s²) | --min --max (rad) | --torque (%) | --save
   ```
 

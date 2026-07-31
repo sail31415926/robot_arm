@@ -35,7 +35,7 @@
  * 例：
  *   ros2 run robot_arm_driver set_motor_limits can0 1                      # 查看
  *   ros2 run robot_arm_driver set_motor_limits can0 1 --vel 1.5 --acc 2.0  # 临时改
- *   ros2 run robot_arm_driver set_motor_limits can0 2 --min -0.8 --max 3.14 --save  # 软限位并固化
+ *   ros2 run robot_arm_driver set_motor_limits can0 2 --min -0.981 --max 2.959 --save  # 软限位并固化
  *
  * @date 2026-07-08
  * @copyright Copyright (c) 2026 EMEET

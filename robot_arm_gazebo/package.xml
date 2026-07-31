@@ -14,6 +14,7 @@
   <exec_depend>robot_arm_bringup</exec_depend>
   <exec_depend>robot_arm_moveit_config</exec_depend>
   <exec_depend>robot_arm_description</exec_depend>
+  <exec_depend>robot_gimbal_description_v2</exec_depend>   <!-- 云台 V2 网格，GAZEBO_MODEL_PATH 需要 -->
   <exec_depend>robot_arm_node</exec_depend>
   <exec_depend>robot_arm_debug</exec_depend>
 

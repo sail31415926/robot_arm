@@ -75,20 +75,41 @@ def quat_slerp(q0, q1, t):
 
 # ── 球坐标 / 相机朝向工具（供 spherical_orbit_controller / trajectory_shot_server 等使用）──
 
+# 画面水平所需的 EEF roll（rad）——由「EEF 系 → 相机光学系」的固定安装旋转决定。
+#
+# 推导：设 R_c = R(EEF→光学系)。画面水平 ⇔ 图像右向量（光学 +X）水平
+#       ⇔ (R_eef · R_c)[2,0] == 0，其中 R_eef = Rz(yaw)Ry(pitch)Rx(roll)。
+#       该式对任意 pitch/yaw 成立的 roll 就是本常量。
+#
+#   V1（tool0 → camera_optical_frame，rpy = 0, -π/2, π）    → roll = π/2  ✔ 老代码
+#   V2（gimbal_tool0 → Cam0，       rpy = -π/2, 0, -π/2）   → roll = 0
+#
+# 2026-07-29：云台换 V2 后仍沿用 π/2，导致环绕运镜画面歪斜 90°，且逼云台 roll 轴
+# （Joint5，±1.5 rad）去凑该姿态 → IK 大面积无解。故改为 0。
+# 两代的光轴都是 EEF 的 +X 轴，所以下面 pitch/yaw 的算法不变。
+# 若以后改相机安装姿态，重新按上式解一次 roll 即可（0 和 π 都能让画面水平，
+# 差别是画面上下翻转；取 0）。
+EEF_LEVEL_ROLL = 0.0
+
+
 def aim_quat(cam_x, cam_y, cam_z, tgt_x, tgt_y, tgt_z):
-    """EEF X 轴朝向目标，roll 固定 90°（相机光轴沿 EEF X 的安装方式）。"""
+    """EEF X 轴朝向目标（= 相机光轴指向目标），roll 取 EEF_LEVEL_ROLL 保证画面水平。"""
     dx, dy, dz = tgt_x - cam_x, tgt_y - cam_y, tgt_z - cam_z
     n = math.sqrt(dx*dx + dy*dy + dz*dz)
     if n < 1e-9:
-        return rpy_to_quat(math.pi/2, 0., 0.)
+        return rpy_to_quat(EEF_LEVEL_ROLL, 0., 0.)
     dx, dy, dz = dx/n, dy/n, dz/n
     pitch = math.asin(max(-1., min(1., -dz)))
     yaw   = math.atan2(dy, dx)
-    return rpy_to_quat(math.pi/2, pitch, yaw)
+    return rpy_to_quat(EEF_LEVEL_ROLL, pitch, yaw)
 
 
 def look_at_quat(cam_x, cam_y, cam_z, tgt_x, tgt_y, tgt_z):
-    """EEF Z 轴从相机位置指向目标（look-at），world Z-up hint。返回 (qx,qy,qz,qw)。"""
+    """EEF Z 轴从相机位置指向目标（look-at），world Z-up hint。返回 (qx,qy,qz,qw)。
+
+    ⚠ 本机器人的相机光轴是 EEF 的 **+X** 轴，不是 +Z —— 直接拿本函数的结果当
+    「相机对准目标」会差 90°。当前无调用点（仅被 import）。要做对准请用 aim_quat。
+    """
     dx, dy, dz = tgt_x - cam_x, tgt_y - cam_y, tgt_z - cam_z
     n = math.sqrt(dx*dx + dy*dy + dz*dz)
     if n < 1e-9:

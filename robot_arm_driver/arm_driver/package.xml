@@ -22,6 +22,12 @@
   <depend>canopen_ros2_control</depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
+  <!-- 以下 4 项原为 gimbal_v2_bridge 所用；该节点 2026-07-31 起停用（见 CMakeLists.txt）。
+       臂侧对云台只经两条 sensor_msgs/JointState 话题收发，**不再依赖云台的自定义消息包**
+       （robot_gimbal_interfaces_v2 已摘除，重启用桥时须一并恢复）。 -->
+  <depend>sensor_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
 
   <!-- 运行时硬件栈：master/402 驱动 -->
   <exec_depend>canopen_core</exec_depend>

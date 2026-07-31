@@ -9,7 +9,7 @@
          - 6个关节独立滑块控制，滑块与数值框双向同步
          - 发布轨迹指令至 /arm_controller/joint_trajectory
          - 订阅 /joint_states 实时显示各关节位置与速度
-         - 通过 TF2 查询并显示末端 tool0 在 base_link 下的坐标
+         - 通过 TF2 查询并显示末端 gimbal_tool0 在 base_link 下的坐标
          - 支持可调运动时间与一键回零位功能
 
 v1.1 两个实机安全/体验修复：
@@ -42,10 +42,12 @@ from PyQt5.QtGui import QFont
 
 from joint_position_controller_node import JointPositionControllerNode, JOINT_NAMES
 
+# 2026-07-28 实机重标定：J2 新零点 = 旧 +0.181 rad，J3 = 旧 -0.176 rad，滑条范围随刻度平移；
+# 同日 J3 行程收紧为 [-2.5, 0]
 JOINT_LIMITS = [
     (-3.1,    3.1),
-    (-0.8,    3.14),
-    (-3.14,   0.0),
+    (-0.981,  2.959),
+    (-2.5,    0.02),
     (-3.1,    3.1),
     (-0.7854, 0.7854),
     (-1.5,    0.5),
@@ -164,7 +166,7 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_end_effector_group(self) -> QGroupBox:
-        box = QGroupBox('末端位姿 (base_link → tool0)')
+        box = QGroupBox('末端位姿 (arm_base_link → gimbal_tool0)')
         grid = QGridLayout(box)
         grid.setSpacing(6)
         style = 'background:#f0f0f0; border:1px solid #ccc; padding:2px;'

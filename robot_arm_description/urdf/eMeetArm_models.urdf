@@ -154,7 +154,8 @@
     type="revolute">
     <origin
       xyz="0 -0.0625 0.1502"
-      rpy="1.5708 -0.30769 -3.1416" />
+      rpy="1.5708 -0.48869 -3.1416" />
+    <!-- 2026-07-28 实机重标定：新零点 = 旧 +0.181 rad（pitch -0.30769→-0.48869，限位 -0.181） -->
     <parent
       link="Link1" />
     <child
@@ -162,8 +163,8 @@
     <axis
       xyz="0 0 1" />
     <limit
-      lower="-0.8"
-      upper="3.14"
+      lower="-0.981"
+      upper="2.959"
       effort="30"
       velocity="3.14" />
     <dynamics damping="5.0" friction="0.0"/>
@@ -213,7 +214,9 @@
     type="revolute">
     <origin
       xyz="0.35 0 0.089"
-      rpy="0 0 2.8339" />
+      rpy="0 0 2.6579" />
+    <!-- 2026-07-28 实机重标定：新零点 = 旧 -0.176 rad（yaw 2.8339→2.6579）；
+         限位按新零点收紧为 [-2.5, 0]（物理行程 [-2.964, 0.226] 内的人为限制） -->
     <parent
       link="Link2" />
     <child
@@ -221,8 +224,8 @@
     <axis
       xyz="0 0 1" />
     <limit
-      lower="-3.14"
-      upper="0.05"
+      lower="-2.5"
+      upper="0.02"
       effort="5"
       velocity="3.14" />
     <dynamics damping="3.0" friction="0.0"/>
@@ -437,8 +440,8 @@
     </joint>
     <joint name="Joint2">
       <command_interface name="position">
-        <param name="min">-0.8</param>
-        <param name="max">3.14</param>
+        <param name="min">-0.981</param>
+        <param name="max">2.959</param>
       </command_interface>
       <command_interface name="velocity"/>
       <state_interface name="position">
@@ -448,8 +451,8 @@
     </joint>
     <joint name="Joint3">
       <command_interface name="position">
-        <param name="min">-3.14</param>
-        <param name="max">0.05</param>
+        <param name="min">-2.5</param>
+        <param name="max">0.02</param>
       </command_interface>
       <command_interface name="velocity"/>
       <state_interface name="position">
@@ -459,49 +462,13 @@
     </joint>
   </ros2_control>
 
-  <!-- Camera joints 4-6: EMEET PTZ HID hardware plugin
-       sim_mode=true  → echo commands as state, no HID connection (Gazebo)
-       sim_mode=false → connect to physical USB HID device (real hardware) -->
-  <ros2_control name="eMeetCamera_hardware" type="system">
-    <hardware>
-      <plugin>robot_gimbal_driver/CameraHardwareInterface</plugin>
-      <param name="camera_type">auto</param>
-      <param name="sim_mode">true</param>
-    </hardware>
-    <joint name="Joint4">
-      <command_interface name="position">
-        <param name="min">-3.1</param>
-        <param name="max">3.1</param>
-      </command_interface>
-      <command_interface name="velocity"/>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
-      <state_interface name="velocity"/>
-    </joint>
-    <joint name="Joint5">
-      <command_interface name="position">
-        <param name="min">-0.7854</param>
-        <param name="max">0.7854</param>
-      </command_interface>
-      <command_interface name="velocity"/>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
-      <state_interface name="velocity"/>
-    </joint>
-    <joint name="Joint6">
-      <command_interface name="position">
-        <param name="min">-1.5</param>
-        <param name="max">0.5</param>
-      </command_interface>
-      <command_interface name="velocity"/>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
-      <state_interface name="velocity"/>
-    </joint>
-  </ros2_control>
+  <!-- Joint4-6（云台）的 ros2_control 声明不在本文件里。
+       2026-07-28 云台换代 V2（C-200T 三轴）后，原 V1 的 eMeetCamera_hardware 块
+       （robot_gimbal_driver/CameraHardwareInterface，USB HID 二轴）已随 V1 包一并删除。
+       现在 J4-6 的 ros2_control 由 robot_gimbal_description_v2 的 gimbal.urdf.xacro 提供
+       （robot_gimbal_driver_v2/GimbalForwardingInterface），经 arm.urdf.xacro include。
+       本文件是 SolidWorks 原始导出，仅作运动学参考/备用（MATLAB 可达域分析读它），
+       不参与仿真/实机启动，故不再维护云台侧的 ros2_control 声明。 -->
 
   <gazebo reference="base_link">
     <visual>
