@@ -74,6 +74,10 @@ PlanResult solve_and_send(
     int decimate_k = IK_DECIMATE,
     double ik_timeout_s = IK_TIMEOUT_S,
     const std::function<bool()> & stop_check = nullptr,
-    rclcpp::Logger logger = rclcpp::get_logger("arm_motion"));
+    rclcpp::Logger logger = rclcpp::get_logger("arm_motion"),
+    // 出参：成功时写入**末点的关节解**。上层用它做「只判臂 J1-3」的到位判据
+    // （末端 gimbal_tool0 在云台之后，笛卡尔判据会被云台回读拖累，见
+    //  commander/motion_policy.hpp 的 is_at_joints_prefix 注释）。
+    std::vector<double> * final_joints = nullptr);
 
 }  // namespace robot_arm_node::motion

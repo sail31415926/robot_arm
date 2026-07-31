@@ -2,16 +2,25 @@
 """
 @file   commander_test_gui.py
 @brief  Arm Commander 调试 GUI —— Director 视角的完整测试工具
-@version 2.0
-@date   2026-06-10
+@version 2.1
+@date   2026-07-31
 
-功能：
-  1. ArmMoveToPose      —— 姿态切换（STOWED/OBSERVE/SHOOTING）+ return_to_start
-  2. ArmTrajectoryShot  —— 直线运镜（LINEAR）/ 球面环绕运镜（ORBIT）+ return_to_start
-  3. ArmStatus 实时监控 —— 位姿/速度/状态/错误码
+功能（面板自上而下，与 Commander 的 4 个 action 对应）：
+  1. ArmStatus 实时监控 —— 位姿/速度/状态/错误码 + 到位指示灯 + 急停/清错/回零/使能
+  2. ArmMoveToPose      —— 姿态切换（STOWED/OBSERVE/SHOOTING）+ return_to_start
+  3. ArmMoveToJoint     —— 关节空间点到点（2026-07-31 新增）：J1-3 滑块 + 当前值只读框
+                           + 「↧ 读当前值」（把 /joint_states 实测灌进滑块，示教先手摆再微调）
+                           + 档位 / Δ相对增量 / 时长（0=按档位）
+                           云台 J4-6 由 Commander 保持不动，滑块范围 = URDF 限位
+  4. ArmTrajectoryShot  —— 直线运镜（LINEAR）/ 球面环绕运镜（ORBIT）+ return_to_start
+  （ArmTrackTarget 由 visp_ibvs_gui 单独覆盖，不在本 GUI）
+
+订阅：/robot_arm/arm_status（语义状态）+ /joint_states（关节角 —— ArmStatus 只报末端
+      位姿，关节角按总线约定从 /joint_states 读）
 
 用法：
   ros2 launch robot_arm_gazebo gazebo.launch.py controller:=commander
+  ros2 launch robot_arm_bringup real.launch.py  controller:=commander
 
 @copyright Copyright (c) 2026 eMeet
 """
@@ -35,9 +44,10 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 
-from robot_arm_interfaces.action import ArmMoveToPose, ArmTrajectoryShot
+from robot_arm_interfaces.action import ArmMoveToPose, ArmMoveToJoint, ArmTrajectoryShot
 from robot_arm_interfaces.msg import ArmStatus
 from robot_arm_interfaces.srv import ArmStop, ArmEnable, ArmHoming, ArmResetError
+from sensor_msgs.msg import JointState
 
 try:
     from arm_utils import aim_quat, sphere_to_cart, quat_to_rpy
@@ -48,8 +58,19 @@ except ImportError:
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────────
 ACTION_MTP   = '/robot_arm/move_to_pose'
+ACTION_MTJ   = '/robot_arm/move_to_joint'
 ACTION_TSS   = '/robot_arm/trajectory_shot'
 TOPIC_STATUS = '/robot_arm/arm_status'
+TOPIC_JOINTS = '/joint_states'
+
+# 关节滑块范围 = URDF 里 J1-3 的机械限位（2026-07-28 J2/J3 零点重标定后的值）。
+# 这里只是 GUI 的输入范围，真正的拦截在 Commander 侧（从 /robot_description 解析
+# URDF 校验，越界回 exit_reason="out_of_range" 且不下发）——两处不一致时以后者为准。
+ARM_JOINT_RANGE = [
+    ('Joint1', -2.618, 2.618),
+    ('Joint2', -0.981, 2.959),
+    ('Joint3', -2.500, 0.020),
+]
 
 STATE_LABELS = [
     (ArmMoveToPose.Goal.POSE_STATE_STOWED,   'STOWED  (0)  收纳位'),
@@ -76,12 +97,16 @@ class CommanderTestNode(Node):
         self._q = gui_q
 
         self._mtp_client          = ActionClient(self, ArmMoveToPose, ACTION_MTP)
+        self._mtj_client          = ActionClient(self, ArmMoveToJoint, ACTION_MTJ)
         self._tss_client          = ActionClient(self, ArmTrajectoryShot, ACTION_TSS)
         self._stop_client         = self.create_client(ArmStop,       '/robot_arm/stop')
         self._enable_client       = self.create_client(ArmEnable,     '/robot_arm/enable')
         self._homing_client       = self.create_client(ArmHoming,     '/robot_arm/homing')
         self._reset_error_client  = self.create_client(ArmResetError, '/robot_arm/reset_error')
         self._status_sub  = self.create_subscription(ArmStatus, TOPIC_STATUS, self._on_status, 10)
+        # 关节反馈：ArmStatus 只报末端位姿，关节角按总线约定从 /joint_states 读
+        self._joints_sub  = self.create_subscription(JointState, TOPIC_JOINTS, self._on_joints, 10)
+        self._last_arm_joints = None   # [J1,J2,J3]，供 GUI「读当前值」用
 
     # ── ArmMoveToPose ─────────────────────────────────────────────────────────────
     def send_mtp_goal(self, state, speed, return_to_start,
@@ -119,6 +144,52 @@ class CommanderTestNode(Node):
         flag = '✓' if r.success else '✗'
         self._q.put(('log', f'{flag} MTP {r.exit_reason}  err={r.error_code}  '
                      f'实际z={r.actual_pose.z:.3f}m'))
+
+    # ── ArmMoveToJoint ────────────────────────────────────────────────────────────
+    def send_mtj_goal(self, joints, speed, relative, duration_sec):
+        if not self._mtj_client.wait_for_server(timeout_sec=1.0):
+            self._q.put(('error', f'✗ 未发现 server: {ACTION_MTJ}')); return
+        goal = ArmMoveToJoint.Goal()
+        goal.target_joints    = [float(j) for j in joints]   # 必须 3 个（J1-3）
+        goal.transition_speed = speed
+        goal.relative         = bool(relative)
+        goal.duration_sec     = float(duration_sec)
+        spd  = {0:'SLOW',1:'NORMAL',2:'FAST'}.get(speed, str(speed))
+        mode = '相对' if relative else '绝对'
+        dur  = f' {duration_sec:.2f}s' if duration_sec > 0 else f' speed={spd}'
+        self._q.put(('log', f'→ MTJ {mode} [{joints[0]:.3f}, {joints[1]:.3f}, '
+                            f'{joints[2]:.3f}]{dur}'))
+        self._mtj_client.send_goal_async(
+            goal, feedback_callback=self._on_mtj_fb
+        ).add_done_callback(self._on_mtj_response)
+
+    def _on_mtj_response(self, f):
+        gh = f.result()
+        if not gh.accepted:
+            self._q.put(('error', '✗ MTJ 目标被拒绝')); return
+        self._q.put(('log', '✓ MTJ 已接受，执行中…'))
+        gh.get_result_async().add_done_callback(self._on_mtj_result)
+
+    def _on_mtj_fb(self, msg):
+        fb = msg.feedback
+        self._q.put(('fb_mtj', fb.progress_percent, list(fb.current_joints)))
+
+    def _on_mtj_result(self, f):
+        r = f.result().result
+        flag = '✓' if r.success else '✗'
+        j = ', '.join(f'{v:.3f}' for v in r.actual_joints)
+        self._q.put(('log', f'{flag} MTJ {r.exit_reason}  err={r.error_code}  实际[{j}]'))
+
+    def _on_joints(self, msg: JointState):
+        pos = dict(zip(msg.name, msg.position))
+        try:
+            self._last_arm_joints = [pos[n] for n, _, _ in ARM_JOINT_RANGE]
+        except KeyError:
+            return
+        self._q.put(('joints', list(self._last_arm_joints)))
+
+    def current_arm_joints(self):
+        return self._last_arm_joints
 
     # ── ArmTrajectoryShot ─────────────────────────────────────────────────────────
     def send_tss_linear(self, speed, return_to_start,
@@ -250,6 +321,7 @@ class App:
 
         self._build_status_panel(main, pad)
         self._build_mtp_panel(main, pad)
+        self._build_mtj_panel(main, pad)
         self._build_tss_panel(main, pad)
         self._build_log_panel(main, pad)
         self._poll()
@@ -400,6 +472,66 @@ class App:
             roll_deg=self._mtp_rpy['Roll'].get(),
             pitch_deg=self._mtp_rpy['Pitch'].get(),
             yaw_deg=self._mtp_rpy['Yaw'].get(),
+        )
+
+    # ── ArmMoveToJoint ────────────────────────────────────────────────────────────
+    # 关节空间点到点：只动臂 J1-3（云台 J4-6 由 Commander 用当前回读原样保持）。
+    # 「读当前值」把 /joint_states 的实测灌进滑块 —— 示教时先摆到位再微调最顺手。
+    def _build_mtj_panel(self, parent, pad):
+        jf = ttk.LabelFrame(parent, text='ArmMoveToJoint  (/robot_arm/move_to_joint)  '
+                                         '—  关节空间，只动臂 J1-3，云台保持', padding=6)
+        jf.pack(fill=tk.X, **pad)
+
+        # 目标 / 当前 两行：滑块给目标，只读框显示实测，便于对比
+        self._mtj_vars, self._mtj_cur_vars = {}, {}
+        for name, lo, hi in ARM_JOINT_RANGE:
+            row = ttk.Frame(jf); row.pack(fill=tk.X, pady=1)
+            ttk.Label(row, text=f'{name}', width=7).pack(side=tk.LEFT, padx=(4, 2))
+            v = tk.DoubleVar(value=0.0)
+            self._mtj_vars[name] = v
+            ttk.Scale(row, from_=lo, to=hi, variable=v, orient=tk.HORIZONTAL,
+                      length=260).pack(side=tk.LEFT, padx=2)
+            ttk.Spinbox(row, from_=lo, to=hi, increment=0.01, textvariable=v,
+                        width=8, format='%.3f').pack(side=tk.LEFT, padx=4)
+            ttk.Label(row, text=f'[{lo:.2f}, {hi:.2f}] rad').pack(side=tk.LEFT, padx=(2, 6))
+            cv = tk.StringVar(value='--')
+            self._mtj_cur_vars[name] = cv
+            ttk.Label(row, text='当前:').pack(side=tk.LEFT)
+            ttk.Entry(row, textvariable=cv, width=8, state='readonly',
+                      justify='center').pack(side=tk.LEFT, padx=(1, 4))
+
+        bf = ttk.Frame(jf); bf.pack(fill=tk.X, pady=(6, 0))
+        self._mtj_speed_var = tk.IntVar(value=ArmMoveToJoint.Goal.SPEED_NORMAL)
+        for val, label in SPEED_LABELS:
+            ttk.Radiobutton(bf, text=label, variable=self._mtj_speed_var,
+                            value=val).pack(side=tk.LEFT, padx=6)
+        self._mtj_rel_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bf, text='Δ 相对增量', variable=self._mtj_rel_var).pack(
+            side=tk.LEFT, padx=10)
+        ttk.Label(bf, text='时长(s，0=按档位):').pack(side=tk.LEFT, padx=(6, 1))
+        self._mtj_dur_var = tk.DoubleVar(value=0.0)
+        ttk.Spinbox(bf, from_=0.0, to=30.0, increment=0.5,
+                    textvariable=self._mtj_dur_var, width=6,
+                    format='%.1f').pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(bf, text='▶ 发送', command=self._send_mtj,
+                   width=10).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(bf, text='↧ 读当前值', command=self._mtj_load_current,
+                   width=11).pack(side=tk.RIGHT, padx=4)
+
+    def _mtj_load_current(self):
+        cur = self.node.current_arm_joints()
+        if cur is None:
+            self._log('✗ 还没收到 /joint_states，无法读当前值'); return
+        for (name, _, _), val in zip(ARM_JOINT_RANGE, cur):
+            self._mtj_vars[name].set(round(val, 4))
+        self._log('↧ 已把当前关节角灌入滑块')
+
+    def _send_mtj(self):
+        self.node.send_mtj_goal(
+            joints       = [self._mtj_vars[n].get() for n, _, _ in ARM_JOINT_RANGE],
+            speed        = self._mtj_speed_var.get(),
+            relative     = self._mtj_rel_var.get(),
+            duration_sec = self._mtj_dur_var.get(),
         )
 
     # ── ArmTrajectoryShot ─────────────────────────────────────────────────────────
@@ -630,6 +762,13 @@ class App:
         elif t == 'fb_mtp':
             _, prog, pose = item
             self._log(f'… MTP {prog:5.1f}%  z={pose.z:.3f}m')
+        elif t == 'joints':
+            for (name, _, _), val in zip(ARM_JOINT_RANGE, item[1]):
+                self._mtj_cur_vars[name].set(f'{val:.3f}')
+        elif t == 'fb_mtj':
+            _, prog, joints = item
+            j = ', '.join(f'{v:.3f}' for v in joints)
+            self._log(f'… MTJ {prog:5.1f}%  [{j}]')
         elif t == 'fb_tss':
             _, prog, elapsed, pose, az, el, r = item
             self._log(f'… TSS {prog:5.1f}%  {elapsed:.1f}s  '

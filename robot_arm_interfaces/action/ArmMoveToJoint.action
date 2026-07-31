@@ -1,0 +1,41 @@
+# ArmMoveToJoint.action
+# 机械臂关节空间点到点动作：运动到目标关节角并等待到位
+# 客户端：上层（Director）/ commander_test_gui
+# 服务端：Arm Commander（arm_commander 节点，robot_arm_node 包）
+#
+# 与 ArmMoveToPose 的分工：本动作**直接给关节角、不过 IK**，用于示教/标定/绕开奇异点
+# 或明确要求某个臂形的场合；笛卡尔目标（含 STOWED/OBSERVE 预设）仍走 ArmMoveToPose。
+#
+# 轴范围：**只控制臂 Joint1-3**。云台 Joint4-6 由本动作以「当前回读」原样填充下发，
+#   不会被拉走（对比 ArmMoveToPose 的 STOWED 会把 6 轴全部归零）；到位判据同样只看
+#   J1-3，因此云台未上电（回读不收敛）也不会卡住本动作。
+#
+# 执行链路：目标 → 限位校验 → 自碰撞检查(/check_state_validity) → 两点 JointTrajectory
+#   → /arm_controller/joint_trajectory（JTC 五次多项式插值）→ 等待到位
+#
+# exit_reason:
+#   "reached"      到位
+#   "out_of_range" 目标超关节限位（校验不通过，不下发任何指令，恢复空闲）
+#   "collision"    目标姿态自碰撞（同样不下发）
+#   "invalid_goal" target_joints 个数不对
+#   "timeout" | "cancelled" | "stopped" | "error"
+#
+# ─── 转换速度常量（取值与 ArmMoveToPose 一致）───
+uint8 SPEED_SLOW   = 0
+uint8 SPEED_NORMAL = 1
+uint8 SPEED_FAST   = 2
+# ─── Goal ──────────────────────────────────────────────────────────────────
+float64[] target_joints      # 目标关节角（rad），必须 3 个：Joint1 / Joint2 / Joint3
+uint8     transition_speed   # 速度档位，取值为上方常量之一
+bool      relative           # true=相对当前关节角的增量；false=绝对角
+float64   duration_sec       # >0 直接指定运动时长（覆盖档位）；<=0 按档位自动计算
+---
+# ─── Result ────────────────────────────────────────────────────────────────
+bool      success            # 是否到达目标关节角
+string    exit_reason        # 见上方取值表
+uint8     error_code         # 失败时的错误码（对应 ArmStatus.ERR_*）
+float64[] actual_joints      # 实际到达的关节角（J1-3，rad）
+---
+# ─── Feedback ──────────────────────────────────────────────────────────────
+float32   progress_percent   # 进度百分比 [0.0, 100.0]
+float64[] current_joints     # 当前关节角（J1-3，rad）

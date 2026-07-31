@@ -57,6 +57,10 @@ struct ExecResult
   bool        success{false};
   std::string exit_reason;   // "reached" | "unreachable" | "stopped" | "sent" | "error"
   int         error_code{0};
+  // 本次下发轨迹的**终点关节解**（6 轴）。上层拿它做「只判臂 J1-3」的到位判据，
+  // 不再用末端位姿比较——末端 gimbal_tool0 在云台之后，云台回读不收敛会让笛卡尔
+  // 判据永不满足（见 commander/motion_policy.hpp 的 is_at_joints_prefix 注释）。
+  std::vector<double> target_joints;
 };
 
 class MotionExecutor
@@ -86,20 +90,24 @@ public:
   // 批量 IK + JointTrajectory 下发（委托 motion::solve_and_send）。
   // cancel_check 与内部 is_stopped 合成一个急停判据。
   // 返回 PlanResult：Unreachable 表示 IK 无解（供上层映射为 "unreachable"）。
+  // final_joints 出参：成功时写入末点关节解，供上层做只判臂的到位判据
   motion::PlanResult solve_and_send(const std::vector<motion::Waypoint> & all_pts,
-                                    std::function<bool()> cancel_check = nullptr);
+                                    std::function<bool()> cancel_check = nullptr,
+                                    std::vector<double> * final_joints = nullptr);
 
   // 球面轨道运镜：plan_orbit_waypoints + solve_and_send（相机始终朝向球心）
   motion::PlanResult plan_orbit_ruckig(double ox, double oy, double oz,
                                        double theta0, double phi0, double r0,
                                        double theta1, double phi1, double r1,
                                        double s_vel, double s_acc, double s_jerk,
-                                       std::function<bool()> cancel_check = nullptr);
+                                       std::function<bool()> cancel_check = nullptr,
+                                       std::vector<double> * final_joints = nullptr);
 
   // 笛卡尔直线运镜：plan_line_waypoints + solve_and_send
   //（位置沿线插值、姿态 slerp，末端严格走直线；限制取 speed 位置/姿态分量的更严者）
   motion::PlanResult plan_line_ruckig(const ArmPose & start, const ArmPose & end, const Speed & speed,
-                                      std::function<bool()> cancel_check = nullptr);
+                                      std::function<bool()> cancel_check = nullptr,
+                                      std::vector<double> * final_joints = nullptr);
 
   // 可行性预判（Ruckig 几何规划 + 起点/终点 IK 可达性检查，不下发轨迹）：
   // 用于执行前判断 start→end 直线能否规划成功，规划失败时避免先把机械臂搬到起点再落空

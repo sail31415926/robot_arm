@@ -72,7 +72,8 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute(const std::shared_ptr
   }
 
   // 等待到位（去程：0→50% if return_to_start 否则 0→100%）
-  auto result = wait_arrival(gh, target, speed, 0.0, goal->return_to_start ? 50.0 : 100.0);
+  auto result = wait_arrival(gh, target, exec_result.target_joints, speed,
+                             0.0, goal->return_to_start ? 50.0 : 100.0);
   if (!result.success || !goal->return_to_start) return result;
 
   // return_to_start：原路返回出发位姿
@@ -82,7 +83,7 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute(const std::shared_ptr
     result.success = false; result.exit_reason = "error"; result.error_code = ArmStatus::ERR_DRIVER;
     return result;
   }
-  return wait_arrival(gh, start_pose, speed, 50.0, 100.0);
+  return wait_arrival(gh, start_pose, exec_back.target_joints, speed, 50.0, 100.0);
 }
 
 MoveToPoseServer::Action::Result MoveToPoseServer::execute_stowed(const std::shared_ptr<GoalHandle> & gh)
@@ -128,6 +129,7 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute_stowed(const std::sha
 
 MoveToPoseServer::Action::Result MoveToPoseServer::wait_arrival(
     const std::shared_ptr<GoalHandle> & gh, const ArmPose & target,
+    const std::vector<double> & target_joints,
     const Speed & speed, double p_lo, double p_hi)
 {
   const ArmPose cur = status_.pose();
@@ -137,7 +139,18 @@ MoveToPoseServer::Action::Result MoveToPoseServer::wait_arrival(
   const double total_dur = std::max(dist / std::max(speed.v_pos, 1e-6), 0.5);
 
   ExecutionMonitor::WaitParams p;
-  p.arrived = [this, target]() { return is_at_pose(status_.pose(), target); };
+  // 到位判据 = 臂 J1-3 达到本段轨迹的终点关节解。云台 J4-6 照常跟着轨迹动，
+  // 但不进判据：末端 gimbal_tool0 在云台之后，云台回读不收敛会让笛卡尔判据永不满足。
+  // 退化保护：拿不到关节解（理论上只在 plan_and_execute 失败时）→ 回落到笛卡尔判据。
+  if (target_joints.size() >= motion::ARM_JOINT_COUNT) {
+    p.arrived = [this, target_joints]() {
+      return is_at_joints_prefix(motion_.get_current_joints(), target_joints,
+                                 motion::ARM_JOINT_COUNT);
+    };
+  } else {
+    RCLCPP_WARN(logger_, "无终点关节解，退化为笛卡尔到位判据（云台未到位可能导致超时）");
+    p.arrived = [this, target]() { return is_at_pose(status_.pose(), target); };
+  }
   p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
   p.on_feedback = [this, gh, p_lo, p_hi, total_dur](double elapsed) {
     const double ratio = std::min(elapsed / std::max(total_dur, 1e-6), 0.999);

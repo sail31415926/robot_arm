@@ -25,6 +25,7 @@
   <depend>std_msgs</depend>                   <!-- mode_manager_node 速度/力矩总线 Float64MultiArray -->
   <depend>controller_manager_msgs</depend>    <!-- mode_manager_node switch_controller -->
   <depend>ruckig</depend>          <!-- MotionExecutor OTG，CMake find_package(ruckig REQUIRED) -->
+  <depend>urdf</depend>            <!-- motion/joint_limits：解析 /robot_description 取关节限位 -->
 
   <export>
     <build_type>ament_cmake</build_type>

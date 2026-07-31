@@ -59,8 +59,21 @@ Director 通过 `/robot_chassis/motion_cmd` 中的 `arm` 子字段下发，由�
 
 ## Arm Commander 接口参考
 
-Arm Commander 是机械臂的中间层状态机，对外暴露两个 Action 接口：
-`ArmMoveToPose`（单点位移）和 `ArmTrajectoryShot`（多段运镜轨迹）。
+Arm Commander 是机械臂的中间层状态机，对外暴露 **4 个 Action 接口**：
+
+| Action | 语义 | 目标空间 |
+| :--- | :--- | :--- |
+| `ArmMoveToPose` | 单点位姿切换（收纳 / 观察 / 拍摄） | 笛卡尔（走 IK） |
+| `ArmMoveToJoint` | 关节空间点到点（示教 / 标定 / 绕奇异点）**2026-07-31 新增** | 关节（不过 IK，只动臂 J1-3） |
+| `ArmTrajectoryShot` | 多段运镜轨迹（直线 / 球面环绕） | 笛卡尔（Ruckig + 批量 IK） |
+| `ArmTrackTarget` | IBVS 视觉跟随启停 | 图像误差闭环 |
+
+外加 4 个 Service（`enable` / `stop` / `reset_error` / `homing`）与 10 Hz 的 `/robot_arm/arm_status`。
+
+> **到位判据统一只认臂 J1-3**（2026-07-31 改）：规划与下发都是 6 轴（云台跟着一起动），
+> 但成败只判臂关节是否到达本段轨迹的终点解。末端 `gimbal_tool0` 在云台 J4-6 之后，
+> 用末端位姿判定会被云台回读的静差拖累到全部超时（真机实测：云台偏差可让末端 pitch
+> 差 38°，而位置只差 3 mm）。`actual_pose` / `current_pose` 仍是真实末端位姿，仅作展示。
 
 ### 前置条件
 
@@ -127,6 +140,38 @@ ros2 action send_goal /robot_arm/move_to_pose \
   robot_arm_interfaces/action/ArmMoveToPose \
   "{target_pose_state: 1, transition_speed: 1, return_to_start: true}"
 ```
+
+### ArmMoveToJoint — 关节空间点到点
+
+接口：`/robot_arm/move_to_joint`。直接给关节角、**不过 IK**，用于示教 / 标定 / 绕开奇异位形。
+`target_joints` 必须 **3 个**（Joint1/2/3，单位 rad）；云台 J4-6 由 Commander 用当前回读填充下发
+= **保持不动**（与 `ArmMoveToPose` 的 STOWED 不同，后者会把 6 轴全部归零）。
+
+```bash
+# 绝对角（-f 打印 feedback：progress + current_joints）
+ros2 action send_goal -f /robot_arm/move_to_joint \
+  robot_arm_interfaces/action/ArmMoveToJoint \
+  "{target_joints: [0.5, 1.0, -1.2], transition_speed: 1, relative: false, duration_sec: 0.0}"
+
+# 相对增量：J2 抬 0.3 rad，FAST 档
+ros2 action send_goal /robot_arm/move_to_joint \
+  robot_arm_interfaces/action/ArmMoveToJoint \
+  "{target_joints: [0.0, 0.3, 0.0], transition_speed: 2, relative: true}"
+
+# 指定时长（覆盖档位）：5 秒慢慢走
+ros2 action send_goal /robot_arm/move_to_joint \
+  robot_arm_interfaces/action/ArmMoveToJoint \
+  "{target_joints: [0.0, 0.5, -0.8], duration_sec: 5.0}"
+```
+
+`duration_sec <= 0` 时按档位算时长：`max|Δq| / 档位角速度`（SLOW 0.3 / NORMAL 0.6 / FAST 1.2 rad·s⁻¹），
+夹在 [0.5, 30] s。三道校验任一不过都**不下发任何指令**、状态回 IDLE：
+
+| exit_reason | 触发条件 | 排查 |
+| :--- | :--- | :--- |
+| `invalid_goal` | `target_joints` 个数 ≠ 3 | 只给 J1-3，别给 6 个 |
+| `out_of_range` | 超关节限位 | 限位从 `/robot_description` 解析 URDF 得到，日志会打出越界轴与区间 |
+| `collision` | 目标姿态自碰撞 | `/check_state_validity` 判定；move_group 未运行时该检查 fail-open 并告警 |
 
 ### ArmTrajectoryShot — 轨迹运镜
 

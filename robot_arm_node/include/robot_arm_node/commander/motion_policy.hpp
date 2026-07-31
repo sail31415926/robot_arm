@@ -12,6 +12,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -49,6 +50,41 @@ inline const Speed & speed_profile(uint8_t k)
   }
 }
 
+// ── 关节空间速度档位（rad/s，**平均**角速度）─────────────────────────────────
+// 用途：ArmMoveToJoint 由「最大关节位移 / 档位角速度」反算两点轨迹的时长。
+// 上面的 Speed 全是笛卡尔量（m/s、rad/s 的末端速度），关节空间点到点用不上，故单列。
+// 峰值角速度：两点 JointTrajectory 由 JTC 做五次多项式插值，峰值 ≈ 1.875 × 平均值，
+//   故 FAST 的峰值 ≈ 2.25 rad/s，仍低于 URDF 里 J1-3 的 velocity=3.14 rad/s 机械限。
+// 量级校准：FAST 走满行程（J1 的 ±2.618）约 2.2 s，与既有 STOWED 回零的固定 2.0 s 相当。
+inline constexpr double JOINT_SPEED_SLOW_RPS   = 0.30;
+inline constexpr double JOINT_SPEED_NORMAL_RPS = 0.60;
+inline constexpr double JOINT_SPEED_FAST_RPS   = 1.20;
+inline constexpr double JOINT_MIN_DURATION_SEC = 0.5;    // 短距离下限，避免除出极小时长
+inline constexpr double JOINT_MAX_DURATION_SEC = 30.0;   // 上限，兜住异常大位移
+
+inline double joint_speed_profile(uint8_t k)
+{
+  switch (k) {
+    case 0:  return JOINT_SPEED_SLOW_RPS;
+    case 2:  return JOINT_SPEED_FAST_RPS;
+    default: return JOINT_SPEED_NORMAL_RPS;   // 含 SPEED_NORMAL(1) 与非法值
+  }
+}
+
+// 按档位计算关节空间点到点时长：max|Δq| / v_档位，夹在 [MIN, MAX] 内。
+// cur / tgt 长度不一致时按较短者比较（调用方应已保证长度一致）。
+inline double joint_move_duration(const std::vector<double> & cur,
+                                 const std::vector<double> & tgt, uint8_t speed_key)
+{
+  double max_delta = 0.0;
+  const size_t n = std::min(cur.size(), tgt.size());
+  for (size_t i = 0; i < n; ++i) {
+    max_delta = std::max(max_delta, std::fabs(tgt[i] - cur[i]));
+  }
+  const double dur = max_delta / joint_speed_profile(speed_key);
+  return std::min(std::max(dur, JOINT_MIN_DURATION_SEC), JOINT_MAX_DURATION_SEC);
+}
+
 // ── 到位判定 ────────────────────────────────────────────────────────────────
 // 两角度之差（度），考虑 ±180° 环绕，返回 [0,180]
 inline double angular_diff(double a, double b)
@@ -77,6 +113,24 @@ inline bool is_at_joints(const std::vector<double> & c, const std::vector<double
 {
   if (c.size() != t.size()) return false;
   for (size_t i = 0; i < c.size(); ++i) {
+    if (std::fabs(c[i] - t[i]) > tol) return false;
+  }
+  return true;
+}
+
+// 只判前 n 个关节是否到位（n = motion::ARM_JOINT_COUNT 时即「只判臂 J1-3」）。
+//
+// ★ 为什么所有笛卡尔动作的到位判据都必须走这条、而不是 is_at_pose ★
+// 2026-07-28 云台换 V2 后规划末端是 gimbal_tool0，它在**云台 J4-6 之后**：
+// 末端位姿 = f(J1..J6)。云台的回读一旦不收敛或有静差（板端未上电、跨机 DDS 不通、
+// GCU 自稳环让 IMU 角与关节指令不完全一致），is_at_pose(status_.pose(), target)
+// 就永远不满足 → 动作全部走到 timeout 报错，哪怕机械臂本身早就到位了。
+// 规划/下发仍是 6 轴（云台跟着一起动），只是**判据只认臂**，这样云台不拖累成败。
+inline bool is_at_joints_prefix(const std::vector<double> & c, const std::vector<double> & t,
+                               size_t n, double tol = JOINT_TOLERANCE_RAD)
+{
+  if (c.size() < n || t.size() < n) return false;
+  for (size_t i = 0; i < n; ++i) {
     if (std::fabs(c[i] - t[i]) > tol) return false;
   }
   return true;

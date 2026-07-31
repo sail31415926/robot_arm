@@ -94,7 +94,7 @@ ExecResult MotionExecutor::plan_and_execute(const ArmPose & target, const Speed 
   auto [joints, err] = ik_sync(ps);
   if (!joints) {
     RCLCPP_WARN(logger_, "IK 无解，目标不可达 (error_code=%d)", err);
-    return {false, "unreachable", err};
+    return {false, "unreachable", err, {}};
   }
 
   // 3. 到达时间：按位移 / 速度估算（含 1.5x 加减速余量，下限 0.5s）
@@ -109,11 +109,11 @@ ExecResult MotionExecutor::plan_and_execute(const ArmPose & target, const Speed 
   // 急停在 IK 期间发生时，绝不再下发轨迹（否则会把已停住的机械臂重新开动）
   if (is_stopped_ && is_stopped_()) {
     RCLCPP_INFO(logger_, "plan_and_execute: 急停生效，放弃下发轨迹");
-    return {false, "stopped", 0};
+    return {false, "stopped", 0, {}};
   }
   traj_pub_->publish(msg);
   RCLCPP_INFO(logger_, "JointTrajectory 已下发 (duration=%.2fs)", duration);
-  return {true, "reached", 0};
+  return {true, "reached", 0, *joints};
 }
 
 // ── 急停 ────────────────────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ ExecResult MotionExecutor::go_to_joints(const std::vector<double> & target_joint
   auto msg = two_point_traj(get_current_joints(), target_joints, duration_sec,
                             node_.get_clock()->now());
   traj_pub_->publish(msg);
-  return {true, "sent", 0};
+  return {true, "sent", 0, target_joints};
 }
 
 // ── 状态查询 ────────────────────────────────────────────────────────────────────
@@ -167,7 +167,8 @@ std::pair<std::optional<std::vector<double>>, int> MotionExecutor::ik_sync(
 
 // ── 批量 IK 下发 ────────────────────────────────────────────────────────────────
 motion::PlanResult MotionExecutor::solve_and_send(const std::vector<motion::Waypoint> & all_pts,
-                                                  std::function<bool()> cancel_check)
+                                                  std::function<bool()> cancel_check,
+                                                  std::vector<double> * final_joints)
 {
   const auto seed = status_.joint_position_list(motion::JOINT_NAMES);
   auto stop_check = [this, cancel_check]() {
@@ -176,14 +177,15 @@ motion::PlanResult MotionExecutor::solve_and_send(const std::vector<motion::Wayp
   return motion::solve_and_send(node_, ik_client_, traj_pub_, all_pts, seed,
                                 motion::JOINT_NAMES, motion::PLANNING_GROUP, motion::EEF_LINK,
                                 motion::BASE_FRAME, motion::IK_DECIMATE, motion::IK_TIMEOUT_S,
-                                stop_check, logger_);
+                                stop_check, logger_, final_joints);
 }
 
 motion::PlanResult MotionExecutor::plan_orbit_ruckig(double ox, double oy, double oz,
                                                      double theta0, double phi0, double r0,
                                                      double theta1, double phi1, double r1,
                                                      double s_vel, double s_acc, double s_jerk,
-                                                     std::function<bool()> cancel_check)
+                                                     std::function<bool()> cancel_check,
+                                                     std::vector<double> * final_joints)
 {
   auto stop_check = [this, cancel_check]() {
     return (is_stopped_ && is_stopped_()) || (cancel_check && cancel_check());
@@ -192,11 +194,12 @@ motion::PlanResult MotionExecutor::plan_orbit_ruckig(double ox, double oy, doubl
                                           theta1, phi1, r1, s_vel, s_acc, s_jerk, stop_check);
   // Ruckig 规划失败（含被 stop_check 中止）：上层按 cancelled/error 归类
   if (!pts) return motion::PlanResult::Error;
-  return solve_and_send(*pts, cancel_check);
+  return solve_and_send(*pts, cancel_check, final_joints);
 }
 
 motion::PlanResult MotionExecutor::plan_line_ruckig(const ArmPose & start, const ArmPose & end,
-                                                    const Speed & speed, std::function<bool()> cancel_check)
+                                                    const Speed & speed, std::function<bool()> cancel_check,
+                                                    std::vector<double> * final_joints)
 {
   auto stop_check = [this, cancel_check]() {
     return (is_stopped_ && is_stopped_()) || (cancel_check && cancel_check());
@@ -210,7 +213,7 @@ motion::PlanResult MotionExecutor::plan_line_ruckig(const ArmPose & start, const
                                          speed.v_ori, speed.a_ori, speed.j_ori, stop_check);
   // Ruckig 规划失败（含被 stop_check 中止）：上层按 cancelled/error 归类
   if (!pts) return motion::PlanResult::Error;
-  return solve_and_send(*pts, cancel_check);
+  return solve_and_send(*pts, cancel_check, final_joints);
 }
 
 bool MotionExecutor::can_plan_line(const ArmPose & start, const ArmPose & end,

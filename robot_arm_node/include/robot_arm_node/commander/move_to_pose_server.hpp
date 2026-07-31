@@ -46,7 +46,10 @@ public:
 
 private:
   Action::Result execute_stowed(const std::shared_ptr<GoalHandle> & gh);
+  // target_joints：本段轨迹的终点关节解（6 轴）。到位判据只看前 ARM_JOINT_COUNT 个
+  // （臂 J1-3）；末端 gimbal_tool0 在云台之后，用笛卡尔判据会被云台回读拖累到超时。
   Action::Result wait_arrival(const std::shared_ptr<GoalHandle> & gh, const ArmPose & target,
+                              const std::vector<double> & target_joints,
                               const Speed & speed, double p_lo, double p_hi);
   std::optional<ArmPose> resolve_target(const Action::Goal & goal);
 

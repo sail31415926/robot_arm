@@ -7,6 +7,7 @@
 
 ```text
 Director ──action(/robot_arm/move_to_pose)────► Commander   位姿切换（收纳/观察/拍摄）
+Director ──action(/robot_arm/move_to_joint)───► Commander   关节空间点到点（只动臂 J1-3）
 Director ──action(/robot_arm/trajectory_shot)─► Commander   运镜执行（直线/球面环绕）
 Director ──action(/robot_arm/track_target)────► Commander   视觉跟随（IBVS 启停）
 Director ──service(/robot_arm/stop)───────────► Commander   软件急停（MOVING→STOPPED）
@@ -96,6 +97,7 @@ ArmFollowCommand
 | 接口文件 | 名称 | 要点 |
 | --- | --- | --- |
 | `action/ArmMoveToPose.action` | `/robot_arm/move_to_pose` | 姿态切换；exit_reason: reached / timeout / cancelled / stopped / unreachable / error |
+| `action/ArmMoveToJoint.action` | `/robot_arm/move_to_joint` | 关节空间点到点（不过 IK，只动臂 J1-3、云台保持）；限位与自碰撞校验不过则不下发；exit_reason: reached / out_of_range / collision / invalid_goal / timeout / cancelled / stopped / error |
 | `action/ArmTrajectoryShot.action` | `/robot_arm/trajectory_shot` | 直线 / 球面环绕运镜；exit_reason: reached / timeout / cancelled / stopped / error |
 | `action/ArmTrackTarget.action` | `/robot_arm/track_target` | IBVS 跟随启停；exit_code: CONVERGED / FEATURE_LOST / TIMEOUT / CANCELLED / ERROR |
 | `srv/ArmStop.srv` | `/robot_arm/stop` | 软件急停，非 MOVING 状态为空操作 |

@@ -28,6 +28,7 @@ namespace
 // 话题 / 动作 / 服务名（对应 Python 常量）
 const char * TOPIC_ARM_STATUS       = "/robot_arm/arm_status";
 const char * ACTION_MOVE_TO_POSE    = "/robot_arm/move_to_pose";
+const char * ACTION_MOVE_TO_JOINT   = "/robot_arm/move_to_joint";
 const char * ACTION_TRAJECTORY_SHOT = "/robot_arm/trajectory_shot";
 const char * ACTION_TRACK_TARGET    = "/robot_arm/track_target";
 const char * SERVICE_ARM_STOP       = "/robot_arm/stop";
@@ -51,7 +52,7 @@ ArmCommanderNode::ArmCommanderNode()
   // ── 参数：OBSERVE 预定义位姿（可覆盖）─────────────────────────────────────────
   declare_parameter("pose_observe_x", 0.1);
   declare_parameter("pose_observe_y", 0.0);
-  declare_parameter("pose_observe_z", 0.70);
+  declare_parameter("pose_observe_z", 0.65);
   // 2026-07-29 云台换 V2：画面水平所需的 EEF roll 由 90° 变为 0°
   //（见 motion/geometry.hpp 的 EEF_LEVEL_ROLL 推导）。位置不变，只改 roll。
   declare_parameter("pose_observe_roll", 0.0);
@@ -68,6 +69,7 @@ ArmCommanderNode::ArmCommanderNode()
                                                 [this]() { motion_->stop(); });
   mtp_srv_   = std::make_unique<MoveToPoseServer>(*this, *motion_, *status_, *monitor_,
                                                   [this]() { return get_observe_pose(); });
+  mtj_srv_   = std::make_unique<MoveToJointServer>(*this, *motion_, *status_, *monitor_);
   em_srv_    = std::make_unique<TrajectoryShotServer>(*this, *motion_, *status_, *monitor_, is_stopped_fn);
   track_srv_ = std::make_unique<TrackTargetServer>(*this, *status_, is_stopped_fn);
 
@@ -86,6 +88,21 @@ ArmCommanderNode::ArmCommanderNode()
       },
       [this](std::shared_ptr<rclcpp_action::ServerGoalHandle<MoveToPose>> gh) {
         std::thread{[this, gh]() { mtp_execute(gh); }}.detach();
+      },
+      opts, cb_group_);
+
+  mtj_server_ = rclcpp_action::create_server<MoveToJoint>(
+      this, ACTION_MOVE_TO_JOINT,
+      [](const rclcpp_action::GoalUUID &, std::shared_ptr<const MoveToJoint::Goal>) {
+        return GoalResponse::ACCEPT_AND_EXECUTE;
+      },
+      [this](std::shared_ptr<rclcpp_action::ServerGoalHandle<MoveToJoint>>) {
+        RCLCPP_INFO(get_logger(), "收到 MoveToJoint 取消请求");
+        motion_->stop();
+        return CancelResponse::ACCEPT;
+      },
+      [this](std::shared_ptr<rclcpp_action::ServerGoalHandle<MoveToJoint>> gh) {
+        std::thread{[this, gh]() { mtj_execute(gh); }}.detach();
       },
       opts, cb_group_);
 
@@ -144,8 +161,9 @@ ArmCommanderNode::ArmCommanderNode()
   drv_disable_cli_ = create_client<Trigger>(ARM_NODE_DISABLE_SRV);
   drv_recover_cli_ = create_client<Trigger>(ARM_NODE_RECOVER_SRV);
 
-  RCLCPP_INFO(get_logger(), "Arm Commander 已就绪  |  状态=%s  |  action: %s / %s / %s",
-              state_name(state()), ACTION_MOVE_TO_POSE, ACTION_TRAJECTORY_SHOT, ACTION_TRACK_TARGET);
+  RCLCPP_INFO(get_logger(), "Arm Commander 已就绪  |  状态=%s  |  action: %s / %s / %s / %s",
+              state_name(state()), ACTION_MOVE_TO_POSE, ACTION_MOVE_TO_JOINT,
+              ACTION_TRAJECTORY_SHOT, ACTION_TRACK_TARGET);
 }
 
 // ── 状态机 ──────────────────────────────────────────────────────────────────────
@@ -237,6 +255,67 @@ void ArmCommanderNode::mtp_execute(std::shared_ptr<rclcpp_action::ServerGoalHand
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "MoveToPose 执行异常: %s", e.what());
     gh->abort(std::make_shared<MoveToPose::Result>());
+    transition(CommanderState::ERROR);
+    status_->set_command_state(cmd_id, ArmStatus::RESULT_FAILED);
+    status_->set_error(ArmStatus::ERR_DRIVER);
+  }
+}
+
+// ── ArmMoveToJoint 执行线程 ─────────────────────────────────────────────────────
+// 与 mtp_execute 同构，两点不同：
+//   ① 不动 current_pose_state —— 关节空间点到点是示教/标定用途，不代表产品语义上的
+//      「收纳/观察/拍摄」姿态；硬套一个会让 Director 误判。需要新语义时再加枚举。
+//   ② 三类前置校验失败（out_of_range / collision / invalid_goal）视同「拒绝该 goal」：
+//      回 IDLE 而不是进 ERROR（与 MoveToPose 的 unreachable 一致，因为没下发任何指令，
+//      设备本身没故障）。
+void ArmCommanderNode::mtj_execute(std::shared_ptr<rclcpp_action::ServerGoalHandle<MoveToJoint>> gh)
+{
+  if (!is_idle()) {
+    RCLCPP_WARN(get_logger(), "拒绝 goal: 当前状态=%s，非空闲", state_name(state()));
+    gh->abort(std::make_shared<MoveToJoint::Result>());
+    return;
+  }
+  RCLCPP_INFO(get_logger(), "MoveToJoint goal 已接受，开始执行");
+  transition(CommanderState::MOVING);
+  const uint32_t cmd_id = ++cmd_counter_;
+  status_->set_command_state(cmd_id, ArmStatus::RESULT_EXECUTING);
+
+  try {
+    auto result = std::make_shared<MoveToJoint::Result>(mtj_srv_->execute(gh));
+    if (is_stopped()) {
+      RCLCPP_INFO(get_logger(), "MoveToJoint 执行期间被急停，goal 终止，状态保持 STOPPED");
+      status_->set_command_state(cmd_id, ArmStatus::RESULT_ABORTED);
+      gh->abort(result);
+      return;
+    }
+    if (result->success) {
+      transition(CommanderState::REACHED);
+      status_->set_command_state(cmd_id, ArmStatus::RESULT_SUCCEEDED);
+      gh->succeed(result);
+    } else if (result->exit_reason == "cancelled") {
+      transition(CommanderState::IDLE);
+      status_->set_command_state(cmd_id, ArmStatus::RESULT_ABORTED);
+      gh->canceled(result);
+    } else if (result->exit_reason == "stopped") {
+      status_->set_command_state(cmd_id, ArmStatus::RESULT_ABORTED);
+      gh->abort(result);
+    } else if (result->exit_reason == "out_of_range" ||
+               result->exit_reason == "collision" ||
+               result->exit_reason == "invalid_goal") {
+      RCLCPP_WARN(get_logger(), "关节目标被拒（%s），未下发指令，恢复空闲",
+                  result->exit_reason.c_str());
+      transition(CommanderState::IDLE);
+      status_->set_command_state(cmd_id, ArmStatus::RESULT_ABORTED);
+      gh->abort(result);
+    } else {
+      transition(CommanderState::ERROR);
+      status_->set_command_state(cmd_id, ArmStatus::RESULT_FAILED);
+      status_->set_error(result->error_code);
+      gh->abort(result);
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "MoveToJoint 执行异常: %s", e.what());
+    gh->abort(std::make_shared<MoveToJoint::Result>());
     transition(CommanderState::ERROR);
     status_->set_command_state(cmd_id, ArmStatus::RESULT_FAILED);
     status_->set_error(ArmStatus::ERR_DRIVER);

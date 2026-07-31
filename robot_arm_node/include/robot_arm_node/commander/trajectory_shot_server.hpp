@@ -52,10 +52,17 @@ private:
   Action::Result move_and_wait(const std::shared_ptr<GoalHandle> & gh, const ArmPose & target,
                                const Speed & speed, const char * label, double p_lo, double p_hi,
                                double azimuth = 0.0, double elevation = 0.0, double radius = 0.0);
-  // 轨迹已下发，仅轮询等到位（发 Feedback）
+  // 轨迹已下发，仅轮询等到位（发 Feedback）。
+  // target_joints = 该段轨迹末点的关节解；到位判据只看臂 J1-3（云台在末端之后，
+  // 其回读不收敛会让笛卡尔判据永不满足 → 运镜整段超时）。
   Action::Result wait_at_pose(const std::shared_ptr<GoalHandle> & gh, const ArmPose & target,
+                              const std::vector<double> & target_joints,
                               const char * label, double p_lo, double p_hi,
                               double azimuth = 0.0, double elevation = 0.0, double radius = 0.0);
+  // 构造「只判臂 J1-3」的到位判据（云台照常跟动，但不参与成败判定）。
+  // target_joints 缺失（规划未产出末点解）时退化为笛卡尔判据并告警。
+  std::function<bool()> arm_arrived_fn(const std::vector<double> & target_joints,
+                                       const ArmPose & target);
   static ArmPose sphere_to_pose(double azimuth_deg, double elevation_deg, double radius_m,
                                 double ox, double oy, double oz);
 

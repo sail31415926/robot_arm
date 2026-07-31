@@ -28,8 +28,13 @@ find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(ruckig REQUIRED)
+# joint_limits.cpp：从 /robot_description 解析 URDF 取关节限位（不写死常量，
+# 限位会随实机标定平移——见 2026-07-28 J2/J3 零点重标定）
+find_package(urdf REQUIRED)
+find_package(std_msgs REQUIRED)
 
 add_library(robot_arm_motion SHARED
+  src/motion/joint_limits.cpp
   src/motion/kinematics.cpp
   src/motion/planning.cpp
   src/motion/trajectory.cpp
@@ -40,7 +45,7 @@ target_include_directories(robot_arm_motion PUBLIC
 )
 target_compile_features(robot_arm_motion PUBLIC cxx_std_17)
 ament_target_dependencies(robot_arm_motion
-  rclcpp trajectory_msgs builtin_interfaces geometry_msgs moveit_msgs)
+  rclcpp trajectory_msgs builtin_interfaces geometry_msgs moveit_msgs urdf std_msgs)
 target_link_libraries(robot_arm_motion ruckig::ruckig)
 
 install(TARGETS robot_arm_motion
@@ -77,8 +82,8 @@ install(TARGETS robot_arm_state
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 产品栈第三刀：commander 层。状态机 + 3 rclcpp_action Server + 4 Service + ArmStatus 广播。
-#   库 robot_arm_commander（motion_policy/execution_monitor/motion_executor/3 server/node）
+# 产品栈第三刀：commander 层。状态机 + 4 rclcpp_action Server + 4 Service + ArmStatus 广播。
+#   库 robot_arm_commander（motion_policy/execution_monitor/motion_executor/4 server/node）
 #   链 robot_arm_state + robot_arm_motion；可执行 arm_commander_node（headless）。
 # ══════════════════════════════════════════════════════════════════════════════
 find_package(rclcpp_action REQUIRED)
@@ -89,6 +94,7 @@ add_library(robot_arm_commander SHARED
   src/commander/execution_monitor.cpp
   src/commander/motion_executor.cpp
   src/commander/move_to_pose_server.cpp
+  src/commander/move_to_joint_server.cpp
   src/commander/trajectory_shot_server.cpp
   src/commander/track_target_server.cpp
   src/commander/arm_commander_node.cpp
@@ -120,8 +126,7 @@ install(TARGETS arm_commander_node DESTINATION lib/${PROJECT_NAME})
 #   唯一权威，后端无感。切换 = controller_manager/switch_controller；带 bumpless 播种 +
 #   速度/力矩总线看门狗。独立可执行，不依赖 commander 库。
 # ══════════════════════════════════════════════════════════════════════════════
-find_package(std_msgs REQUIRED)
-find_package(controller_manager_msgs REQUIRED)
+find_package(controller_manager_msgs REQUIRED)   # std_msgs 已在 motion 段 find_package
 
 add_executable(mode_manager_node src/mode/mode_manager_node.cpp)
 target_compile_features(mode_manager_node PRIVATE cxx_std_17)

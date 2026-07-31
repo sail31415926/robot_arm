@@ -4,7 +4,8 @@
  *
  * 对应 Python commander/arm_commander_node.py。三明治中间层：Director ←→ 本节点 ←→ Driver。
  * 承载：
- *   - 3 个 Action Server：ArmMoveToPose / ArmTrajectoryShot / ArmTrackTarget
+ *   - 4 个 Action Server：ArmMoveToPose / ArmMoveToJoint / ArmTrajectoryShot / ArmTrackTarget
+ *     （ArmMoveToJoint = 关节空间点到点，2026-07-31 新增；只动臂 J1-3，云台保持）
  *   - 4 个 Service：ArmStop / ArmEnable / ArmHoming / ArmResetError
  *   - 10Hz ArmStatus 广播 + 高层状态机 IDLE→MOVING→REACHED/STOPPED/ERROR
  *
@@ -29,6 +30,7 @@
 
 #include <std_srvs/srv/trigger.hpp>
 #include <robot_arm_interfaces/action/arm_move_to_pose.hpp>
+#include <robot_arm_interfaces/action/arm_move_to_joint.hpp>
 #include <robot_arm_interfaces/action/arm_trajectory_shot.hpp>
 #include <robot_arm_interfaces/action/arm_track_target.hpp>
 #include <robot_arm_interfaces/msg/arm_status.hpp>
@@ -42,6 +44,7 @@
 #include "robot_arm_node/commander/motion_executor.hpp"
 #include "robot_arm_node/commander/execution_monitor.hpp"
 #include "robot_arm_node/commander/move_to_pose_server.hpp"
+#include "robot_arm_node/commander/move_to_joint_server.hpp"
 #include "robot_arm_node/commander/trajectory_shot_server.hpp"
 #include "robot_arm_node/commander/track_target_server.hpp"
 
@@ -63,6 +66,7 @@ private:
   using ArmStatus     = robot_arm_interfaces::msg::ArmStatus;
   using ArmPose       = robot_arm_interfaces::msg::ArmPose;
   using MoveToPose    = robot_arm_interfaces::action::ArmMoveToPose;
+  using MoveToJoint   = robot_arm_interfaces::action::ArmMoveToJoint;
   using TrajectoryShot= robot_arm_interfaces::action::ArmTrajectoryShot;
   using TrackTarget   = robot_arm_interfaces::action::ArmTrackTarget;
   using Trigger       = std_srvs::srv::Trigger;
@@ -75,6 +79,7 @@ private:
 
   // ── Action 执行线程体（handle_goal/cancel/accepted 在构造体内以 lambda 绑定）────
   void mtp_execute(std::shared_ptr<rclcpp_action::ServerGoalHandle<MoveToPose>> gh);
+  void mtj_execute(std::shared_ptr<rclcpp_action::ServerGoalHandle<MoveToJoint>> gh);
   void em_execute(std::shared_ptr<rclcpp_action::ServerGoalHandle<TrajectoryShot>> gh);
   void track_execute(std::shared_ptr<rclcpp_action::ServerGoalHandle<TrackTarget>> gh);
 
@@ -109,11 +114,13 @@ private:
   std::unique_ptr<MotionExecutor>          motion_;
   std::unique_ptr<ExecutionMonitor>        monitor_;
   std::unique_ptr<MoveToPoseServer>        mtp_srv_;
+  std::unique_ptr<MoveToJointServer>       mtj_srv_;
   std::unique_ptr<TrajectoryShotServer>    em_srv_;
   std::unique_ptr<TrackTargetServer>       track_srv_;
 
   // ── Action Server ────────────────────────────────────────────────────────────
   rclcpp_action::Server<MoveToPose>::SharedPtr     mtp_server_;
+  rclcpp_action::Server<MoveToJoint>::SharedPtr    mtj_server_;
   rclcpp_action::Server<TrajectoryShot>::SharedPtr em_server_;
   rclcpp_action::Server<TrackTarget>::SharedPtr    track_server_;
 

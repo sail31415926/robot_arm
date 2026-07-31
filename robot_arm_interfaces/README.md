@@ -187,6 +187,37 @@ Feedback:
 - **OBSERVE**：预设观察位（Commander 内置，可通过 ROS param 覆盖）
 - **SHOOTING**：绝对笛卡尔坐标（由 Director 指定）
 - **return_to_start**：到位后自动原路返回出发点
+- **到位判据只看臂 J1-3**（2026-07-31 改）：规划与下发仍是 6 轴（云台跟着一起动），但成败只判臂到达 IK 终点解。原因是末端 `gimbal_tool0` 在云台之后，云台回读不收敛会让末端位姿判据永不满足、动作全部超时。`Result.actual_pose` / `Feedback.current_pose` 仍是真实末端位姿（含云台偏差），仅作展示不参与判定。
+
+#### `ArmMoveToJoint` —— 关节空间点到点（2026-07-31 新增）
+
+```text
+Goal:
+  float64[] target_joints    # 目标关节角（rad），必须 3 个：Joint1 / Joint2 / Joint3
+  uint8     transition_speed # SLOW=0 / NORMAL=1 / FAST=2
+  bool      relative         # true=相对当前关节角的增量；false=绝对角
+  float64   duration_sec     # >0 直接指定时长（覆盖档位）；<=0 按档位自动计算
+
+Result:
+  bool      success
+  string    exit_reason      # "reached" | "out_of_range" | "collision" | "invalid_goal"
+                             #  | "timeout" | "cancelled" | "stopped" | "error"
+  uint8     error_code
+  float64[] actual_joints    # 实际到达的关节角（J1-3）
+
+Feedback:
+  float32   progress_percent # [0.0, 100.0]
+  float64[] current_joints   # 当前关节角（J1-3）
+```
+
+- **与 `ArmMoveToPose` 的分工**：本动作直接给关节角、**不过 IK**，用于示教/标定/绕开奇异点或明确要求某个臂形；笛卡尔目标（含 STOWED/OBSERVE 预设）仍走 `ArmMoveToPose`。
+- **只动臂 J1-3**：云台 J4-6 由 Commander 以「当前回读」原样填充下发 = 保持不动（对比 `ArmMoveToPose` 的 STOWED 会把 6 轴全部归零）；到位判据也只看 J1-3，故云台未上电（回读不收敛）不会卡住本动作。
+- **三道安全闸**，任一不过都**不下发任何指令**、回 IDLE（不进 ERROR，因为设备没故障）：
+  1. 个数校验 → `invalid_goal`
+  2. 关节限位 → `out_of_range`（限位从 `/robot_description` 解析 URDF 得到，**不写死常量**：限位会随实机标定平移，见 2026-07-28 J2/J3 零点重标定）
+  3. 自碰撞 → `collision`（`/check_state_validity`，move_group 未运行时 fail-open + 告警）
+- **时长**：`duration_sec>0` 时直接用；否则 `max|Δq| / 档位角速度`（0.3 / 0.6 / 1.2 rad·s⁻¹，见 `commander/motion_policy.hpp`），夹在 [0.5, 30] s。
+- **不改 `current_pose_state`**：关节空间点到点是示教/标定用途，不代表产品语义上的收纳/观察/拍摄姿态。
 
 #### `ArmTrajectoryShot` —— 运镜执行
 
@@ -271,6 +302,7 @@ Feedback:（10Hz）
 | `/robot_arm/arm_status` | `ArmStatus` topic | Commander → Director |
 | `/robot_arm/follow_command` | `ArmFollowCommand` topic | Director → Commander（**预留**，暂未接线） |
 | `/robot_arm/move_to_pose` | `ArmMoveToPose` action | Director → Commander |
+| `/robot_arm/move_to_joint` | `ArmMoveToJoint` action | Director → Commander |
 | `/robot_arm/trajectory_shot` | `ArmTrajectoryShot` action | Director → Commander |
 | `/robot_arm/track_target` | `ArmTrackTarget` action | Director → Commander |
 | `/robot_arm/stop` | `ArmStop` service | Director → Commander |
@@ -282,7 +314,7 @@ Feedback:（10Hz）
 
 - **坐标系**：所有位姿基于机械臂底座坐标系，`ArmStatus.header.frame_id` 统一填 `base_link`。
 - **单位**：长度米、速度米/秒、角度度（RPY）/ 弧度（球坐标 theta/phi 内部表示）。
-- **速度档位**：`SLOW / NORMAL / FAST` 三档统一常量值（0/1/2），`ArmMoveToPose` 与 `ArmTrajectoryShot` 共用相同含义。
+- **速度档位**：`SLOW / NORMAL / FAST` 三档统一常量值（0/1/2），`ArmMoveToPose` / `ArmMoveToJoint` / `ArmTrajectoryShot` 共用相同常量；但**量纲不同** —— 笛卡尔动作是末端线速度/角速度（m·s⁻¹ / rad·s⁻¹，见 `motion_policy.hpp` 的 `Speed`），`ArmMoveToJoint` 是关节角速度（rad·s⁻¹，`JOINT_SPEED_*_RPS`）。
 - **球坐标系**：方位角 θ=0 为近侧（相机到主体方向与主体到世界原点方向相同），正值顺时针；俯仰角 φ 正值向上，范围 (-90°, 90°)。
 - **command_id**：由上层单调递增分配，`0` 表示上层不关心执行结果。
 
@@ -292,14 +324,16 @@ Commander 已于 2026-07 由 Python 全量移植为 C++（`robot_arm_node` 包�
 
 | 文件 | 职责 |
 | --- | --- |
-| `robot_arm_node/src/commander/arm_commander_node.cpp` | 主节点：状态机 + 3 Action Server + 4 Service + ArmStatus 广播 |
+| `robot_arm_node/src/commander/arm_commander_node.cpp` | 主节点：状态机 + 4 Action Server + 4 Service + ArmStatus 广播 |
 | `robot_arm_node/src/commander/move_to_pose_server.cpp` | `ArmMoveToPose` 执行逻辑 |
+| `robot_arm_node/src/commander/move_to_joint_server.cpp` | `ArmMoveToJoint` 执行逻辑（限位/自碰撞校验 + 关节空间点到点） |
+| `robot_arm_node/src/motion/joint_limits.cpp` | 关节限位单一来源：解析 `/robot_description`（latched）取 URDF lower/upper |
 | `robot_arm_node/src/commander/trajectory_shot_server.cpp` | `ArmTrajectoryShot` 执行逻辑（直线 / 球面轨道） |
 | `robot_arm_node/src/commander/track_target_server.cpp` | `ArmTrackTarget` 执行逻辑（IBVS 视觉跟随启停） |
 | `robot_arm_node/src/commander/motion_executor.cpp` | 共享运动引擎：IK / Ruckig / JointTrajectory |
-| `robot_arm_node/src/commander/execution_monitor.cpp` | 执行监视：到位判定 / 超时 / 急停联动 |
+| `robot_arm_node/src/commander/execution_monitor.cpp` | 执行监视：统一等待循环 / 超时 / 取消 / 急停联动（到位判据由各 server 注入，统一只判臂 J1-3） |
 | `robot_arm_node/src/state/status_aggregator.cpp` | 状态聚合：JointState + TF2 → ArmStatus |
-| `robot_arm_debug/python/gui/commander_test_gui.py` | Director 视角调试 GUI（三 action + 点动 + 急停/复位） |
+| `robot_arm_debug/python/gui/commander_test_gui.py` | Director 视角调试 GUI：4 个面板（ArmStatus 监控 + MoveToPose + **MoveToJoint**（J1-3 滑块 / 读当前值 / 相对增量 / 时长）+ TrajectoryShot）+ 急停/清错/回零/使能 |
 
 启动方式：
 

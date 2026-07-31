@@ -124,8 +124,9 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
   // 直线以指令起点为基准 —— 与 ORBIT 用指令球坐标一致，步骤 1 已把误差压进到位容差）
   if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }
   RCLCPP_INFO(logger_, "LINEAR 直线运镜开始（Ruckig 直线路点流）");
+  std::vector<double> seg_joints;   // 该段轨迹末点的关节解（到位判据用）
   {
-    const auto pr = motion_.plan_line_ruckig(start, end, speed, cancelled);
+    const auto pr = motion_.plan_line_ruckig(start, end, speed, cancelled, &seg_joints);
     if (pr != motion::PlanResult::Success) {
       result.success     = false;
       result.exit_reason = plan_exit_reason(pr, cancelled());
@@ -135,15 +136,16 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
     }
   }
   const double p2_end = goal.return_to_start ? 67.0 : 100.0;
-  r = wait_at_pose(gh, end, "LINEAR 终止到位",
+  r = wait_at_pose(gh, end, seg_joints, "LINEAR 终止到位",
                    goal.return_to_start ? 33.0 : 50.0, p2_end);
   if (!r.success || !goal.return_to_start) return r;
 
   // 步骤 3：笛卡尔直线原路返回
   RCLCPP_INFO(logger_, "LINEAR return_to_start: 直线返回起始位姿");
   if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }
+  std::vector<double> back_joints;
   {
-    const auto pr = motion_.plan_line_ruckig(end, start, speed, cancelled);
+    const auto pr = motion_.plan_line_ruckig(end, start, speed, cancelled, &back_joints);
     if (pr != motion::PlanResult::Success) {
       result.success     = false;
       result.exit_reason = plan_exit_reason(pr, cancelled());
@@ -152,7 +154,7 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
       return result;
     }
   }
-  return wait_at_pose(gh, start, "LINEAR 返回到位", 67.0, 100.0);
+  return wait_at_pose(gh, start, back_joints, "LINEAR 返回到位", 67.0, 100.0);
 }
 
 // ── MOTION_ORBIT ─────────────────────────────────────────────────────────────────
@@ -188,9 +190,10 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
   // 步骤 2：Ruckig 1-DOF 球面轨道（起 → 终）
   if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }
   RCLCPP_INFO(logger_, "ORBIT 球面轨道开始（Ruckig 1-DOF）");
+  std::vector<double> seg_joints;   // 该段轨迹末点的关节解（到位判据用）
   {
     const auto pr = motion_.plan_orbit_ruckig(ox, oy, oz, az0, el0, r0, az1, el1, r1,
-                                              s_vel, s_acc, s_jerk, cancelled);
+                                              s_vel, s_acc, s_jerk, cancelled, &seg_joints);
     if (pr != motion::PlanResult::Success) {
       result.success = false;
       result.exit_reason = plan_exit_reason(pr, cancelled());
@@ -202,16 +205,17 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
 
   if (!goal.return_to_start) {
     const ArmPose end_pose = sphere_to_pose(goal.azimuth_end_deg, goal.elevation_end_deg, r1, ox, oy, oz);
-    return wait_at_pose(gh, end_pose, "ORBIT 终止到位", 60.0, 100.0,
+    return wait_at_pose(gh, end_pose, seg_joints, "ORBIT 终止到位", 60.0, 100.0,
                         goal.azimuth_end_deg, goal.elevation_end_deg, r1);
   }
 
   // 步骤 3：Ruckig 1-DOF 原路返回（终 → 起）
   if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }
   RCLCPP_INFO(logger_, "ORBIT return_to_start: 原路返回");
+  std::vector<double> back_joints;
   {
     const auto pr = motion_.plan_orbit_ruckig(ox, oy, oz, az1, el1, r1, az0, el0, r0,
-                                              s_vel, s_acc, s_jerk, cancelled);
+                                              s_vel, s_acc, s_jerk, cancelled, &back_joints);
     if (pr != motion::PlanResult::Success) {
       result.success = false;
       result.exit_reason = plan_exit_reason(pr, cancelled());
@@ -220,7 +224,7 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
       return result;
     }
   }
-  return wait_at_pose(gh, start_pose, "ORBIT 返回到位", 90.0, 100.0,
+  return wait_at_pose(gh, start_pose, back_joints, "ORBIT 返回到位", 90.0, 100.0,
                       goal.azimuth_start_deg, goal.elevation_start_deg, r0);
 }
 
@@ -271,7 +275,9 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::move_and_wait(
   const double total_dur = std::max(dist / std::max(speed.v_pos, 1e-6), 0.5);
 
   ExecutionMonitor::WaitParams p;
-  p.arrived = [this, target]() { return is_at_pose(status_.pose(), target); };
+  // 到位判据 = 臂 J1-3 到达 PTP 终点关节解（云台照常跟动但不进判据，理由见
+  // commander/motion_policy.hpp 的 is_at_joints_prefix）
+  p.arrived = arm_arrived_fn(exec_r.target_joints, target);
   p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
   p.on_feedback = [this, gh, p_lo, p_hi, total_dur, azimuth, elevation, radius](double elapsed) {
     const double ratio = std::min(elapsed / std::max(total_dur, 1e-6), 0.999);
@@ -298,10 +304,11 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::move_and_wait(
 // ── 等待已下发轨迹执行完毕（只轮询到位）────────────────────────────────────────────
 TrajectoryShotServer::Action::Result TrajectoryShotServer::wait_at_pose(
     const std::shared_ptr<GoalHandle> & gh, const ArmPose & target,
+    const std::vector<double> & target_joints,
     const char * label, double p_lo, double p_hi, double azimuth, double elevation, double radius)
 {
   ExecutionMonitor::WaitParams p;
-  p.arrived = [this, target]() { return is_at_pose(status_.pose(), target); };
+  p.arrived = arm_arrived_fn(target_joints, target);
   p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
   p.on_feedback = [this, gh, p_lo, p_hi, azimuth, elevation, radius](double elapsed) {
     // 轨迹已下发、无 dist 依据；沿用原实现的 0.1×timeout 归一化
@@ -325,6 +332,20 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::wait_at_pose(
   result.exit_reason = outcome_reason(outcome);
   result.error_code  = result.success ? ArmStatus::ERR_NONE : ArmStatus::ERR_TIMEOUT;
   return result;
+}
+
+// ── 到位判据构造：只判臂 J1-3 ──────────────────────────────────────────────────────
+std::function<bool()> TrajectoryShotServer::arm_arrived_fn(
+    const std::vector<double> & target_joints, const ArmPose & target)
+{
+  if (target_joints.size() >= motion::ARM_JOINT_COUNT) {
+    return [this, target_joints]() {
+      return is_at_joints_prefix(motion_.get_current_joints(), target_joints,
+                                 motion::ARM_JOINT_COUNT);
+    };
+  }
+  RCLCPP_WARN(logger_, "无末点关节解，退化为笛卡尔到位判据（云台未到位可能导致超时）");
+  return [this, target]() { return is_at_pose(status_.pose(), target); };
 }
 
 // ── 球坐标 → Cartesian 位姿 ────────────────────────────────────────────────────────

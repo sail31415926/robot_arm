@@ -17,7 +17,7 @@
 
 ```text
 robot_arm/
-├── robot_arm_interfaces/    # 自定义 msg / srv / action（ArmStatus、ArmMoveToPose、ArmTrajectoryShot…）
+├── robot_arm_interfaces/    # 自定义 msg / srv / action（ArmStatus、ArmMoveToPose、ArmMoveToJoint、ArmTrajectoryShot…）
 ├── robot_arm_description/   # 纯数据包：URDF / mesh / MJCF / RViz 显示配置
 ├── robot_arm_moveit_config/ # MoveIt 配置包（社区标准布局）：SRDF / kinematics(pick_ik) / joint_limits /
 │                            #   OMPL 管线 / 三后端 moveit_controllers / servo 配置 / moveit.launch.py
@@ -124,7 +124,7 @@ ros2 launch robot_arm_bringup real.launch.py   controller:=commander gui:=false 
 | `spherical_orbit` | `spherical_orbit_controller_node` (py) | Ruckig 球面轨迹（相机始终对中） | Gazebo / MuJoCo / 实物 |
 | `cartesian_velocity` | `cartesian_velocity_controller_node` (py) | TwistStamped → MoveIt Servo / MuJoCo DLS | Gazebo / MuJoCo |
 | `visp_ibvs_control`¹ | `visp_ibvs_node` (C++) + `red_box_detector` (py) | ViSP + Pinocchio 视觉闭环 | Gazebo / 实物 |
-| `commander` | `arm_commander_node` (C++) | 状态机 + 3 Action（见下节） | Gazebo / MuJoCo / 实物 |
+| `commander` | `arm_commander_node` (C++) | 状态机 + 4 Action（见下节） | Gazebo / MuJoCo / 实物 |
 
 > 前 6 种为 Python 调试模式（节点被 GUI 进程内 import，故保留 Python）；`commander`（产品中间层）与 `visp_ibvs_control`（视觉伺服）为 C++ 产品栈。
 > ¹ 实物后端该模式参数名为 `visp_ibvs`（见 `real.launch.py`）。
@@ -183,10 +183,12 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 ```text
 ═══════════════════════════════════════════════════════════════════════════════════
  L4 应用/指挥层           外部业务 Director（下发拍摄/姿态任务、读状态）
-                          └ commander_test_gui —— 测试用 Director（走 ROS Action）
+                          └ commander_test_gui —— 测试用 Director（走 ROS Action，4 面板：
+                                                    status/MoveToPose/MoveToJoint/TrajectoryShot）
 ───────────────────────────────────────────────────────────────────────────────────
  L3 产品中间层            arm_commander_node (C++)  单一状态机 IDLE/MOVING/REACHED/…
    [ROS2 Action/Srv/Topic]  ├ move_to_pose_server     姿态切换（关节 / IK 目标）
+                            ├ move_to_joint_server    关节空间点到点（只动臂 J1-3）
                             ├ trajectory_shot_server  直线 / 球面运镜（Ruckig OTG）
                             ├ track_target_server     视觉跟随（转调 visp 节点）
                             ├ execution_monitor       到位 / 超时判定
@@ -232,11 +234,17 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 | Joint1–3 | `canopen_ros2_control/RobotSystem`（ros2_canopen，CiA402/SocketCAN） | `joint_state_broadcaster` → `/joint_states` | `/arm_controller/joint_trajectory` |
 | Joint4–6 | `robot_gimbal_driver_v2/GimbalForwardingInterface`（转发插件，不碰串口）→〖跨机 DDS〗→ 云台板端 `robot_gimbal_node_v2`（唯一串口拥有者，真实回读） | `joint_state_broadcaster` → `/joint_states`（J4-6 为板端真实回读；跨机不通时退化为开环回显） | `/arm_controller/joint_trajectory`（同一控制器） |
 
+> **到位判据只认臂 J1-3。** Commander 的所有等待循环（`ArmMoveToPose` / `ArmTrajectoryShot` /
+> `ArmMoveToJoint`）都用「臂关节到达本段轨迹终点解」判定成败，**不用末端位姿** —— 末端
+> `gimbal_tool0` 在云台 J4-6 之后，云台回读不收敛（板端未上电 / 跨机 DDS 不通 / GCU 自稳
+> 环静差）会让笛卡尔判据永不满足，动作全部超时报错。云台仍随 6 轴轨迹一起规划下发，
+> 只是不参与判定。
+
 ### 各节点职责与数据传输
 
 | 节点（可执行） | 包·语言 | 职责 | 关键输入 → 输出 |
 | :--- | :--- | :--- | :--- |
-| `arm_commander_node` | robot_arm_node · C++ | 产品中间层状态机，把「拍摄/姿态」意图翻译成轨迹 | `/robot_arm/{move_to_pose,trajectory_shot,track_target}` Action、`/joint_states`、`/compute_ik` → `/arm_controller/joint_trajectory`、`/robot_arm/arm_status` |
+| `arm_commander_node` | robot_arm_node · C++ | 产品中间层状态机，把「拍摄/姿态」意图翻译成轨迹 | `/robot_arm/{move_to_pose,move_to_joint,trajectory_shot,track_target}` Action、`/joint_states`、`/compute_ik` → `/arm_controller/joint_trajectory`、`/robot_arm/arm_status` |
 | `mode_manager_node` | robot_arm_node · C++ | 语义控制模式仲裁（TRAJECTORY/JOINT_VELOCITY/…），后端无感；切模式 = switch_controller + bumpless 播种 + 速度总线看门狗 | `/robot_arm/switch_control_mode`(Srv)、`/robot_arm/cmd/joint_velocity` → `controller_manager/switch_controller`、`/arm_velocity_controller/commands`、`/robot_arm/control_mode`(latched) |
 | `controllers ×6` | robot_arm_debug · py | 调试控制：关节滑块 / 笛卡尔 / 实时 IK / Ruckig 点到点 / 球面运镜 / 速度点动 | GUI 滑块、`/joint_states`、`/compute_ik`·`/compute_cartesian_path` → `/arm_controller/joint_trajectory`（`cartesian_velocity` 改发 `/servo_node/delta_twist_cmds`） |
 | `visp_ibvs_node` | robot_arm_debug · C++ | ViSP+Pinocchio 图像伺服，加权 Jacobian 直接算关节速度 | `/red_detector/feature`（或外部 `perception_topic`）、`/joint_states` → `/arm_controller/joint_trajectory` |
@@ -301,7 +309,7 @@ source install/setup.bash   # 编译后
 
 ## Arm Commander 接口参考
 
-Arm Commander（`controller:=commander`）是中间层状态机，对外暴露 3 个 Action —— `ArmMoveToPose`（姿态切换）、`ArmTrajectoryShot`（运镜轨迹）、`ArmTrackTarget`（视觉跟随），4 个 Service（`enable` / `stop` / `reset_error` / `homing`），并以 10 Hz 发布 `/robot_arm/arm_status`。
+Arm Commander（`controller:=commander`）是中间层状态机，对外暴露 4 个 Action —— `ArmMoveToPose`（姿态切换，笛卡尔）、`ArmMoveToJoint`（关节空间点到点）、`ArmTrajectoryShot`（运镜轨迹）、`ArmTrackTarget`（视觉跟随），4 个 Service（`enable` / `stop` / `reset_error` / `homing`），并以 10 Hz 发布 `/robot_arm/arm_status`。
 
 ### 启动与基础控制
 
@@ -334,6 +342,26 @@ ros2 action send_goal /robot_arm/move_to_pose robot_arm_interfaces/action/ArmMov
   "{target_pose_state: 2, transition_speed: 1, return_to_start: false,
     target_pose: {x: 0.30, y: 0.0, z: 0.50, roll: 90.0, pitch: 10.0, yaw: 0.0}}"
 ```
+
+### ArmMoveToJoint — 关节空间点到点
+
+`/robot_arm/move_to_joint`；直接给关节角、**不过 IK**，用于示教/标定/绕开奇异点。`target_joints` 必须 **3 个**（Joint1/2/3，单位 rad）；`relative: true` 时是增量；`duration_sec > 0` 覆盖档位，`<= 0` 按档位（0.3 / 0.6 / 1.2 rad·s⁻¹）算时长。
+
+**云台 J4-6 保持不动**（Commander 用当前回读填充下发），到位判据也只看 J1-3 —— 云台未上电不会卡住动作。这点与 `ArmMoveToPose` 的 STOWED 不同，后者会把 6 轴全部归零。
+
+```bash
+# 绝对角
+ros2 action send_goal -f /robot_arm/move_to_joint robot_arm_interfaces/action/ArmMoveToJoint \
+  "{target_joints: [0.5, 1.0, -1.2], transition_speed: 1, relative: false, duration_sec: 0.0}"
+
+# 相对增量（J2 抬 0.3 rad，FAST）
+ros2 action send_goal /robot_arm/move_to_joint robot_arm_interfaces/action/ArmMoveToJoint \
+  "{target_joints: [0.0, 0.3, 0.0], transition_speed: 2, relative: true}"
+```
+
+三道校验任一不过都**不下发任何指令**、状态回 IDLE：个数不对 → `invalid_goal`；超关节限位 → `out_of_range`（限位从 `/robot_description` 解析 URDF，随实机标定自动跟随，不写死）；自碰撞 → `collision`（`/check_state_validity`；move_group 未运行时 fail-open 并告警）。
+
+调试 GUI（`controller:=commander` 默认带）里有对应面板：3 个滑块 + 当前值只读框 + 「↧ 读当前值」（把实测灌进滑块，示教先摆后调最顺手）。
 
 ### ArmTrajectoryShot — 轨迹运镜
 

@@ -105,7 +105,8 @@ PlanResult solve_and_send(
     int decimate_k,
     double ik_timeout_s,
     const std::function<bool()> & stop_check,
-    rclcpp::Logger logger)
+    rclcpp::Logger logger,
+    std::vector<double> * final_joints)
 {
   if (all_pts_in.empty()) return PlanResult::Error;
 
@@ -209,6 +210,9 @@ PlanResult solve_and_send(
     return PlanResult::Cancelled;
   }
   traj_pub->publish(msg);
+
+  // 末点关节解带给上层做到位判据（joint_pos 首元素是插入的起点，末元素才是终点）
+  if (final_joints) *final_joints = joint_pos.back();
 
   const double plan_ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_plan0).count();
