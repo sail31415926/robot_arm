@@ -15,8 +15,17 @@ Director ──service(/robot_arm/enable)─────────► Driver  
 Director ──service(/robot_arm/homing)─────────► Driver      回零（Commander 透传）
 Director ──service(/robot_arm/reset_error)────► Driver      清故障 + Commander 状态复位
 Commander ──topic(/robot_arm/arm_status)──────► Director    实时状态广播（10Hz）
-Director ──topic(/robot_arm/follow_command)───► Commander   （预留）末端速度流，暂无收发方
+Director ──topic(/robot_arm/follow_command)───► Commander   末端 6 维 twist 流（笛卡尔速度控制）
+Director ──topic(/robot_arm/cmd/joint_velocity)► Commander   关节速度流（J1-3）
+Director ──service(/robot_arm/switch_control_mode)► ModeManager 切控制模式（速度控制前置）
+ModeManager ─topic(/robot_arm/control_mode)───► 全体        当前控制模式（latched）
 ```
+
+> 两条速度流最终和位置类动作**汇到同一条总线**：`follow_command` 先经 Commander 的
+> 6×6 Jacobian DLS 换算成 6 个关节速度，和 Director 直发的 `cmd/joint_velocity` 一起
+> 由 `VelocityStreamServer` 限幅 → 积分成角度 → 按 URDF 限位夹紧，以 50Hz 位置流发
+> `/arm_controller/joint_trajectory`（与 MoveToPose / MoveToJoint / TrajectoryShot 同一个控制器）。
+> 速度模式**不切控制器**，切模式只更新语义标志。
 
 ---
 
@@ -78,16 +87,37 @@ ArmStatus
 
 ---
 
-## ArmFollowCommand.msg（话题 `/robot_arm/follow_command`，**预留**）
+## ArmFollowCommand.msg（话题 `/robot_arm/follow_command`）
 
-> 预留接口：当前工程中无 publisher / subscriber。保留用于未来的末端速度流控制
-> （手动点动 / 外部伺服源）；视觉跟随功能现由 `ArmTrackTarget` action 实现。
+> 笛卡尔速度控制入口（2026-08-04 开通）。订阅方 = Arm Commander 的 CartesianVelocityServer。
+> 前置：先切 `ControlMode.JOINT_VELOCITY`；须 50-100Hz 持续发布；停止 = 发一帧全 0。
 
 ```text
 ArmFollowCommand
 │
-└── twist: ArmTwist                 末端目标速度（base_link 系）
-                                    线速度有效范围 [-0.2, 0.2] m/s，不使用的轴填 0
+└── twist: ArmTwist                 末端目标速度（arm_base_link 系，完整 6 自由度）
+                                    vx/vy/vz     线速度 m/s，主要由臂 J1-3 承担，默认上限 0.2
+                                    wroll/wpitch/wyaw  角速度 **度/秒**（绕 base 系 X/Y/Z 的
+                                                 角速度矢量，非 RPY 角速率），主要由云台 J4-6 承担
+```
+
+> 6 维一次解算：Commander 用 J1-6 的 6×6 几何 Jacobian 做 DLS 伪逆解出全部 6 个关节速度，
+> 积分成角度后在**同一条轨迹**里下发，位置/姿态耦合由 Jacobian 精确补偿。
+
+---
+
+## ArmJointVelocityCommand.msg（话题 `/robot_arm/cmd/joint_velocity`）
+
+> 关节速度控制入口（2026-08-04 开通）。订阅方 = Arm Commander 的 `VelocityStreamServer`
+> （限幅 → 积分成角度 → 按 URDF 限位夹紧 → 50Hz 位置流走 `/arm_controller/joint_trajectory`）。
+> 前置与发布节奏同 `ArmFollowCommand`。
+
+```text
+ArmJointVelocityCommand
+│
+└── velocities: float64[]           目标关节角速度 rad/s，顺序固定 Joint1/Joint2/Joint3，
+                                    必须 3 个（长度不符整帧丢弃并告警）；
+                                    云台 J4-6 不在此列，保持当前角度不动
 ```
 
 ---
@@ -100,7 +130,7 @@ ArmFollowCommand
 | `action/ArmMoveToJoint.action` | `/robot_arm/move_to_joint` | 关节空间点到点（不过 IK，只动臂 J1-3、云台保持）；限位与自碰撞校验不过则不下发；exit_reason: reached / out_of_range / collision / invalid_goal / timeout / cancelled / stopped / error |
 | `action/ArmTrajectoryShot.action` | `/robot_arm/trajectory_shot` | 直线 / 球面环绕运镜；exit_reason: reached / timeout / cancelled / stopped / error |
 | `action/ArmTrackTarget.action` | `/robot_arm/track_target` | IBVS 跟随启停；exit_code: CONVERGED / FEATURE_LOST / TIMEOUT / CANCELLED / ERROR |
-| `srv/ArmStop.srv` | `/robot_arm/stop` | 软件急停，非 MOVING 状态为空操作 |
+| `srv/ArmStop.srv` | `/robot_arm/stop` | 软件急停：停 action（MOVING→STOPPED）+ 停速度流（需 ArmResetError 复位后才能再动） |
 | `srv/ArmEnable.srv` | `/robot_arm/enable` | 伺服上电 / 下电（透传驱动层） |
 | `srv/ArmHoming.srv` | `/robot_arm/homing` | 回零（阻塞至到位或急停） |
 | `srv/ArmResetError.srv` | `/robot_arm/reset_error` | 驱动层 recover + Commander ERROR/STOPPED→IDLE |

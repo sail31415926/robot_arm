@@ -163,7 +163,16 @@ def _setup(context, *args, **kwargs):
         arguments=['arm_controller', '--controller-manager', '/controller_manager'] + base_log,
         output='screen',
     )
-    # gimbal_controller 不再 spawn：arm_controller 已 claim 全 6 轴（含云台 J4-6）
+    # 云台控制器：默认（velocity_backend=trajectory）用不到 —— 速度也走 arm_controller
+    # 那条 joint_trajectory，J4-6 跟着同一条轨迹走。只有切到 PV 后端
+    #（velocity_backend:=velocity_controller，arm_controller 被停）时，J4-6 才需要它
+    # 顶上命令通道，由 mode_manager_node 的 hold_controllers 激活。故只 load 不 activate。
+    gimbal_ctrl_loader = Node(
+        package='controller_manager', executable='spawner',
+        arguments=['gimbal_controller', '--inactive',
+                   '--controller-manager', '/controller_manager'] + base_log,
+        output='screen',
+    )
 
     # JOINT_VELOCITY 模式备用：只 load+configure 不 activate（--inactive），
     # 由 mode_manager_node 经 /robot_arm/switch_control_mode 与 arm_controller 互斥切换
@@ -176,7 +185,9 @@ def _setup(context, *args, **kwargs):
     )
 
     # 控制模式仲裁器（常驻基础设施，实物无 /clock → use_sim_time=False）
-    mode_manager = common.mode_manager_node(use_sim_time=False)
+    # hold_controllers 只在 PV 后端生效（默认 trajectory 后端不切控制器，也就不需要保持控制器）
+    mode_manager = common.mode_manager_node(use_sim_time=False,
+                                            hold_controllers=['gimbal_controller'])
 
     # ── GUI controller nodes（复用共享工厂）─────────────────────────────────────
     # use_sim_time=False：实物无 /clock，若为 True 节点内定时器永不触发（TF 位姿面板卡 '--'）
@@ -269,7 +280,7 @@ def _setup(context, *args, **kwargs):
     # 控制器 2 s 后 spawn（等 controller_manager / CANopen master 初始化）
     spawn_controllers = TimerAction(
         period=2.0,
-        actions=[jsb_spawner, arm_ctrl_spawner, vel_ctrl_loader],
+        actions=[jsb_spawner, arm_ctrl_spawner, vel_ctrl_loader, gimbal_ctrl_loader],
     )
 
     # ── 电机运行模式（402）按控制方式自动选择，经 /arm_node/set_mode_* 编排 ──────

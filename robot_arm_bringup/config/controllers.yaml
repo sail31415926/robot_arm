@@ -53,9 +53,11 @@ gimbal_controller:
       - Joint4
       - Joint5
       - Joint6
+    # 仿真只 claim position：GazeboSystem 对同一关节同时拿到 position 和 velocity
+    # 命令接口时，两种写入方式会互相打架（云台跟随明显打折）。JTC 只需要 position，
+    # 轨迹点里的 velocities 仅用于插值，不需要 velocity 命令接口。
     command_interfaces:
       - position
-      - velocity
     state_interfaces:
       - position
       - velocity

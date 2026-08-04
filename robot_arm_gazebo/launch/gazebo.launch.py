@@ -276,8 +276,20 @@ def generate_launch_description():
                    '--controller-manager-timeout', '30'] + base_log,
     )
 
+    # 云台保持控制器：默认（velocity_backend=trajectory）用不到 —— 速度也走 arm_controller
+    # 那条 joint_trajectory，J4-6 跟着同一条轨迹走。只有切到 PV 后端时 arm_controller 被停，
+    # 云台 J4-6 才会没人命令（在重力下垂、把末端带偏），那时由 mode_manager 的
+    # hold_controllers 激活它锁住当前位姿。故只 load 不 activate。
+    gimbal_controller_loader = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['gimbal_controller', '--inactive',
+                   '--controller-manager-timeout', '30'] + base_log,
+    )
+
     # 控制模式仲裁器（常驻基础设施）
-    mode_manager = common.mode_manager_node(use_sim_time=True)
+    mode_manager = common.mode_manager_node(use_sim_time=True,
+                                            hold_controllers=['gimbal_controller'])
 
     camera_view = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -316,7 +328,7 @@ def generate_launch_description():
             OnProcessExit(
                 target_action=spawn_entity,
                 on_exit=[joint_state_broadcaster_spawner, arm_controller_spawner,
-                         arm_velocity_controller_loader],
+                         arm_velocity_controller_loader, gimbal_controller_loader],
             )
         ),
         mode_manager,   # 常驻，惰性等 controller_manager，切换时才调 switch_controller

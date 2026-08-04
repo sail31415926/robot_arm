@@ -38,8 +38,9 @@
 
 - **运动类（action / topic）** 走 Director ↔ Arm Commander（需要 IK / 规划）。
 - **运维类（service）** 由 Director 直达 Driver（上电 / 回零 / 清错是硬件操作）。
-- **ArmStop** 作用于 Commander（软停，MOVING → STOPPED）；**ArmResetError** 在透传驱动层
-  recover 的同时，把 Commander 从 ERROR / STOPPED 复位回 IDLE。
+- **ArmStop** 作用于 Commander：软停 action（MOVING → STOPPED）**并停掉速度流**
+  （速度流是 topic 流、不占状态机，所以单独处理）；**ArmResetError** 在透传驱动层 recover
+  的同时，把 Commander 从 ERROR / STOPPED 复位回 IDLE，速度流随之解禁。
 - Arm Commander 向下用关节级标准消息（`JointTrajectory`），
   向上把驱动反馈（`JointState` / TF2）合成为语义级 `ArmStatus`。
 
@@ -89,7 +90,7 @@ Arm Commander 内部维护一个五态状态机（`CommanderState`），决定�
 
 | 模式 | 适用场景 |
 | --- | --- |
-| **Topic** | 高频连续、无需逐条确认：状态广播（`ArmStatus`）、速度流（`ArmFollowCommand`，预留） |
+| **Topic** | 高频连续、无需逐条确认：状态广播（`ArmStatus`）、速度流（`ArmFollowCommand` / `ArmJointVelocityCommand`） |
 | **Service** | 瞬时请求-应答、立即返回：运维操作（上电/回零/清错/急停） |
 | **Action** | 有时长、需进度反馈、可取消：位姿切换、运镜执行 |
 
@@ -106,8 +107,85 @@ Arm Commander 内部维护一个五态状态机（`CommanderState`），决定�
 
 | 消息 | 方向 | 说明 |
 | --- | --- | --- |
-| `ArmFollowCommand` | Director → Commander | 末端速度跟随（`ArmTwist`）持续速度流 —— **预留接口，暂无收发方**（视觉跟随现由 `ArmTrackTarget` action 实现） |
+| `ArmFollowCommand` | Director → Commander | **笛卡尔速度控制**：末端 6 维 twist（`ArmTwist`）持续流，Commander 经 6×6 Jacobian 换算下发（2026-08-04 开通） |
+| `ArmJointVelocityCommand` | Director → Commander | **关节速度控制**：J1-3 角速度持续流（2026-08-04 开通） |
 | `ArmStatus` | Commander → Director | 位姿、速度、运动状态、错误码、命令执行结果、到位标志（到达目标 / 到达运镜起始点 / 摄像头录制就绪）（10Hz 周期广播） |
+
+#### 速度控制 —— `ArmFollowCommand` / `ArmJointVelocityCommand`（2026-08-04 开通）
+
+两条速度流总线，**共用同一套下游处理**（Commander 的 `VelocityStreamServer`），
+区别只在入口的抽象层级 —— 一条给关节角速度，一条给末端 twist：
+
+```text
+Director ─ArmFollowCommand (末端 6 维 twist)──┐
+                                             │ 6×6 几何 Jacobian + DLS 伪逆 → q̇(6)
+Director ─ArmJointVelocityCommand (J1-3)─────┤ （关节速度直给臂那三轴，云台 q̇=0）
+                                             ▼
+                        Commander · VelocityStreamServer
+                        限幅 → 积分成角度 → 按 URDF 限位夹紧
+                                             ▼
+                  /arm_controller/joint_trajectory（JTC，6 轴，50Hz 位置流）
+                                             ▲
+                  位置类动作（MoveToPose / MoveToJoint / TrajectoryShot）也走这里
+```
+
+> **速度和位置共用同一个控制器、同一条总线**（2026-08-04 改）。原先速度模式要切到独立的
+> `arm_velocity_controller`（实物 CiA402 PV(3)），控制器切换带来三个副作用：切回时陈旧位置
+> 命令被回放导致机械臂冲回旧位姿、轨迹类动作在速度模式下静默失效、云台要额外挂保持控制器。
+> 改成位置流后这些一次性消失。代价是放弃驱动器内部速度环，高动态场景平滑度略逊 ——
+> 需要时用 `mode_manager_node` 的 `velocity_backend:=velocity_controller` 切回 PV 后端。
+
+**与位置类动作的关系**：`ArmMoveToPose`（收纳位/观察位/拍摄位）、`ArmMoveToJoint`、
+`ArmTrajectoryShot` 在速度模式下会**自动切回 `TRAJECTORY` 再执行**（这类动作本来就要 JTC，
+不切的话轨迹发出去不动、只会等到超时）。所以从速度模式直接下发这些动作是允许的，
+上层不需要先手动切模式；反过来，速度流**不会**自动切模式（持续控制权必须显式申请）。
+
+**换模不跳变**：切回 `TRAJECTORY` 时机械臂**原地不动**（实测残差 0.0000 rad，全程无偏离）
+—— 因为压根没有控制器切换，模式切换只是更新语义标志。
+
+**使用三步曲**（顺序不能变）：
+
+1. `/robot_arm/switch_control_mode` 切到 `ControlMode.JOINT_VELOCITY`
+   —— 这是**模式闸**：不切模式时速度指令一律被忽略并告警，防止误发的指令让机械臂动起来
+   （速度流**不会**自动切模式，持续控制权必须显式申请；切模式只经 ModeManager）。
+2. 以 **50-100Hz 持续发布**速度指令。低于 ~3Hz 会被断流看门狗（0.3s）判为掉线而停流。
+3. 停止：**停发布**或**发一帧全 0**都可以，两者都是原地停住（停流后 JTC 保持最后一个点）。
+   用完切回 `TRAJECTORY`。
+
+**完整 6 自由度**：线速度 `vx/vy/vz`（m/s）由臂 J1-3 出，角速度 `wroll/wpitch/wyaw`
+（**度/秒**，绕 base 系 X/Y/Z 轴的角速度矢量，不是 RPY 角速率）由云台 J4-6 出。
+两段不是分开算的 —— Commander 用 J1-6 的 6×6 几何 Jacobian 一次解出全部 6 个关节速度，
+位置与姿态的耦合（比如臂一动就把末端朝向带偏）由 Jacobian 自动补偿；6 个关节速度积分成角度后
+在**同一条轨迹**里下发，所以补偿是精确的（早期臂走速度控制器、云台走位置流的双通道方案，
+两条路动态特性不一致，姿态一直有残差）。
+
+> 云台接近万向锁（J5 贴近 ±90°）或某轴压到限位时姿态方向会退化：DLS 给的是可行近似解，
+> 跟踪精度下降。必要时先用 `ArmMoveToPose` 把云台摆回中位。
+
+**安全闸**（任一不满足即停止下发；停流即 JTC 保持最后一点 = 原地停住）：
+
+| 闸门 | 位置 | 行为 |
+| --- | --- | --- |
+| 控制模式 | Commander | 非 `JOINT_VELOCITY` 一律停流并告警 |
+| 急停 | Commander | `ArmStop` 立刻停流并丢弃缓存指令，`ArmResetError` 解除 |
+| 断流看门狗 | Commander，0.3s | 超时停流，JTC 保持最后一点（原地停住） |
+| 逐轴限幅 | Commander | `max_joint_speed` / `max_gimbal_speed` |
+| 关节限位 | Commander | 积分出的角度按 URDF 限位夹紧，到限位自然停住，反向撤离不受限 |
+| 奇异点 | Commander | DLS 阻尼（`singularity_eps` / `damping_max`），q̇ 整体等比缩放保方向 |
+| Jacobian 不可用 | Commander | URDF 未就绪 / TF 查不到 → **停流**（速度控制不能 fail-open） |
+
+**Commander 侧参数**（`arm_commander` 节点，前缀 `velocity_stream.`）：
+`rate_hz`(50) / `command_timeout`(0.3) / `lookahead`(0.05) / `max_linear_speed`(0.2 m/s) /
+`max_angular_speed`(1.0 rad/s) / `max_joint_speed`(1.0 rad/s) / `max_gimbal_speed`(2.0 rad/s) /
+`singularity_eps`(0.02) / `damping_max`(0.05) / `arm_joint_names`(J1-3) /
+`gimbal_joint_names`(J4-6) / `trajectory_topic`。
+
+> `rate_hz` **不要调到 100Hz**：JTC 每收到一条新轨迹就丢弃旧的重新插值，抢占太频繁反而
+> 跟不动（实测只剩指令的两三成，压到 50Hz 后回到 98~100%）。本仓 `servo_config.yaml`
+> 把 MoveIt Servo 压到 50Hz 是同一个原因。
+
+**调试**：`commander_test_gui` 的「速度控制」面板 —— 模式切换按钮 + 三行点动
+（关节速度 / 末端线速度 / 末端角速度），按住即动、松手即停并自动补 0 帧。
 
 #### `ArmStatus` —— 状态广播（Commander → Director，10Hz）
 
@@ -154,8 +232,8 @@ float32  tracking_depth_err_m # 跟随中的深度误差（m，非跟随时 0.0�
 | --- | --- | --- |
 | `ArmEnable` | Director → Driver | 伺服上电 / 下电 |
 | `ArmHoming` | Director → Driver | 回零（阻塞，回零结束后应答） |
-| `ArmResetError` | Director → Commander → Driver | 清除驱动层故障，并复位 Commander 状态机（ERROR/STOPPED → IDLE） |
-| `ArmStop` | Director → Commander | 软件急停（MOVING → STOPPED）；非运动状态下为空操作 |
+| `ArmResetError` | Director → Commander → Driver | 清除驱动层故障，复位 Commander 状态机（ERROR/STOPPED → IDLE），速度流随之解禁 |
+| `ArmStop` | Director → Commander | 软件急停：停 action（MOVING → STOPPED）+ 停速度流（`ArmResetError` 复位后解禁） |
 
 > `ArmEnable` / `ArmHoming` / `ArmResetError` 为运维直通接口，由 Commander 透传到 Driver，不经过轨迹规划层。
 
@@ -300,7 +378,10 @@ Feedback:（10Hz）
 | 名称 | 类型 | 方向 |
 | --- | --- | --- |
 | `/robot_arm/arm_status` | `ArmStatus` topic | Commander → Director |
-| `/robot_arm/follow_command` | `ArmFollowCommand` topic | Director → Commander（**预留**，暂未接线） |
+| `/robot_arm/follow_command` | `ArmFollowCommand` topic | Director → Commander（笛卡尔速度流） |
+| `/robot_arm/cmd/joint_velocity` | `ArmJointVelocityCommand` topic | Director → Commander（关节速度流） |
+| `/robot_arm/control_mode` | `ControlMode` topic (latched) | ModeManager → 全体（当前语义控制模式） |
+| `/robot_arm/switch_control_mode` | `SwitchControlMode` service | Director → ModeManager（切控制模式，速度控制的前置步骤） |
 | `/robot_arm/move_to_pose` | `ArmMoveToPose` action | Director → Commander |
 | `/robot_arm/move_to_joint` | `ArmMoveToJoint` action | Director → Commander |
 | `/robot_arm/trajectory_shot` | `ArmTrajectoryShot` action | Director → Commander |
@@ -316,7 +397,9 @@ Feedback:（10Hz）
 - **单位**：长度米、速度米/秒、角度度（RPY）/ 弧度（球坐标 theta/phi 内部表示）。
 - **速度档位**：`SLOW / NORMAL / FAST` 三档统一常量值（0/1/2），`ArmMoveToPose` / `ArmMoveToJoint` / `ArmTrajectoryShot` 共用相同常量；但**量纲不同** —— 笛卡尔动作是末端线速度/角速度（m·s⁻¹ / rad·s⁻¹，见 `motion_policy.hpp` 的 `Speed`），`ArmMoveToJoint` 是关节角速度（rad·s⁻¹，`JOINT_SPEED_*_RPS`）。
 - **球坐标系**：方位角 θ=0 为近侧（相机到主体方向与主体到世界原点方向相同），正值顺时针；俯仰角 φ 正值向上，范围 (-90°, 90°)。
-- **command_id**：由上层单调递增分配，`0` 表示上层不关心执行结果。
+- **command_id**：由上层单调递增分配，`0` 表示上层不关心执行结果。仅用于 action 与
+  `ArmStatus.executing_command_id` 的关联；两条速度流是持续控制、不带 command_id
+  （逐帧命令 id 对速度流没有意义）。
 
 ## Arm Commander 实现位置
 
@@ -330,10 +413,13 @@ Commander 已于 2026-07 由 Python 全量移植为 C++（`robot_arm_node` 包�
 | `robot_arm_node/src/motion/joint_limits.cpp` | 关节限位单一来源：解析 `/robot_description`（latched）取 URDF lower/upper |
 | `robot_arm_node/src/commander/trajectory_shot_server.cpp` | `ArmTrajectoryShot` 执行逻辑（直线 / 球面轨道） |
 | `robot_arm_node/src/commander/track_target_server.cpp` | `ArmTrackTarget` 执行逻辑（IBVS 视觉跟随启停） |
+| `robot_arm_node/src/commander/velocity_stream_server.cpp` | 速度流：两条速度总线 → 6×6 Jacobian DLS → 积分成位置流走 JTC |
+| `robot_arm_node/src/motion/jacobian.cpp` | 6×6 几何 Jacobian（TF + URDF）+ DLS 伪逆 |
+| `robot_arm_node/src/mode/mode_manager_node.cpp` | 控制模式仲裁：唯一切换入口 + latched 广播当前模式（默认后端下只更新语义，不切控制器） |
 | `robot_arm_node/src/commander/motion_executor.cpp` | 共享运动引擎：IK / Ruckig / JointTrajectory |
 | `robot_arm_node/src/commander/execution_monitor.cpp` | 执行监视：统一等待循环 / 超时 / 取消 / 急停联动（到位判据由各 server 注入，统一只判臂 J1-3） |
 | `robot_arm_node/src/state/status_aggregator.cpp` | 状态聚合：JointState + TF2 → ArmStatus |
-| `robot_arm_debug/python/gui/commander_test_gui.py` | Director 视角调试 GUI：4 个面板（ArmStatus 监控 + MoveToPose + **MoveToJoint**（J1-3 滑块 / 读当前值 / 相对增量 / 时长）+ TrajectoryShot）+ 急停/清错/回零/使能 |
+| `robot_arm_debug/python/gui/commander_test_gui.py` | Director 视角调试 GUI：5 个面板（ArmStatus 监控 + MoveToPose + **MoveToJoint**（J1-3 滑块 / 读当前值 / 相对增量 / 时长）+ **速度控制**（模式切换 + 关节/末端点动）+ TrajectoryShot）+ 急停/清错/回零/使能 |
 
 启动方式：
 

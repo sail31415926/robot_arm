@@ -2,21 +2,26 @@
 """
 @file   commander_test_gui.py
 @brief  Arm Commander 调试 GUI —— Director 视角的完整测试工具
-@version 2.1
-@date   2026-07-31
+@version 2.2
+@date   2026-08-04
 
 功能（面板自上而下，与 Commander 的 4 个 action 对应）：
-  1. ArmStatus 实时监控 —— 位姿/速度/状态/错误码 + 到位指示灯 + 急停/清错/回零/使能
+  1. ArmStatus 实时监控 —— 位姿/状态/错误码/**当前控制模式** + 到位指示灯 + 急停/清错/回零/使能
   2. ArmMoveToPose      —— 姿态切换（STOWED/OBSERVE/SHOOTING）+ return_to_start
   3. ArmMoveToJoint     —— 关节空间点到点（2026-07-31 新增）：J1-3 滑块 + 当前值只读框
                            + 「↧ 读当前值」（把 /joint_states 实测灌进滑块，示教先手摆再微调）
                            + 档位 / Δ相对增量 / 时长（0=按档位）
                            云台 J4-6 由 Commander 保持不动，滑块范围 = URDF 限位
-  4. ArmTrajectoryShot  —— 直线运镜（LINEAR）/ 球面环绕运镜（ORBIT）+ return_to_start
+  4. 速度控制           —— 关节速度 / 末端线速度 / 末端角速度点动（2026-08-04 新增，
+                           按住即动松手即停）+ 模式切换按钮（JOINT_VELOCITY ↔ TRAJECTORY）
+                           与当前模式指示。末端角速度由云台 J4-6 执行（Commander 6×6
+                           Jacobian 统一解算，臂 J1-3 走速度、云台走位置流）
+  5. ArmTrajectoryShot  —— 直线运镜（LINEAR）/ 球面环绕运镜（ORBIT）+ return_to_start
   （ArmTrackTarget 由 visp_ibvs_gui 单独覆盖，不在本 GUI）
 
 订阅：/robot_arm/arm_status（语义状态）+ /joint_states（关节角 —— ArmStatus 只报末端
-      位姿，关节角按总线约定从 /joint_states 读）
+      位姿，关节角按总线约定从 /joint_states 读）+ /robot_arm/control_mode（当前控制模式）
+发布：/robot_arm/cmd/joint_velocity（关节速度点动）+ /robot_arm/follow_command（笛卡尔速度点动）
 
 用法：
   ros2 launch robot_arm_gazebo gazebo.launch.py controller:=commander
@@ -44,9 +49,13 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
+
 from robot_arm_interfaces.action import ArmMoveToPose, ArmMoveToJoint, ArmTrajectoryShot
-from robot_arm_interfaces.msg import ArmStatus
-from robot_arm_interfaces.srv import ArmStop, ArmEnable, ArmHoming, ArmResetError
+from robot_arm_interfaces.msg import (ArmFollowCommand, ArmJointVelocityCommand,
+                                      ArmStatus, ControlMode)
+from robot_arm_interfaces.srv import (ArmStop, ArmEnable, ArmHoming, ArmResetError,
+                                      SwitchControlMode)
 from sensor_msgs.msg import JointState
 
 try:
@@ -62,6 +71,16 @@ ACTION_MTJ   = '/robot_arm/move_to_joint'
 ACTION_TSS   = '/robot_arm/trajectory_shot'
 TOPIC_STATUS = '/robot_arm/arm_status'
 TOPIC_JOINTS = '/joint_states'
+# 速度控制（2026-08-04 开通）：两条产品总线 + 模式切换/广播
+TOPIC_JOINT_VEL = '/robot_arm/cmd/joint_velocity'   # ArmJointVelocityCommand
+TOPIC_FOLLOW    = '/robot_arm/follow_command'       # ArmFollowCommand（末端线速度）
+TOPIC_MODE      = '/robot_arm/control_mode'
+SRV_SWITCH_MODE = '/robot_arm/switch_control_mode'
+
+# 速度点动的发布周期（ms）。用 tkinter 的 after 驱动而不是 ROS 定时器：
+# 实物没有 /clock，若 launch 传了 use_sim_time=true，ROS 定时器会静默永不触发。
+VEL_TICK_MS = 20                # 50Hz，远高于 mode_manager 的 0.3s 断流看门狗
+MODE_NAMES  = {0: 'TRAJECTORY', 1: 'JOINT_VELOCITY', 2: 'JOINT_EFFORT', 3: 'ADMITTANCE'}
 
 # 关节滑块范围 = URDF 里 J1-3 的机械限位（2026-07-28 J2/J3 零点重标定后的值）。
 # 这里只是 GUI 的输入范围，真正的拦截在 Commander 侧（从 /robot_description 解析
@@ -107,6 +126,46 @@ class CommanderTestNode(Node):
         # 关节反馈：ArmStatus 只报末端位姿，关节角按总线约定从 /joint_states 读
         self._joints_sub  = self.create_subscription(JointState, TOPIC_JOINTS, self._on_joints, 10)
         self._last_arm_joints = None   # [J1,J2,J3]，供 GUI「读当前值」用
+
+        # ── 速度控制（关节速度 / 笛卡尔速度）────────────────────────────────────
+        self._jv_pub = self.create_publisher(ArmJointVelocityCommand, TOPIC_JOINT_VEL, 10)
+        self._fc_pub = self.create_publisher(ArmFollowCommand, TOPIC_FOLLOW, 10)
+        self._mode_client = self.create_client(SwitchControlMode, SRV_SWITCH_MODE)
+        # mode_manager 是 latched 广播，晚订阅也能立刻拿到当前模式
+        self._mode_sub = self.create_subscription(
+            ControlMode, TOPIC_MODE,
+            self._on_mode,
+            QoSProfile(depth=1,
+                       durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                       reliability=QoSReliabilityPolicy.RELIABLE))
+        self._active_mode = None
+
+    # ── 控制模式 ──────────────────────────────────────────────────────────────────
+    def _on_mode(self, msg: ControlMode):
+        self._active_mode = msg.mode
+        self._q.put(('mode', msg.mode))
+
+    def active_mode(self):
+        return self._active_mode
+
+    def switch_mode(self, target: int):
+        if not self._mode_client.wait_for_service(timeout_sec=0.5):
+            self._q.put(('error', f'✗ {SRV_SWITCH_MODE} 不可用（mode_manager_node 没起来？）'))
+            return
+        req = SwitchControlMode.Request(); req.target_mode = target
+        self._mode_client.call_async(req).add_done_callback(
+            lambda f: self._on_simple_result(f, f'SwitchMode→{MODE_NAMES.get(target, target)}'))
+
+    # ── 速度指令下发（GUI 以 VEL_TICK_MS 周期调用；停止 = 发一帧 0，不是停止发布）──
+    def publish_joint_velocity(self, v3):
+        self._jv_pub.publish(ArmJointVelocityCommand(velocities=[float(x) for x in v3]))
+
+    def publish_cartesian_velocity(self, v3, w3=(0.0, 0.0, 0.0)):
+        """末端 6 维 twist：v3 线速度 m/s，w3 角速度 °/s（绕 base 系 X/Y/Z）。"""
+        msg = ArmFollowCommand()
+        msg.twist.vx, msg.twist.vy, msg.twist.vz = (float(x) for x in v3)
+        msg.twist.wroll, msg.twist.wpitch, msg.twist.wyaw = (float(x) for x in w3)
+        self._fc_pub.publish(msg)
 
     # ── ArmMoveToPose ─────────────────────────────────────────────────────────────
     def send_mtp_goal(self, state, speed, return_to_start,
@@ -319,12 +378,17 @@ class App:
         main = ttk.Frame(root, padding=10)
         main.pack(fill=tk.BOTH, expand=True)
 
+        # 速度点动的「按住即动」状态：None 或 ('joint'|'cart', [v1,v2,v3])
+        self._vel_hold = None
+
         self._build_status_panel(main, pad)
         self._build_mtp_panel(main, pad)
         self._build_mtj_panel(main, pad)
+        self._build_vel_panel(main, pad)
         self._build_tss_panel(main, pad)
         self._build_log_panel(main, pad)
         self._poll()
+        self._vel_tick()
 
     # ── ArmStatus ─────────────────────────────────────────────────────────────────
     def _build_status_panel(self, parent, pad):
@@ -342,7 +406,8 @@ class App:
 
         row2 = ttk.Frame(sf); row2.pack(fill=tk.X, pady=(4, 0))
         for label, var_name in [('姿态','pose_state'),('错误','error_code'),
-                                 ('命令结果','cmd_result'),('运动中','is_moving')]:
+                                 ('命令结果','cmd_result'),('运动中','is_moving'),
+                                 ('控制模式','ctrl_mode')]:
             ttk.Label(row2, text=f'{label}:').pack(side=tk.LEFT, padx=(4, 1))
             v = tk.StringVar(value='--')
             setattr(self, f'_sv_{var_name}', v)
@@ -533,6 +598,135 @@ class App:
             relative     = self._mtj_rel_var.get(),
             duration_sec = self._mtj_dur_var.get(),
         )
+
+    # ── 速度控制（关节速度 / 笛卡尔速度）──────────────────────────────────────────
+    # 两条产品总线的点动测试台。按钮是「按住即动、松手即停」：按下开始以 50Hz 发速度，
+    # 松开立刻发一帧 0（不是停止发布 —— 那样要等 0.3s 看门狗，会多滑行一点）。
+    #
+    # 两条路的区别：
+    #   关节速度  → /robot_arm/cmd/joint_velocity，直达 mode_manager（限幅+限位刹车+看门狗）
+    #   笛卡尔速度 → /robot_arm/follow_command，先过 Commander 的 Jacobian DLS 换算，再进同一条总线
+    # 两者都要求先切到 JOINT_VELOCITY 模式（TRAJECTORY 下速度控制器未激活，指令会被忽略）。
+    def _build_vel_panel(self, parent, pad):
+        vf = ttk.LabelFrame(parent, text='速度控制  (JOINT_VELOCITY 模式)  '
+                                         '—  按住即动，松手即停', padding=6)
+        vf.pack(fill=tk.X, **pad)
+
+        # 模式行：当前模式 + 切换按钮
+        mrow = ttk.Frame(vf); mrow.pack(fill=tk.X)
+        ttk.Label(mrow, text='当前模式:').pack(side=tk.LEFT, padx=(4, 2))
+        self._sv_mode = tk.StringVar(value='--')
+        self._mode_lbl = ttk.Label(mrow, textvariable=self._sv_mode, width=16,
+                                   foreground='gray')
+        self._mode_lbl.pack(side=tk.LEFT)
+        ttk.Button(mrow, text='切到 JOINT_VELOCITY', width=20,
+                   command=lambda: self.node.switch_mode(ControlMode.JOINT_VELOCITY)
+                   ).pack(side=tk.LEFT, padx=4)
+        ttk.Button(mrow, text='切回 TRAJECTORY', width=17,
+                   command=lambda: self.node.switch_mode(ControlMode.TRAJECTORY)
+                   ).pack(side=tk.LEFT, padx=4)
+
+        # 关节速度点动：每轴一对 −/+
+        jrow = ttk.Frame(vf); jrow.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(jrow, text='关节速度', width=9).pack(side=tk.LEFT, padx=(4, 2))
+        self._vel_joint_mag = tk.DoubleVar(value=0.20)
+        ttk.Spinbox(jrow, from_=0.0, to=1.0, increment=0.05,
+                    textvariable=self._vel_joint_mag, width=6,
+                    format='%.2f').pack(side=tk.LEFT)
+        ttk.Label(jrow, text='rad/s').pack(side=tk.LEFT, padx=(1, 8))
+        for i, (name, _, _) in enumerate(ARM_JOINT_RANGE):
+            ttk.Label(jrow, text=name).pack(side=tk.LEFT, padx=(6, 1))
+            for sign, txt in ((-1.0, '−'), (+1.0, '＋')):
+                b = ttk.Button(jrow, text=txt, width=3)
+                b.pack(side=tk.LEFT, padx=1)
+                self._bind_jog(b, 'joint', i, sign)
+
+        # 笛卡尔速度点动：末端 ±X/±Y/±Z（arm_base_link 系）
+        crow = ttk.Frame(vf); crow.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(crow, text='末端线速度', width=9).pack(side=tk.LEFT, padx=(4, 2))
+        self._vel_cart_mag = tk.DoubleVar(value=0.05)
+        ttk.Spinbox(crow, from_=0.0, to=0.20, increment=0.01,
+                    textvariable=self._vel_cart_mag, width=6,
+                    format='%.2f').pack(side=tk.LEFT)
+        ttk.Label(crow, text='m/s').pack(side=tk.LEFT, padx=(1, 8))
+        for i, axis in enumerate(('X', 'Y', 'Z')):
+            ttk.Label(crow, text=axis).pack(side=tk.LEFT, padx=(6, 1))
+            for sign, txt in ((-1.0, '−'), (+1.0, '＋')):
+                b = ttk.Button(crow, text=txt, width=3)
+                b.pack(side=tk.LEFT, padx=1)
+                self._bind_jog(b, 'cart', i, sign)
+        ttk.Label(crow, text='m/s（arm_base_link 系）',
+                  foreground='gray').pack(side=tk.LEFT, padx=(10, 0))
+
+        # 末端角速度点动：Roll/Pitch/Yaw（由云台 J4-6 承担，Commander 6×6 Jacobian 统一解算）
+        arow = ttk.Frame(vf); arow.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(arow, text='末端角速度', width=9).pack(side=tk.LEFT, padx=(4, 2))
+        self._vel_ang_mag = tk.DoubleVar(value=10.0)
+        ttk.Spinbox(arow, from_=0.0, to=60.0, increment=5.0,
+                    textvariable=self._vel_ang_mag, width=6,
+                    format='%.0f').pack(side=tk.LEFT)
+        ttk.Label(arow, text='°/s').pack(side=tk.LEFT, padx=(1, 8))
+        for i, axis in enumerate(('Roll', 'Pitch', 'Yaw')):
+            ttk.Label(arow, text=axis).pack(side=tk.LEFT, padx=(6, 1))
+            for sign, txt in ((-1.0, '−'), (+1.0, '＋')):
+                b = ttk.Button(arow, text=txt, width=3)
+                b.pack(side=tk.LEFT, padx=1)
+                self._bind_jog(b, 'ang', i, sign)
+        ttk.Label(arow, text='°/s（绕 base 系 X/Y/Z 轴，云台执行）',
+                  foreground='gray').pack(side=tk.LEFT, padx=(10, 0))
+
+        # 正在下发的速度回显
+        srow = ttk.Frame(vf); srow.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(srow, text='正在下发:').pack(side=tk.LEFT, padx=(4, 2))
+        self._sv_vel_out = tk.StringVar(value='停止')
+        ttk.Label(srow, textvariable=self._sv_vel_out, width=52,
+                  font=('Courier', 9)).pack(side=tk.LEFT)
+
+    def _bind_jog(self, widget, kind, index, sign):
+        """把按钮绑成「按住即动」：按下记住方向，松开清零。"""
+        widget.bind('<ButtonPress-1>',   lambda _e: self._vel_press(kind, index, sign))
+        widget.bind('<ButtonRelease-1>', lambda _e: self._vel_release())
+        # 鼠标按住后拖出按钮再松开，Release 落不到本控件上 —— Leave 兜底，防止跑飞
+        widget.bind('<Leave>',           lambda _e: self._vel_release())
+
+    def _vel_press(self, kind, index, sign):
+        if self.node.active_mode() != ControlMode.JOINT_VELOCITY:
+            self._log('✗ 当前不是 JOINT_VELOCITY 模式，速度指令会被忽略 —— 先点「切到 JOINT_VELOCITY」')
+            return
+        mag = {'joint': self._vel_joint_mag,
+               'cart':  self._vel_cart_mag,
+               'ang':   self._vel_ang_mag}[kind].get()
+        v = [0.0, 0.0, 0.0]
+        v[index] = sign * mag
+        self._vel_hold = (kind, v)
+
+    def _vel_release(self):
+        if self._vel_hold is None:
+            return
+        kind, _ = self._vel_hold
+        self._vel_hold = None
+        # 松手立刻补一帧 0：比等 mode_manager 的 0.3s 断流看门狗停得更干脆
+        self._publish_vel(kind, [0.0, 0.0, 0.0])
+        self._sv_vel_out.set('停止')
+
+    def _publish_vel(self, kind, v):
+        if kind == 'joint':
+            self.node.publish_joint_velocity(v)
+        elif kind == 'ang':
+            self.node.publish_cartesian_velocity([0.0, 0.0, 0.0], v)
+        else:
+            self.node.publish_cartesian_velocity(v)
+
+    def _vel_tick(self):
+        """50Hz 速度流：按住期间持续发布。tkinter after 驱动（不依赖 /clock）。"""
+        if self._vel_hold is not None:
+            kind, v = self._vel_hold
+            self._publish_vel(kind, v)
+            unit = {'joint': 'rad/s', 'cart': 'm/s', 'ang': '°/s'}[kind]
+            tag  = {'joint': '关节', 'cart': '末端线速度', 'ang': '末端角速度'}[kind]
+            self._sv_vel_out.set(
+                f'{tag} [{v[0]:+.3f}, {v[1]:+.3f}, {v[2]:+.3f}] {unit}')
+        self.root.after(VEL_TICK_MS, self._vel_tick)
 
     # ── ArmTrajectoryShot ─────────────────────────────────────────────────────────
     def _build_tss_panel(self, parent, pad):
@@ -756,6 +950,10 @@ class App:
             self._sv_error_code.set(ERR_NAMES.get(s.error_code, str(s.error_code)))
             self._sv_cmd_result.set(CMD_RESULT_NAMES.get(s.command_result,'?'))
             self._sv_is_moving.set('是' if s.is_moving else '否')
+            # 直接取 ArmStatus 里的字段（而不是 /robot_arm/control_mode），
+            # 这样这一格顺带验证了 Commander 上报的模式与 ModeManager 广播的一致
+            self._sv_ctrl_mode.set(MODE_NAMES.get(s.active_control_mode,
+                                                  f'? ({s.active_control_mode})'))
             self._set_led(self._led_at_target,    s.arm_at_target)
             self._set_led(self._led_at_start,     s.arm_at_pose_start)
             self._set_led(self._led_camera_ready, s.camera_ready)
@@ -765,6 +963,13 @@ class App:
         elif t == 'joints':
             for (name, _, _), val in zip(ARM_JOINT_RANGE, item[1]):
                 self._mtj_cur_vars[name].set(f'{val:.3f}')
+        elif t == 'mode':
+            mode = item[1]
+            self._sv_mode.set(MODE_NAMES.get(mode, f'? ({mode})'))
+            in_vel = mode == ControlMode.JOINT_VELOCITY
+            self._mode_lbl.configure(foreground='green' if in_vel else 'gray')
+            if not in_vel:
+                self._vel_release()   # 模式被切走，立刻停掉正在按住的点动
         elif t == 'fb_mtj':
             _, prog, joints = item
             j = ', '.join(f'{v:.3f}' for v in joints)

@@ -1,12 +1,21 @@
 # SwitchControlMode.srv
 # 切换机械臂语义控制模式的唯一入口（/robot_arm/switch_control_mode）。
-# 由 mode_manager_node 提供，内部串行化执行：
-#   ① 校验（非 fault、目标控制器已加载）
-#   ② bumpless 播种（切到速度/力矩前先喂 0，切回轨迹由 JTC 自动锁当前位姿）
-#   ③ controller_manager/switch_controller（STRICT，原子停旧启新）
-#   ④ 更新并 latched 广播 /robot_arm/control_mode
+# 由 mode_manager_node 提供，内部串行化执行。
 #
-# 约定：必须在机械臂静止时调用；速度/力矩模式下云台 J4-6 不受控（保持当前位置）。
+# 默认后端（velocity_backend=trajectory，2026-08-04 起）：
+#   TRAJECTORY 与 JOINT_VELOCITY **共用 arm_controller**，切换只做两件事 ——
+#     ① 更新当前模式  ② latched 广播 /robot_arm/control_mode
+#   不切控制器，所以：机械臂**原地不动**（无陈旧命令回放）、不要求静止、随时可切。
+#   模式在此仅作「语义闸」：速度流只在 JOINT_VELOCITY 下被接受。
+#
+# PV 后端（velocity_backend=velocity_controller，需驱动器内部速度环时才用）：
+#   切换 = ros2_control 控制器切换 = CiA402 模式切换，内部还会做
+#     ① 校验（目标控制器已加载）  ② bumpless 播种（切到速度/力矩前先给控制器喂 0 命令）
+#     ③ controller_manager/switch_controller（STRICT，原子停旧启新，含云台保持控制器编排）
+#     ④ 换模后把 JTC 目标复位到切换前位置
+#   此后端下的约定：必须在机械臂静止时调用；切换瞬间可能有跳变风险（详见 CLAUDE.md）。
+#
+# JOINT_EFFORT / ADMITTANCE 为 P3 预留：控制器未配置时会被明确拒绝（success=false）。
 
 # 目标模式（取 ControlMode 常量：TRAJECTORY/JOINT_VELOCITY/JOINT_EFFORT/ADMITTANCE）
 uint8 target_mode

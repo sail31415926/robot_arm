@@ -32,8 +32,13 @@ find_package(ruckig REQUIRED)
 # 限位会随实机标定平移——见 2026-07-28 J2/J3 零点重标定）
 find_package(urdf REQUIRED)
 find_package(std_msgs REQUIRED)
+# jacobian.cpp：TF + URDF 几何法算末端线速度 Jacobian（笛卡尔速度控制内核）。
+# 用 Eigen 做 3×3 SVD / DLS 求解；tf2_ros 提供位形查询。
+find_package(Eigen3 REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 add_library(robot_arm_motion SHARED
+  src/motion/jacobian.cpp
   src/motion/joint_limits.cpp
   src/motion/kinematics.cpp
   src/motion/planning.cpp
@@ -45,8 +50,8 @@ target_include_directories(robot_arm_motion PUBLIC
 )
 target_compile_features(robot_arm_motion PUBLIC cxx_std_17)
 ament_target_dependencies(robot_arm_motion
-  rclcpp trajectory_msgs builtin_interfaces geometry_msgs moveit_msgs urdf std_msgs)
-target_link_libraries(robot_arm_motion ruckig::ruckig)
+  rclcpp trajectory_msgs builtin_interfaces geometry_msgs moveit_msgs urdf std_msgs tf2_ros)
+target_link_libraries(robot_arm_motion ruckig::ruckig Eigen3::Eigen)
 
 install(TARGETS robot_arm_motion
   ARCHIVE DESTINATION lib
@@ -97,6 +102,7 @@ add_library(robot_arm_commander SHARED
   src/commander/move_to_joint_server.cpp
   src/commander/trajectory_shot_server.cpp
   src/commander/track_target_server.cpp
+  src/commander/velocity_stream_server.cpp
   src/commander/arm_commander_node.cpp
 )
 target_include_directories(robot_arm_commander PUBLIC
@@ -131,7 +137,10 @@ find_package(controller_manager_msgs REQUIRED)   # std_msgs 已在 motion 段 fi
 add_executable(mode_manager_node src/mode/mode_manager_node.cpp)
 target_compile_features(mode_manager_node PRIVATE cxx_std_17)
 ament_target_dependencies(mode_manager_node
-  rclcpp std_msgs controller_manager_msgs robot_arm_interfaces)
+  rclcpp std_msgs std_srvs sensor_msgs trajectory_msgs controller_manager_msgs
+  robot_arm_interfaces)
+# 链 robot_arm_motion：复用 JointLimitsCache 做速度总线的限位刹车（限位单一来源 = URDF）
+target_link_libraries(mode_manager_node robot_arm_motion)
 install(TARGETS mode_manager_node DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY include/ DESTINATION include)

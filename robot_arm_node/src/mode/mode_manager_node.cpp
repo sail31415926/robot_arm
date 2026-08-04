@@ -19,9 +19,15 @@
  *   ⑤ 速度/力矩总线看门狗：上层发 /robot_arm/cmd/joint_{velocity,effort}，本节点转发到
  *      控制器命令话题；命令断流超时 → 自动喂 0（ForwardCommandController 不自动归零，
  *      失控风险，必须兜底）。转发单点也让安全逻辑集中于一处。
+ *   ⑥ 速度总线安全闸（2026-08-04 随笛卡尔速度控制上线）：逐轴限幅 max_joint_velocity +
+ *      接近 URDF 关节限位时线性减速到 0。速度控制器不像 JTC 有轨迹校验，撞限位没人拦；
+ *      这里是速度指令的唯一必经之路，安全逻辑就集中在这一处（无论指令来自 Director 点动
+ *      还是 Commander 的笛卡尔速度换算）。
  *
  * 【约定】
  *   - 必须在机械臂静止时切换；速度/力矩模式下云台 J4-6 不受控（arm_controller 被停），保持当前位置。
+ *   - 速度总线类型是产品接口 robot_arm_interfaces/ArmJointVelocityCommand（不是裸数组）；
+ *     力矩总线仍是 Float64MultiArray（P3 未落地，等 effort 接口配好再一并类型化）。
  *   - 驱动层 /arm_node/set_mode_pp|ip（402 profile 微调，PP↔IP 不换控制器）仍是实物专属细化，
  *     与本节点不冲突：TRAJECTORY 模式默认走 IP，需要驱动器自规划点到点时再单独调 set_mode_pp。
  *   - JOINT_EFFORT/ADMITTANCE 为 P3 预留：effort_controller 默认未配置（参数留空），
@@ -36,7 +42,10 @@
  *   velocity_command_topic  默认 "/arm_velocity_controller/commands"（控制器实际命令话题）
  *   effort_input_topic      默认 "/robot_arm/cmd/joint_effort"
  *   effort_command_topic    默认 "/arm_effort_controller/commands"
- *   num_command_joints      默认 3（速度/力矩 claim 的关节数 J1-3，用于播种/归零向量长度）
+ *   command_joint_names     默认 [Joint1, Joint2, Joint3]（速度/力矩 claim 的关节，顺序 =
+ *                           控制器命令数组顺序；同时决定播种/归零向量长度与限位刹车对象）
+ *   max_joint_velocity      默认 1.0（rad/s，速度指令逐轴限幅）
+ *   limit_brake_zone        默认 0.15（rad，距关节限位小于此值开始线性减速，到限位处为 0）
  *   watchdog_timeout        默认 0.3（s，速度/力矩命令断流超时归零）
  *   default_mode            默认 0（TRAJECTORY，与 launch 默认激活 arm_controller 一致）
  *
@@ -45,28 +54,42 @@
  * @copyright Copyright (c) 2026 EMEET
  */
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
+#include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 #include <controller_manager_msgs/srv/switch_controller.hpp>
 
+#include <robot_arm_interfaces/msg/arm_joint_velocity_command.hpp>
 #include <robot_arm_interfaces/msg/control_mode.hpp>
 #include <robot_arm_interfaces/srv/switch_control_mode.hpp>
+
+#include "robot_arm_node/motion/joint_limits.hpp"
 
 namespace robot_arm_node::mode
 {
 
 using namespace std::chrono_literals;
 using ControlMode       = robot_arm_interfaces::msg::ControlMode;
+using JointVelCommand   = robot_arm_interfaces::msg::ArmJointVelocityCommand;
 using SwitchControlMode = robot_arm_interfaces::srv::SwitchControlMode;
 using SwitchController   = controller_manager_msgs::srv::SwitchController;
 using Float64MultiArray  = std_msgs::msg::Float64MultiArray;
+using SetBool            = std_srvs::srv::SetBool;
+using JointTrajectory    = trajectory_msgs::msg::JointTrajectory;
 
 class ModeManagerNode : public rclcpp::Node
 {
@@ -76,14 +99,36 @@ public:
     cm_          = declare_parameter<std::string>("controller_manager", "/controller_manager");
     traj_ctrl_   = declare_parameter<std::string>("trajectory_controller", "arm_controller");
     vel_ctrl_    = declare_parameter<std::string>("velocity_controller", "arm_velocity_controller");
+    // 速度后端（2026-08-04 新增）：
+    //   "trajectory"（默认）—— JOINT_VELOCITY 复用 arm_controller，**不切控制器**；
+    //     速度指令由 Commander 的 VelocityStreamServer 积分成位置流走 JTC。
+    //     没有控制器切换就没有陈旧命令回放（切回轨迹不再跳变）、轨迹类动作随时可用、
+    //     云台不需要额外的保持控制器。
+    //   "velocity_controller" —— 老路径：切到 arm_velocity_controller（实物 CiA402 PV(3)），
+    //     驱动器内部速度环、延迟更低，代价是上面那些切换副作用。留作高动态场景备选。
+    velocity_backend_ = declare_parameter<std::string>("velocity_backend", "trajectory");
+    const bool vel_via_traj = velocity_backend_ == "trajectory";
     eff_ctrl_    = declare_parameter<std::string>("effort_controller", "");
     vel_in_topic_  = declare_parameter<std::string>("velocity_input_topic", "/robot_arm/cmd/joint_velocity");
     vel_cmd_topic_ = declare_parameter<std::string>("velocity_command_topic", "/arm_velocity_controller/commands");
     eff_in_topic_  = declare_parameter<std::string>("effort_input_topic", "/robot_arm/cmd/joint_effort");
     eff_cmd_topic_ = declare_parameter<std::string>("effort_command_topic", "/arm_effort_controller/commands");
-    num_joints_    = static_cast<size_t>(declare_parameter<int>("num_command_joints", 3));
+    hold_ctrls_    = declare_parameter<std::vector<std::string>>(
+        "hold_controllers", std::vector<std::string>{});
+    cmd_joints_    = declare_parameter<std::vector<std::string>>(
+        "command_joint_names", std::vector<std::string>{"Joint1", "Joint2", "Joint3"});
+    num_joints_    = cmd_joints_.size();
+    max_joint_vel_ = declare_parameter<double>("max_joint_velocity", 1.0);
+    brake_zone_    = declare_parameter<double>("limit_brake_zone", 0.15);
     watchdog_timeout_ = declare_parameter<double>("watchdog_timeout", 0.3);
+    traj_cmd_topic_ = declare_parameter<std::string>(
+        "trajectory_command_topic", "/arm_controller/joint_trajectory");
+    traj_joints_ = declare_parameter<std::vector<std::string>>(
+        "trajectory_joint_names",
+        std::vector<std::string>{"Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"});
+    resync_time_ = declare_parameter<double>("resync_time", 0.3);
     current_mode_  = static_cast<uint8_t>(declare_parameter<int>("default_mode", ControlMode::TRAJECTORY));
+    via_traj_      = vel_via_traj;
 
     // 服务回调里同步等 switch_controller 的 future → 需多线程执行器 + 可重入组
     cbg_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
@@ -100,15 +145,43 @@ public:
         std::bind(&ModeManagerNode::onSwitch, this, std::placeholders::_1, std::placeholders::_2),
         rmw_qos_profile_services_default, cbg_);
 
-    // 速度/力矩：产品面向输入总线 → 控制器命令话题（仅对应模式下转发）
-    vel_cmd_pub_ = create_publisher<Float64MultiArray>(vel_cmd_topic_, rclcpp::QoS(10));
-    vel_in_sub_  = create_subscription<Float64MultiArray>(
-        vel_in_topic_, rclcpp::QoS(10),
-        [this](const Float64MultiArray & m) { onCmdInput(ControlMode::JOINT_VELOCITY, m); });
+    // 速度/力矩：产品面向输入总线 → 控制器命令话题（仅对应模式下转发）。
+    // trajectory 后端下这条转发链不启用 —— 速度总线归 Commander 的 VelocityStreamServer，
+    // 由它积分成位置流走 JTC；这里再订阅一份会变成双重驱动。
+    if (!vel_via_traj) {
+      vel_cmd_pub_ = create_publisher<Float64MultiArray>(vel_cmd_topic_, rclcpp::QoS(10));
+      vel_in_sub_  = create_subscription<JointVelCommand>(
+          vel_in_topic_, rclcpp::QoS(10),
+          [this](const JointVelCommand & m) { onVelocityInput(m); });
+    }
     eff_cmd_pub_ = create_publisher<Float64MultiArray>(eff_cmd_topic_, rclcpp::QoS(10));
     eff_in_sub_  = create_subscription<Float64MultiArray>(
         eff_in_topic_, rclcpp::QoS(10),
-        [this](const Float64MultiArray & m) { onCmdInput(ControlMode::JOINT_EFFORT, m); });
+        [this](const Float64MultiArray & m) { onEffortInput(m); });
+
+    // 急停闩锁：Commander 的 ArmStop / ArmResetError 经此服务通知本节点。
+    // 速度模式下 ArmStop 必须真的能停车 —— 而速度指令的发布方可能是 Commander
+    // （笛卡尔速度流），也可能是 Director 直发关节速度，光靠 Commander 停自己那条流
+    // 拦不住后者。闩在总线这个必经之路上：一旦置位，立刻喂 0 并丢弃所有速度指令，
+    // 直到 ArmResetError 解除。
+    estop_srv_ = create_service<SetBool>(
+        "/robot_arm/velocity_estop",
+        [this](SetBool::Request::ConstSharedPtr req, SetBool::Response::SharedPtr res) {
+          estop_.store(req->data);
+              if (req->data && isStreamingMode(current_mode_)) publishZero(current_mode_);
+          res->success = true;
+          res->message = req->data ? "速度总线已急停闩锁（喂 0 并丢弃指令）" : "速度总线急停已解除";
+          RCLCPP_WARN(get_logger(), "%s", res->message.c_str());
+        },
+        rmw_qos_profile_services_default, cbg_);
+
+    traj_cmd_pub_ = create_publisher<JointTrajectory>(traj_cmd_topic_, rclcpp::QoS(10));
+
+    // 限位刹车：URDF 限位（latched /robot_description）+ /joint_states 当前位置
+    limits_ = std::make_unique<motion::JointLimitsCache>(*this);
+    joint_sub_ = create_subscription<sensor_msgs::msg::JointState>(
+        "/joint_states", rclcpp::QoS(10),
+        [this](const sensor_msgs::msg::JointState & m) { onJointState(m); });
 
     // 看门狗：速度/力矩模式下命令断流超时 → 归零兜底
     last_cmd_time_ = now();
@@ -119,9 +192,10 @@ public:
         "mode_manager_node 就绪  cm=%s\n"
         "  服务  /robot_arm/switch_control_mode\n"
         "  广播  /robot_arm/control_mode (latched)  初始模式=%s\n"
-        "  速度总线  %s → %s（看门狗 %.0fms）",
-        cm_.c_str(), modeName(current_mode_), vel_in_topic_.c_str(),
-        vel_cmd_topic_.c_str(), watchdog_timeout_ * 1000.0);
+        "  速度总线  %s (ArmJointVelocityCommand, %zu 轴) → %s\n"
+        "            看门狗 %.0fms  限幅 %.2frad/s  限位减速区 %.3frad",
+        cm_.c_str(), modeName(current_mode_), vel_in_topic_.c_str(), num_joints_,
+        vel_cmd_topic_.c_str(), watchdog_timeout_ * 1000.0, max_joint_vel_, brake_zone_);
   }
 
 private:
@@ -130,7 +204,9 @@ private:
   {
     switch (mode) {
       case ControlMode::TRAJECTORY:     return traj_ctrl_;
-      case ControlMode::JOINT_VELOCITY: return vel_ctrl_;
+      // trajectory 后端下速度模式复用轨迹控制器 —— 与 TRAJECTORY 同名，
+      // onSwitch 里 new_ctrl==old_ctrl 的分支会把切换降级成「只更新语义」，不动控制器
+      case ControlMode::JOINT_VELOCITY: return via_traj_ ? traj_ctrl_ : vel_ctrl_;
       case ControlMode::JOINT_EFFORT:   return eff_ctrl_;
       case ControlMode::ADMITTANCE:     return traj_ctrl_;  // 导纳底层仍是位置总线
       default:                          return "";
@@ -179,6 +255,26 @@ private:
     }
     const std::string old_ctrl = controllerFor(from);
 
+    // 云台保持控制器（hold_controllers）：进入流式模式时与速度/力矩控制器一起激活，
+    // 回轨迹模式时一起停用。
+    //   为什么需要：速度控制器只 claim 臂 J1-3，而 arm_controller 在 Gazebo/实物配置里
+    //   claim 的是 J1-6 —— 一旦被停，云台 J4-6 在 Gazebo 里就没人命令，会在重力下垂，
+    //   末端 gimbal_tool0 随之漂移（笛卡尔速度控制的末端轨迹直接被带偏）。挂一个只管
+    //   J4-6 的 JTC（激活即锁当前位姿）把「速度模式下云台保持当前位置」这条承诺做实。
+    //   实物默认留空：云台由板端 robot_gimbal_node_v2 自己保持，不需要这层。
+    //
+    //   两条编排规则（都是踩出来的）：
+    //   ① **停** 保持控制器必须和主切换在同一次 STRICT 调用里原子完成：分两次调的话，
+    //      第一次 deactivate 还没被 controller_manager 的实时循环应用，第二次就要
+    //      activate 同样 claim J4-6 的 arm_controller，STRICT 判资源冲突而失败，
+    //      机械臂卡在速度模式里回不去（实测复现）。
+    //   ② **启** 只能在主切换之后单独调（BEST_EFFORT）：arm_controller 停用前 J4-6
+    //      被它占着，保持控制器起不来。
+    //   保持控制器的死活由本节点自己记账（holds_active_）—— 它是唯一的操作者；
+    //   万一被外部手动动过导致 STRICT 失败，下面有一次「不带保持控制器」的重试兜底。
+    const bool to_stream   = isStreamingMode(target);
+    const bool from_stream = isStreamingMode(from);
+
     // 切到流式模式前，若两模式复用同一控制器（如 TRAJECTORY↔ADMITTANCE），只需更新语义
     if (new_ctrl == old_ctrl) {
       current_mode_ = target;
@@ -190,7 +286,23 @@ private:
       return;
     }
 
-    const bool ok = switchController({new_ctrl}, {old_ctrl});
+    // 复位轨迹要用**切换前**的实测位置：切换后硬件会在一两拍内把陈旧位置命令下发，
+    // 那时再读回读已经是跳变后的值了（照着它复位等于把跳变固化下来，实测踩过）。
+    std::vector<double> pre_switch_pos;
+    if (!to_stream && from_stream) pre_switch_pos = snapshotTrajectoryJoints();
+
+    std::vector<std::string> deactivate{old_ctrl};
+    if (!to_stream && from_stream && holds_active_) {
+      deactivate.insert(deactivate.end(), hold_ctrls_.begin(), hold_ctrls_.end());
+    }
+
+    bool ok = switchController({new_ctrl}, deactivate);
+    if (!ok && deactivate.size() > 1) {
+      // 兜底：保持控制器可能被外部动过（手动 stop / 没加载），别让它拖死主切换
+      RCLCPP_WARN(get_logger(), "带保持控制器的切换失败，退回只切主控制器重试一次");
+      holds_active_ = false;
+      ok = switchController({new_ctrl}, {old_ctrl});
+    }
     if (!ok) {
       res->success = false;
       res->active_mode = current_mode_;   // 切换失败，停留在原模式
@@ -202,11 +314,20 @@ private:
     }
 
     current_mode_ = target;
+    if (!to_stream && from_stream) {
+      holds_active_ = false;              // 已随主切换一并停用
+      resyncTrajectoryTo(pre_switch_pos); // 见函数注释：把 JTC 拉回切换前的位置
+    }
     // bumpless 播种：进入速度/力矩模式立即喂 0，并给看门狗一个宽限期
     if (isStreamingMode(target)) {
       publishZero(target);
       last_cmd_time_ = now();
       watchdog_stopped_ = false;
+      // 进入流式模式：主切换已让出 J4-6，此时才能挂保持控制器（激活即锁当前位姿）
+      if (!from_stream && !hold_ctrls_.empty() && !holds_active_) {
+        holds_active_ = switchController(hold_ctrls_, {},
+                                         SwitchController::Request::BEST_EFFORT);
+      }
     }
     publishMode();
     res->success = true;
@@ -216,23 +337,145 @@ private:
     RCLCPP_INFO(get_logger(), "%s → %s OK", modeName(from), modeName(target));
   }
 
-  // ── 速度/力矩输入总线 → 控制器命令话题（仅对应模式转发）──────────────────────
-  void onCmdInput(uint8_t stream_mode, const Float64MultiArray & msg)
+  // ── 速度输入总线（产品接口类型）→ 限幅 + 限位刹车 → 控制器命令话题 ──────────────
+  void onVelocityInput(const JointVelCommand & msg)
   {
-    if (current_mode_ != stream_mode) {
+    if (estop_.load()) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-          "当前非 %s 模式，忽略 %s 命令（先调 /robot_arm/switch_control_mode）",
-          modeName(stream_mode), modeName(stream_mode));
+          "速度总线处于急停闩锁，指令已丢弃（调 /robot_arm/reset_error 解除）");
       return;
     }
-    (stream_mode == ControlMode::JOINT_VELOCITY ? vel_cmd_pub_ : eff_cmd_pub_)->publish(msg);
+    if (current_mode_ != ControlMode::JOINT_VELOCITY) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+          "当前非 JOINT_VELOCITY 模式，忽略速度命令（先调 /robot_arm/switch_control_mode）");
+      return;
+    }
+    if (msg.velocities.size() != num_joints_) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+          "速度命令长度 %zu ≠ 命令关节数 %zu，已丢弃（顺序须为 %s）",
+          msg.velocities.size(), num_joints_, jointListStr().c_str());
+      return;
+    }
+
+    Float64MultiArray out;
+    out.data = msg.velocities;
+    for (size_t i = 0; i < num_joints_; ++i) {
+      out.data[i] = std::clamp(out.data[i], -max_joint_vel_, max_joint_vel_);
+      out.data[i] = brakeNearLimit(cmd_joints_[i], out.data[i]);
+    }
+
+    vel_cmd_pub_->publish(out);
     last_cmd_time_ = now();
     watchdog_stopped_ = false;
+  }
+
+  // ── 换回轨迹模式后，把 JTC 目标重设为当前实测位置 ────────────────────────────
+  //   ros2_control 的命令接口在控制器停用后**值原样保留**：速度模式下机械臂走开了，
+  //   而 arm_controller 的位置命令缓冲还停在进入速度模式前那一刻。JTC 重新激活后，
+  //   硬件下一拍就把这个陈旧目标下发 —— 机械臂会冲回旧位姿（Gazebo 里是瞬移）。
+  //   根治要在硬件层换模时把目标播种成当前位置：实物侧已经这么做了
+  //   （robot_arm_driver UnwrapRobotSystem::perform_command_mode_switch）；
+  //   Gazebo 的 GazeboSystem 是第三方且 pImpl 私有，改不到，只能在这里补救 ——
+  //   激活后立刻发一条「回到当前位置」的轨迹，把机械臂拉回来。
+  //   所以**仿真里切回轨迹模式仍会看到一次快速的往返**，实物没有。
+  // 取 traj_joints_ 的当前回读快照；任一关节缺回读则返回空表（调用方跳过复位）
+  std::vector<double> snapshotTrajectoryJoints()
+  {
+    std::vector<double> out;
+    std::lock_guard<std::mutex> lk(joint_mtx_);
+    for (const auto & j : traj_joints_) {
+      auto it = joint_pos_.find(j);
+      if (it == joint_pos_.end()) {
+        RCLCPP_WARN(get_logger(), "换模复位：没有 '%s' 的回读，跳过复位轨迹", j.c_str());
+        return {};
+      }
+      out.push_back(it->second);
+    }
+    return out;
+  }
+
+  void resyncTrajectoryTo(const std::vector<double> & positions)
+  {
+    if (traj_joints_.empty() || positions.size() != traj_joints_.size()) return;
+
+    JointTrajectory traj;
+    trajectory_msgs::msg::JointTrajectoryPoint pt;
+    traj.joint_names = traj_joints_;
+    pt.positions = positions;
+    pt.time_from_start = rclcpp::Duration::from_seconds(resync_time_);
+    traj.points.push_back(std::move(pt));
+
+    // 连发几帧：激活后头几拍 JTC 可能还没就绪，丢一两帧不影响
+    for (int i = 0; i < 5; ++i) {
+      traj_cmd_pub_->publish(traj);
+      std::this_thread::sleep_for(10ms);
+    }
+    RCLCPP_INFO(get_logger(), "换回轨迹模式：已下发「保持当前位置」轨迹（%.2fs）复位 JTC 目标",
+                resync_time_);
+  }
+
+  // ── 力矩输入总线（P3 预留，仍是裸数组）──────────────────────────────────────
+  void onEffortInput(const Float64MultiArray & msg)
+  {
+    if (current_mode_ != ControlMode::JOINT_EFFORT) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+          "当前非 JOINT_EFFORT 模式，忽略力矩命令（先调 /robot_arm/switch_control_mode）");
+      return;
+    }
+    eff_cmd_pub_->publish(msg);
+    last_cmd_time_ = now();
+    watchdog_stopped_ = false;
+  }
+
+  // ── 限位刹车：朝限位方向的速度在减速区内线性衰减，到限位处为 0 ──────────────────
+  //   反向（撤离限位）不受限，否则一旦压到限位就再也开不回来。
+  //   URDF 未就绪 / 该轴无限位 / 无该轴回读 → 不拦（fail-open，与 JointLimitsCache 约定一致）。
+  double brakeNearLimit(const std::string & joint, double v)
+  {
+    if (brake_zone_ <= 0.0 || std::fabs(v) < 1e-9) return v;
+    auto lim = limits_->limit(joint);
+    if (!lim) return v;
+
+    double pos;
+    {
+      std::lock_guard<std::mutex> lk(joint_mtx_);
+      auto it = joint_pos_.find(joint);
+      if (it == joint_pos_.end()) return v;
+      pos = it->second;
+    }
+
+    const double margin = v > 0.0 ? (lim->upper - pos) : (pos - lim->lower);
+    if (margin >= brake_zone_) return v;
+
+    const double scale = std::clamp(margin / brake_zone_, 0.0, 1.0);
+    if (scale <= 0.0) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+          "%s 已抵限位（pos=%.3f, [%.3f, %.3f]），朝限位方向的速度已归零",
+          joint.c_str(), pos, lim->lower, lim->upper);
+    }
+    return v * scale;
+  }
+
+  void onJointState(const sensor_msgs::msg::JointState & msg)
+  {
+    std::lock_guard<std::mutex> lk(joint_mtx_);
+    const size_t n = std::min(msg.name.size(), msg.position.size());
+    for (size_t i = 0; i < n; ++i) joint_pos_[msg.name[i]] = msg.position[i];
+  }
+
+  std::string jointListStr() const
+  {
+    std::string s;
+    for (const auto & j : cmd_joints_) s += (s.empty() ? "" : ", ") + j;
+    return s;
   }
 
   // ── 看门狗：流式模式命令断流 → 归零一次（ForwardCommandController 不自动归零）──
   void onWatchdog()
   {
+    // trajectory 后端下速度总线不经本节点（归 Commander 的 VelocityStreamServer，
+    // 它自己有断流看门狗），这里不该报「命令断流」——否则一进速度模式就刷一条假告警
+    if (via_traj_ && current_mode_ == ControlMode::JOINT_VELOCITY) return;
     if (!isStreamingMode(current_mode_) || watchdog_stopped_) return;
     if ((now() - last_cmd_time_).seconds() < watchdog_timeout_) return;
     publishZero(current_mode_);
@@ -243,9 +486,11 @@ private:
 
   void publishZero(uint8_t mode)
   {
+    auto pub = (mode == ControlMode::JOINT_VELOCITY) ? vel_cmd_pub_ : eff_cmd_pub_;
+    if (!pub) return;   // trajectory 后端下速度控制器不参与，没有这个发布者
     Float64MultiArray z;
     z.data.assign(num_joints_, 0.0);
-    (mode == ControlMode::JOINT_VELOCITY ? vel_cmd_pub_ : eff_cmd_pub_)->publish(z);
+    pub->publish(z);
   }
 
   void publishMode()
@@ -255,9 +500,12 @@ private:
     mode_pub_->publish(m);
   }
 
-  // ── controller_manager/switch_controller 封装（同步等待，STRICT）─────────────
+  // ── controller_manager/switch_controller 封装（同步等待）─────────────────────
+  //   主切换用 STRICT（原子停旧启新，失败即整体回滚）；
+  //   保持控制器（云台）用 BEST_EFFORT，状态不符不许拖垮模式切换。
   bool switchController(const std::vector<std::string> & activate,
-                        const std::vector<std::string> & deactivate)
+                        const std::vector<std::string> & deactivate,
+                        uint8_t strictness = SwitchController::Request::STRICT)
   {
     if (!switch_cli_->wait_for_service(2s)) {
       RCLCPP_WARN(get_logger(), "switch_controller 服务不可用（%s）", cm_.c_str());
@@ -266,7 +514,7 @@ private:
     auto req = std::make_shared<SwitchController::Request>();
     req->activate_controllers   = activate;
     req->deactivate_controllers = deactivate;
-    req->strictness = SwitchController::Request::STRICT;
+    req->strictness = strictness;
     auto future = switch_cli_->async_send_request(req);
     if (future.wait_for(5s) != std::future_status::ready) {
       RCLCPP_WARN(get_logger(), "switch_controller 超时");
@@ -277,12 +525,28 @@ private:
 
   // 参数
   std::string cm_, traj_ctrl_, vel_ctrl_, eff_ctrl_;
+  std::string velocity_backend_;
+  bool via_traj_{true};   // velocity_backend == "trajectory"（速度走 JTC 位置流）
   std::string vel_in_topic_, vel_cmd_topic_, eff_in_topic_, eff_cmd_topic_;
+  std::vector<std::string> hold_ctrls_;   // 流式模式期间陪跑的保持控制器（云台）
+  bool holds_active_{false};              // 保持控制器当前是否已激活（本节点自己记账）
+  std::vector<std::string> cmd_joints_;
   size_t num_joints_{3};
+  double max_joint_vel_{1.0};
+  double brake_zone_{0.15};
   double watchdog_timeout_{0.3};
+  std::string traj_cmd_topic_;
+  std::vector<std::string> traj_joints_;
+  double resync_time_{0.3};
+
+  // 限位刹车所需的两份数据：URDF 限位 + 实时关节位置
+  std::unique_ptr<motion::JointLimitsCache> limits_;
+  std::mutex joint_mtx_;
+  std::map<std::string, double> joint_pos_;
 
   // 状态（切换经 switch_mtx_ 串行化；current_mode_ 单写多读，切换/回调都在同一 Reentrant 组）
   std::mutex switch_mtx_;
+  std::atomic<bool> estop_{false};   // 急停闩锁（ArmStop 置位 / ArmResetError 解除）
   uint8_t current_mode_{ControlMode::TRAJECTORY};
   rclcpp::Time last_cmd_time_;
   bool watchdog_stopped_{true};
@@ -291,8 +555,12 @@ private:
   rclcpp::Client<SwitchController>::SharedPtr switch_cli_;
   rclcpp::Publisher<ControlMode>::SharedPtr mode_pub_;
   rclcpp::Service<SwitchControlMode>::SharedPtr switch_srv_;
+  rclcpp::Service<SetBool>::SharedPtr           estop_srv_;
   rclcpp::Publisher<Float64MultiArray>::SharedPtr vel_cmd_pub_, eff_cmd_pub_;
-  rclcpp::Subscription<Float64MultiArray>::SharedPtr vel_in_sub_, eff_in_sub_;
+  rclcpp::Publisher<JointTrajectory>::SharedPtr  traj_cmd_pub_;
+  rclcpp::Subscription<JointVelCommand>::SharedPtr   vel_in_sub_;
+  rclcpp::Subscription<Float64MultiArray>::SharedPtr eff_in_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_sub_;
   rclcpp::TimerBase::SharedPtr watchdog_;
 };
 

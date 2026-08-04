@@ -26,6 +26,7 @@
   <depend>controller_manager_msgs</depend>    <!-- mode_manager_node switch_controller -->
   <depend>ruckig</depend>          <!-- MotionExecutor OTG，CMake find_package(ruckig REQUIRED) -->
   <depend>urdf</depend>            <!-- motion/joint_limits：解析 /robot_description 取关节限位 -->
+  <depend>eigen</depend>           <!-- motion/jacobian：3×3 SVD / DLS 伪逆（笛卡尔速度控制） -->
 
   <export>
     <build_type>ament_cmake</build_type>

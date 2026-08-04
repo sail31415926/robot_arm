@@ -29,6 +29,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 
 #include <std_srvs/srv/trigger.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 #include <robot_arm_interfaces/action/arm_move_to_pose.hpp>
 #include <robot_arm_interfaces/action/arm_move_to_joint.hpp>
 #include <robot_arm_interfaces/action/arm_trajectory_shot.hpp>
@@ -39,6 +40,7 @@
 #include <robot_arm_interfaces/srv/arm_enable.hpp>
 #include <robot_arm_interfaces/srv/arm_homing.hpp>
 #include <robot_arm_interfaces/srv/arm_reset_error.hpp>
+#include <robot_arm_interfaces/srv/switch_control_mode.hpp>
 
 #include "robot_arm_node/state/status_aggregator.hpp"
 #include "robot_arm_node/commander/motion_executor.hpp"
@@ -47,6 +49,7 @@
 #include "robot_arm_node/commander/move_to_joint_server.hpp"
 #include "robot_arm_node/commander/trajectory_shot_server.hpp"
 #include "robot_arm_node/commander/track_target_server.hpp"
+#include "robot_arm_node/commander/velocity_stream_server.hpp"
 
 namespace robot_arm_node::commander
 {
@@ -69,7 +72,9 @@ private:
   using MoveToJoint   = robot_arm_interfaces::action::ArmMoveToJoint;
   using TrajectoryShot= robot_arm_interfaces::action::ArmTrajectoryShot;
   using TrackTarget   = robot_arm_interfaces::action::ArmTrackTarget;
-  using Trigger       = std_srvs::srv::Trigger;
+  using Trigger           = std_srvs::srv::Trigger;
+  using SwitchControlMode = robot_arm_interfaces::srv::SwitchControlMode;
+  using ControlMode       = robot_arm_interfaces::msg::ControlMode;
 
   // ── 状态机 ──────────────────────────────────────────────────────────────────
   CommanderState state() const;
@@ -92,6 +97,13 @@ private:
                      std::shared_ptr<robot_arm_interfaces::srv::ArmHoming::Response>);
   void on_arm_reset_error(const std::shared_ptr<robot_arm_interfaces::srv::ArmResetError::Request>,
                           std::shared_ptr<robot_arm_interfaces::srv::ArmResetError::Response>);
+
+  // 速度总线急停闩锁：ArmStop 置位 / ArmResetError 解除（异步发给 mode_manager_node）
+  void latch_velocity_estop(bool engage);
+
+  // 轨迹类动作的前置条件：不在 TRAJECTORY 模式时自动切回（速度模式下 JTC 被停，
+  // 轨迹发出去不会动）。失败时把原因写进 why，调用方 abort 该 goal。
+  bool ensure_trajectory_mode(std::string * why);
 
   // 同步调用驱动层 Trigger 服务（0.5s 等待可用，10s 调用超时）；不可用视为仿真跳过
   std::pair<bool, std::string> call_driver_trigger(
@@ -117,6 +129,8 @@ private:
   std::unique_ptr<MoveToJointServer>       mtj_srv_;
   std::unique_ptr<TrajectoryShotServer>    em_srv_;
   std::unique_ptr<TrackTargetServer>       track_srv_;
+  // 速度流控制（topic 流，非 action）：关节速度 / 末端 twist → 积分成位置流 → JTC
+  std::unique_ptr<VelocityStreamServer>    vstream_srv_;
 
   // ── Action Server ────────────────────────────────────────────────────────────
   rclcpp_action::Server<MoveToPose>::SharedPtr     mtp_server_;
@@ -132,6 +146,8 @@ private:
   rclcpp::Service<robot_arm_interfaces::srv::ArmHoming>::SharedPtr     homing_srv_;
   rclcpp::Service<robot_arm_interfaces::srv::ArmResetError>::SharedPtr reset_error_srv_;
   rclcpp::Client<Trigger>::SharedPtr drv_enable_cli_, drv_disable_cli_, drv_recover_cli_;
+  rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr vel_estop_cli_;
+  rclcpp::Client<SwitchControlMode>::SharedPtr      mode_switch_cli_;
 };
 
 }  // namespace robot_arm_node::commander

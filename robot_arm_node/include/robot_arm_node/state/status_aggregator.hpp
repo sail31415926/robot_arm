@@ -61,6 +61,13 @@ public:
   // 数值微分估算；样本不足时返回全零。
   ArmTwist twist() const;
 
+  // TF 缓冲（共享给需要自行做运动学查询的组件，如 VelocityStreamServer 的 Jacobian）。
+  // 一个节点只养一个 TransformListener，别再各建各的。
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer() const { return tf_buffer_; }
+
+  // 当前语义控制模式（取 ControlMode 常量），由 /robot_arm/control_mode（latched）更新
+  uint8_t active_control_mode() const;
+
   // ── 关节状态查询 ────────────────────────────────────────────────────────────
   std::map<std::string, double> joint_positions() const;
   std::map<std::string, double> joint_velocities() const;

@@ -147,7 +147,7 @@ claim 一个命令接口 = 只能处于一种 402 模式」，故**模式切换 
 | ControlMode | 控制器（active） | 402 模式 | 命令总线（上层发） | 状态 |
 | :--- | :--- | :--- | :--- | :--- |
 | `TRAJECTORY`（0，默认） | `arm_controller`(JTC) | IP(7) | `/arm_controller/joint_trajectory` | ✅ |
-| `JOINT_VELOCITY`（1） | `arm_velocity_controller` | PV(3) | `/robot_arm/cmd/joint_velocity`（Float64MultiArray，J1-3，带看门狗） | ✅ |
+| `JOINT_VELOCITY`（1） | `arm_controller`(JTC)，**不切控制器** | IP(7) | `/robot_arm/cmd/joint_velocity`（`ArmJointVelocityCommand`，J1-3）<br>或末端 6 维 twist `/robot_arm/follow_command`（`ArmFollowCommand`）<br>Commander 6×6 Jacobian → 积分成位置流（50Hz）→ 同一条 `joint_trajectory` | ✅ |
 | `JOINT_EFFORT`（2） | `arm_effort_controller` | PT(4) | `/robot_arm/cmd/joint_effort` | ⏳ P3（需 URDF 加 effort 接口） |
 | `ADMITTANCE`（3） | `arm_controller`(JTC) | IP(7) | 末端力 → 位置微调，底层仍走位置总线 | ⏳ P3（需 F/T 传感器） |
 
@@ -156,16 +156,37 @@ claim 一个命令接口 = 只能处于一种 402 模式」，故**模式切换 
 ros2 topic echo /robot_arm/control_mode --once            # mode: 0=TRAJECTORY 1=VELOCITY ...
 # 切换模式（唯一入口；必须静止时调用）
 ros2 service call /robot_arm/switch_control_mode robot_arm_interfaces/srv/SwitchControlMode "{target_mode: 1}"
-# 速度点动（切到 VELOCITY 后，发到产品总线；断流 >300ms 自动归零兜底）
-ros2 topic pub -r 50 /robot_arm/cmd/joint_velocity std_msgs/msg/Float64MultiArray "{data: [0.3, 0.0, 0.0]}"
+# 关节速度点动（切到 VELOCITY 后，发到产品总线；断流 >300ms 自动停流、JTC 原地保持）
+ros2 topic pub -r 50 /robot_arm/cmd/joint_velocity \
+  robot_arm_interfaces/msg/ArmJointVelocityCommand "{velocities: [0.3, 0.0, 0.0]}"
+# 笛卡尔速度点动（末端沿 base 系 +X 走；Commander 用 J1-6 的 6×6 Jacobian DLS 换算）
+ros2 topic pub -r 50 /robot_arm/follow_command \
+  robot_arm_interfaces/msg/ArmFollowCommand "{twist: {vx: 0.05, vy: 0.0, vz: 0.0}}"
+# 末端姿态速度（绕 base 系 Z 轴 10°/s，由云台 J4-6 执行）
+ros2 topic pub -r 50 /robot_arm/follow_command \
+  robot_arm_interfaces/msg/ArmFollowCommand "{twist: {wyaw: 10.0}}"
+# 带界面的点动：commander_test_gui 的「速度控制」面板（按住即动，松手即停）
 ```
 
-ModeManager 职责：① 唯一切换入口 `/robot_arm/switch_control_mode`（串行化）；② bumpless 播种（切到速度/力矩
-前先喂 0，切回轨迹由 JTC 自动锁当前位姿）；③ 原子切换 `controller_manager/switch_controller`(STRICT)；
-④ latched 广播 `/robot_arm/control_mode`（Commander 汇入 `arm_status.active_control_mode`）；⑤ 速度/力矩
-总线看门狗（`ForwardCommandController` 不自动归零，断流即失控，必须兜底）。
+> 两条速度总线的详细语义、安全闸与参数见
+> [robot_arm_interfaces/README.md](robot_arm_interfaces/README.md#速度控制--armfollowcommand--armjointvelocitycommand2026-08-04-开通)。
+> 要点：**必须先切模式**、**50-100Hz 持续发布**、**停止 = 发一帧全 0**；
+> 末端速度是**完整 6 维**：线速度归臂 J1-3、角速度（度/秒）归云台 J4-6，由一个 6×6 Jacobian 统一解算。
 
-> **约定**：必须静止时切换；速度/力矩模式下**云台 J4-6 不受控**（`arm_controller` 被停），保持当前位置。
+> **速度模式默认不切控制器**（2026-08-04 改，参数 `velocity_backend`，默认 `trajectory`）：
+> `JOINT_VELOCITY` 复用 `arm_controller`，速度指令由 Commander 的 `VelocityStreamServer`
+> 积分成位置流走同一条 `joint_trajectory`。这样切模式只是更新语义标志 ——
+> 没有控制器切换，就没有陈旧命令回放（切回轨迹不跳变）、轨迹类动作随时可用、云台不必额外挂保持控制器。
+> 需要驱动器内部速度环（PV(3)，高动态更平滑）时把 `velocity_backend` 设成 `velocity_controller`
+> 切回老路径，届时 `arm_velocity_controller` / `hold_controllers` / 换模播种那套才会启用。
+
+ModeManager 职责：① 唯一切换入口 `/robot_arm/switch_control_mode`（串行化）；② latched 广播
+`/robot_arm/control_mode`（Commander 汇入 `arm_status.active_control_mode`，并作为速度流的模式闸）；
+③ PV 后端时才做的事：bumpless 播种、`switch_controller`(STRICT) 原子切换、云台保持控制器编排、
+速度/力矩总线转发与看门狗、限位刹车、急停闩锁、换模后把 JTC 目标复位到切换前位置。
+
+> **约定**：默认（trajectory 后端）下切模式无需静止、也不跳变，云台 J4-6 由同一条 JTC 轨迹带着走；
+> 切到 PV 后端时才恢复「必须静止时切换 + 云台靠 `hold_controllers` 保持」的老约定。
 > 驱动层 `/arm_node/set_mode_pp|ip`（402 profile 微调，不换控制器）仍是实物专属细化，与 ModeManager 不冲突。
 > `JOINT_EFFORT` / `ADMITTANCE` 为 P3 预留（`effort_controller` 默认未配置，切换会被明确拒绝）。
 
@@ -183,14 +204,15 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 ```text
 ═══════════════════════════════════════════════════════════════════════════════════
  L4 应用/指挥层           外部业务 Director（下发拍摄/姿态任务、读状态）
-                          └ commander_test_gui —— 测试用 Director（走 ROS Action，4 面板：
-                                                    status/MoveToPose/MoveToJoint/TrajectoryShot）
+                          └ commander_test_gui —— 测试用 Director（5 面板：status / MoveToPose /
+                                                    MoveToJoint / 速度控制 / TrajectoryShot）
 ───────────────────────────────────────────────────────────────────────────────────
  L3 产品中间层            arm_commander_node (C++)  单一状态机 IDLE/MOVING/REACHED/…
    [ROS2 Action/Srv/Topic]  ├ move_to_pose_server     姿态切换（关节 / IK 目标）
                             ├ move_to_joint_server    关节空间点到点（只动臂 J1-3）
                             ├ trajectory_shot_server  直线 / 球面运镜（Ruckig OTG）
                             ├ track_target_server     视觉跟随（转调 visp 节点）
+                            ├ velocity_stream_server  速度流（关节/末端 twist → 积分成位置流）
                             ├ execution_monitor       到位 / 超时判定
                             └ status_aggregator       10 Hz 汇聚 /robot_arm/arm_status
 ───────────────────────────────────────────────────────────────────────────────────
@@ -204,7 +226,9 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
                                    切模式 = switch_controller（TRAJECTORY↔VELOCITY↔EFFORT，后端无感）
    ▼ 命令总线  [位置] /arm_controller/joint_trajectory       (trajectory_msgs/JointTrajectory)
               [位置] /arm_controller/follow_joint_trajectory (Action，MoveIt 执行轨迹用)
-              [速度] /robot_arm/cmd/joint_velocity          (Float64MultiArray，J1-3，ModeManager relay+看门狗)
+              [速度] /robot_arm/cmd/joint_velocity          (ArmJointVelocityCommand，J1-3)
+              [速度] /robot_arm/follow_command              (ArmFollowCommand，末端 6 维 twist)
+                     └ 两条都由 Commander 积分成位置流，汇入上面那条 joint_trajectory（50Hz）
    ▲ 反馈总线  /joint_states                               (sensor_msgs/JointState, 6 轴)
 ═══════════════════════════════════════════════════════════════════════════════════
  L1 控制/后端层（三选一，总线接口一致，上层无感切换）
@@ -245,7 +269,7 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 | 节点（可执行） | 包·语言 | 职责 | 关键输入 → 输出 |
 | :--- | :--- | :--- | :--- |
 | `arm_commander_node` | robot_arm_node · C++ | 产品中间层状态机，把「拍摄/姿态」意图翻译成轨迹 | `/robot_arm/{move_to_pose,move_to_joint,trajectory_shot,track_target}` Action、`/joint_states`、`/compute_ik` → `/arm_controller/joint_trajectory`、`/robot_arm/arm_status` |
-| `mode_manager_node` | robot_arm_node · C++ | 语义控制模式仲裁（TRAJECTORY/JOINT_VELOCITY/…），后端无感；切模式 = switch_controller + bumpless 播种 + 速度总线看门狗 | `/robot_arm/switch_control_mode`(Srv)、`/robot_arm/cmd/joint_velocity` → `controller_manager/switch_controller`、`/arm_velocity_controller/commands`、`/robot_arm/control_mode`(latched) |
+| `mode_manager_node` | robot_arm_node · C++ | 语义控制模式仲裁（TRAJECTORY/JOINT_VELOCITY/…），后端无感；默认 trajectory 后端只更新语义并 latched 广播，PV 后端下才做 switch_controller + 播种 + 云台保持 + 总线闸门 | `/robot_arm/switch_control_mode`(Srv) → `/robot_arm/control_mode`(latched)；PV 后端另接 `/robot_arm/cmd/joint_velocity` → `controller_manager/switch_controller`、`/arm_velocity_controller/commands` |
 | `controllers ×6` | robot_arm_debug · py | 调试控制：关节滑块 / 笛卡尔 / 实时 IK / Ruckig 点到点 / 球面运镜 / 速度点动 | GUI 滑块、`/joint_states`、`/compute_ik`·`/compute_cartesian_path` → `/arm_controller/joint_trajectory`（`cartesian_velocity` 改发 `/servo_node/delta_twist_cmds`） |
 | `visp_ibvs_node` | robot_arm_debug · C++ | ViSP+Pinocchio 图像伺服，加权 Jacobian 直接算关节速度 | `/red_detector/feature`（或外部 `perception_topic`）、`/joint_states` → `/arm_controller/joint_trajectory` |
 | `red_box_detector` | robot_arm_debug · py | OpenCV 红块检测，产出归一化像素特征 + 深度 | `/camera/camera_sensor/image_raw` → `/red_detector/feature`、`/red_detector/image` |
@@ -309,7 +333,7 @@ source install/setup.bash   # 编译后
 
 ## Arm Commander 接口参考
 
-Arm Commander（`controller:=commander`）是中间层状态机，对外暴露 4 个 Action —— `ArmMoveToPose`（姿态切换，笛卡尔）、`ArmMoveToJoint`（关节空间点到点）、`ArmTrajectoryShot`（运镜轨迹）、`ArmTrackTarget`（视觉跟随），4 个 Service（`enable` / `stop` / `reset_error` / `homing`），并以 10 Hz 发布 `/robot_arm/arm_status`。
+Arm Commander（`controller:=commander`）是中间层状态机，对外暴露 4 个 Action —— `ArmMoveToPose`（姿态切换，笛卡尔）、`ArmMoveToJoint`（关节空间点到点）、`ArmTrajectoryShot`（运镜轨迹）、`ArmTrackTarget`（视觉跟随），4 个 Service（`enable` / `stop` / `reset_error` / `homing`），2 条速度流 Topic（`/robot_arm/cmd/joint_velocity` 关节角速度、`/robot_arm/follow_command` 末端 6 维 twist，见上节「控制模式仲裁」），并以 10 Hz 发布 `/robot_arm/arm_status`。
 
 ### 启动与基础控制
 
@@ -331,16 +355,26 @@ ros2 service call /robot_arm/homing      robot_arm_interfaces/srv/ArmHoming {}
 | `current_pose_state` | 当前姿态 | 0=STOWED  1=OBSERVE  2=SHOOTING |
 | `error_code` | 错误码 | 0=NONE  1=LIMIT  2=DRIVER  3=TIMEOUT |
 | `command_result` | 命令结果 | 0=NONE  1=EXECUTING  2=SUCCEEDED  3=FAILED  4=ABORTED |
-| `is_moving` | 是否运动中 | true / false |
+| `is_moving` | 是否运动中（含速度流下发期间） | true / false |
+| `active_control_mode` | 当前控制模式 | 0=TRAJECTORY 1=JOINT_VELOCITY 2=JOINT_EFFORT 3=ADMITTANCE |
+| `arm_at_target` / `arm_at_pose_start` / `camera_ready` | 到位 / 到运镜起点 / 录制就绪 | true / false |
+| `is_tracking` / `tracking_img_err` / `tracking_depth_err_m` | 视觉跟随中 / 图像误差 / 深度误差 | — |
+
+> 完整字段（含 `arm_pose` / `arm_twist` / `executing_command_id`）见
+> [robot_arm_interfaces/README.md](robot_arm_interfaces/README.md#armstatus--状态广播commander--director10hz)。
 
 ### ArmMoveToPose — 姿态切换
 
 `/robot_arm/move_to_pose`；`target_pose_state`: 0=STOWED 1=OBSERVE 2=SHOOTING，`transition_speed`: 0=SLOW 1=NORMAL 2=FAST。SHOOTING 需给 `target_pose`（XYZ 单位 m，RPY 单位 °）；任意命令加 `return_to_start: true` 执行完自动回起点。
 
+> **roll 填 0**（不是 90）：2026-07-29 云台换 V2 后，画面水平所需的 EEF roll 由 90° 变成 0°
+> （`motion/geometry.hpp` 的 `EEF_LEVEL_ROLL`）。沿用旧的 90° 会让画面歪 90°，还会逼云台
+> roll 轴（Joint5，±1.5 rad）去凑姿态导致 IK 大面积无解。
+
 ```bash
 ros2 action send_goal /robot_arm/move_to_pose robot_arm_interfaces/action/ArmMoveToPose \
   "{target_pose_state: 2, transition_speed: 1, return_to_start: false,
-    target_pose: {x: 0.30, y: 0.0, z: 0.50, roll: 90.0, pitch: 10.0, yaw: 0.0}}"
+    target_pose: {x: 0.30, y: 0.0, z: 0.50, roll: 0.0, pitch: 10.0, yaw: 0.0}}"
 ```
 
 ### ArmMoveToJoint — 关节空间点到点
@@ -371,8 +405,8 @@ ros2 action send_goal /robot_arm/move_to_joint robot_arm_interfaces/action/ArmMo
 # LINEAR：起→止位姿平滑直线
 ros2 action send_goal /robot_arm/trajectory_shot robot_arm_interfaces/action/ArmTrajectoryShot \
   "{motion_type: 0, transition_speed: 1, return_to_start: false,
-    linear_start_pose: {x: 0.30, y: 0.0, z: 0.60, roll: 90.0, pitch: 0.0, yaw: 0.0},
-    linear_end_pose:   {x: 0.30, y: 0.0, z: 0.40, roll: 90.0, pitch: 0.0, yaw: 0.0}}"
+    linear_start_pose: {x: 0.30, y: 0.0, z: 0.60, roll: 0.0, pitch: 0.0, yaw: 0.0},
+    linear_end_pose:   {x: 0.30, y: 0.0, z: 0.40, roll: 0.0, pitch: 0.0, yaw: 0.0}}"
 
 # ORBIT：绕球心环绕（起止半径不同即变焦距）
 ros2 action send_goal /robot_arm/trajectory_shot robot_arm_interfaces/action/ArmTrajectoryShot \
@@ -383,6 +417,65 @@ ros2 action send_goal /robot_arm/trajectory_shot robot_arm_interfaces/action/Arm
 ```
 
 > ORBIT 参数：`orbit_center_*`=球心/被摄主体（m），`azimuth/elevation_*_deg`=起止方位角/俯仰角（°），`radius_*_m`=起止半径（m）。
+
+### 速度控制 — 关节速度 / 末端 twist
+
+两条 Topic，不是 Action（持续流、无终态）：`/robot_arm/cmd/joint_velocity`（`ArmJointVelocityCommand`，
+臂 J1-3 角速度 rad/s）、`/robot_arm/follow_command`（`ArmFollowCommand`，末端 6 维 twist，
+线速度 m/s + 角速度 **°/s**）。两条都由 Commander 解算成 6 关节速度、积分成角度，以 50Hz
+位置流发同一条 `joint_trajectory`（与上面几个 Action 同一个控制器，见「控制模式仲裁」）。
+
+**必须先切模式**，否则指令被忽略并告警（模式闸，防误发）：
+
+```bash
+ros2 service call /robot_arm/switch_control_mode \
+  robot_arm_interfaces/srv/SwitchControlMode "{target_mode: 1}"   # 1=JOINT_VELOCITY
+```
+
+```bash
+# ① 关节点动：J1 以 +0.2 rad/s 转（Ctrl-C 停；停发布即原地停住）
+ros2 topic pub -r 50 /robot_arm/cmd/joint_velocity \
+  robot_arm_interfaces/msg/ArmJointVelocityCommand "{velocities: [0.2, 0.0, 0.0]}"
+
+# ② 末端线速度：沿 base 系 +X 走 0.05 m/s
+ros2 topic pub -r 50 /robot_arm/follow_command \
+  robot_arm_interfaces/msg/ArmFollowCommand "{twist: {vx: 0.05, vy: 0.0, vz: 0.0}}"
+
+# ③ 末端角速度：绕 base 系 Z 轴 10 °/s（由云台执行）
+ros2 topic pub -r 50 /robot_arm/follow_command \
+  robot_arm_interfaces/msg/ArmFollowCommand "{twist: {wyaw: 10.0}}"
+
+# ④ 平移 + 转向同时给（6 维一次解算，位置/姿态耦合自动补偿）
+ros2 topic pub -r 50 /robot_arm/follow_command \
+  robot_arm_interfaces/msg/ArmFollowCommand "{twist: {vx: 0.05, wyaw: 10.0}}"
+
+# 用完切回轨迹模式（原地不动，不会跳变）
+ros2 service call /robot_arm/switch_control_mode \
+  robot_arm_interfaces/srv/SwitchControlMode "{target_mode: 0}"
+```
+
+调试 GUI（`controller:=commander` 默认带）的「速度控制」面板更顺手 —— 一行模式指示 +
+「切到 JOINT_VELOCITY」/「切回 TRAJECTORY」两个按钮，下面三行点动，每行一个幅值输入框
+加各轴 `−`/`＋` 按钮，**按住即动、松手即停**（松手自动补一帧 0，不用等看门狗）：
+
+| 行 | 幅值默认 | 按钮 | 走哪条总线 |
+| :--- | :--- | :--- | :--- |
+| 关节速度 | 0.20 rad/s | J1 / J2 / J3 各 ∓ | `cmd/joint_velocity` |
+| 末端线速度 | 0.05 m/s | X / Y / Z 各 ∓ | `follow_command`（vx/vy/vz） |
+| 末端角速度 | 10 °/s | Roll / Pitch / Yaw 各 ∓ | `follow_command`（wroll/wpitch/wyaw） |
+
+最下面一行回显当前正在下发的速度；模式被切走时面板会自动停掉正在按住的点动。
+
+**要点**（详见 [robot_arm_interfaces/README.md](robot_arm_interfaces/README.md)）：
+
+- **发布节奏 50-100Hz**；低于 ~3Hz 会被 0.3s 断流看门狗判为掉线而停流。
+- **停止 = 停发布或发一帧全 0**，两者都是原地停住（停流后 JTC 保持最后一个点）。
+- **限位**：积分出的角度按 URDF 限位夹紧，顶到限位自然停住，反向撤离不受限。
+- **奇异点**：DLS 自动加阻尼，此时末端跟踪有偏差并打告警；云台贴近万向锁（J5 接近 ±90°）
+  或某轴压到限位时姿态方向会退化，先用 `ArmMoveToPose` 把云台摆回中位。
+- **`ArmStop` 会停掉速度流**并把状态机置 STOPPED，需 `ArmResetError` 复位后才能再动。
+- 速度模式下直接下发 `ArmMoveToPose` 等动作是允许的：这类动作执行前会**自动切回 TRAJECTORY**
+  （反过来速度流不会自动切模式 —— 持续控制权必须显式申请）。
 
 ### 常见问题
 

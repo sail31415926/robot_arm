@@ -39,8 +39,13 @@ ArmPose  arm_pose
 ArmTwist arm_twist
 
 # ── 当前控制模式（取值见 ControlMode 常量）─────────────────────────────
-# 0=TRAJECTORY 1=JOINT_VELOCITY 2=JOINT_EFFORT 3=ADMITTANCE
-# 由 mode_manager_node 经 /robot_arm/control_mode 广播，Commander 汇入本字段
+# 0=TRAJECTORY（位置/轨迹）  1=JOINT_VELOCITY（速度流）
+# 2=JOINT_EFFORT（力矩，P3 未实现）  3=ADMITTANCE（导纳，P3 未实现）
+# 由 mode_manager_node 经 /robot_arm/control_mode 广播，Commander 汇入本字段。
+# 注意这是**语义模式**，不等于底层作动方式：2026-08-04 起 JOINT_VELOCITY 默认也走
+# 位置流（与 TRAJECTORY 同一个 JTC），只表示「上层正在用速度接口」；
+# 想知道底层是不是驱动器速度环，看 mode_manager 的 velocity_backend 参数。
+# 2/3 目前只会作为「切换被拒绝」的目标出现，实际不会被上报。
 uint8   active_control_mode
 
 # 机械臂是否正在运动

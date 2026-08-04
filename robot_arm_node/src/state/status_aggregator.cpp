@@ -162,6 +162,12 @@ std::vector<double> StatusAggregator::joint_position_list(
   return out;
 }
 
+uint8_t StatusAggregator::active_control_mode() const
+{
+  std::lock_guard<std::mutex> lk(state_mtx_);
+  return active_control_mode_;
+}
+
 // ── 运动 / 运镜 / 跟随 flag ──────────────────────────────────────────────────────
 bool StatusAggregator::is_moving() const
 {

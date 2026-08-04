@@ -44,6 +44,10 @@ constexpr double DEFAULT_V_ORI = 0.10, DEFAULT_A_ORI = 0.20, DEFAULT_J_ORI = 2.0
 // ── 速度流限幅 ──────────────────────────────────────────────────────────────
 constexpr double MAX_V_LIN = 0.30;   // m/s
 constexpr double MAX_V_ANG = 1.00;   // rad/s
+// 产品接口 ArmFollowCommand（笛卡尔速度控制）的默认线速度上限，比调试链的 MAX_V_LIN 保守。
+// 与 ArmFollowCommand.msg 注释里承诺的 [-0.2, 0.2] m/s 一致；可由参数
+// cartesian_velocity.max_linear_speed 覆盖。
+constexpr double MAX_V_LIN_FOLLOW = 0.20;   // m/s
 
 // ── 话题 / 服务 ─────────────────────────────────────────────────────────────
 inline const std::string TRAJ_TOPIC        = "/arm_controller/joint_trajectory";

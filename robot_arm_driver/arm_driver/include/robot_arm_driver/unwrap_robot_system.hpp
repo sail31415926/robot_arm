@@ -42,6 +42,11 @@ public:
   hardware_interface::return_type write(
     const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
+  /// 换模时把位置目标播种为当前实测位置，避免陈旧命令被回放（无冲击换模）
+  hardware_interface::return_type perform_command_mode_switch(
+    const std::vector<std::string> & start_interfaces,
+    const std::vector<std::string> & stop_interfaces) override;
+
 private:
   /// 每关节折算状态，与 robot_motor_data_ 一一对应
   struct Unwrap

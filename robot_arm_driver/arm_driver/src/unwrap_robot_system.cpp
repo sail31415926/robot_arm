@@ -111,6 +111,50 @@ hardware_interface::return_type UnwrapRobotSystem::read(
   return ret;
 }
 
+hardware_interface::return_type UnwrapRobotSystem::perform_command_mode_switch(
+  const std::vector<std::string> & start_interfaces,
+  const std::vector<std::string> & stop_interfaces)
+{
+  const auto ret =
+    canopen_ros2_control::RobotSystem::perform_command_mode_switch(
+      start_interfaces, stop_interfaces);
+  if (ret != hardware_interface::return_type::OK)
+  {
+    return ret;
+  }
+
+  // ── 无冲击换模（2026-08-04 加）─────────────────────────────────────────────
+  // 命令接口的值在控制器停用后**原样保留**。速度模式下机械臂会走开，而位置命令缓冲
+  // 仍停在进入速度模式前那一刻的值；等切回位置模式（IP），write_target() 立刻把这个
+  // 陈旧目标写给驱动器 —— 机械臂会以插补速度冲回旧位置。仿真里表现为瞬移，实物上
+  // 就是一次没人预期的高速运动。
+  // 这里在位置命令接口被重新 claim 的瞬间，把目标播种成当前实测位置（= 保持不动），
+  // 真正的新命令会在下一个控制周期由控制器覆盖。
+  for (const auto & iface : start_interfaces)
+  {
+    for (size_t i = 0; i < robot_motor_data_.size(); ++i)
+    {
+      auto & d = robot_motor_data_[i];
+      if (iface != d.joint_name + "/" + hardware_interface::HW_IF_POSITION)
+      {
+        continue;
+      }
+      if (!std::isfinite(d.actual_position))
+      {
+        RCLCPP_WARN(robot_system_logger,
+                    "'%s' 尚无位置反馈，换模无法播种目标（可能出现跳变）",
+                    d.joint_name.c_str());
+        break;
+      }
+      d.target_position = d.actual_position;   // 折算坐标系，与上层命令同系
+      RCLCPP_INFO(robot_system_logger, "'%s' 换回位置模式，目标已播种为当前位置 %.4f rad",
+                  d.joint_name.c_str(), d.actual_position);
+      break;
+    }
+  }
+  return ret;
+}
+
 hardware_interface::return_type UnwrapRobotSystem::write(
   const rclcpp::Time & time, const rclcpp::Duration & period)
 {

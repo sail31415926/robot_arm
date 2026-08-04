@@ -31,6 +31,7 @@ const char * ACTION_MOVE_TO_POSE    = "/robot_arm/move_to_pose";
 const char * ACTION_MOVE_TO_JOINT   = "/robot_arm/move_to_joint";
 const char * ACTION_TRAJECTORY_SHOT = "/robot_arm/trajectory_shot";
 const char * ACTION_TRACK_TARGET    = "/robot_arm/track_target";
+const char * TOPIC_FOLLOW_COMMAND   = "/robot_arm/follow_command";
 const char * SERVICE_ARM_STOP       = "/robot_arm/stop";
 const char * SERVICE_ARM_ENABLE     = "/robot_arm/enable";
 const char * SERVICE_ARM_HOMING     = "/robot_arm/homing";
@@ -38,6 +39,9 @@ const char * SERVICE_ARM_RESET_ERROR= "/robot_arm/reset_error";
 const char * ARM_NODE_ENABLE_SRV    = "/arm_node/enable";
 const char * ARM_NODE_DISABLE_SRV   = "/arm_node/disable";
 const char * ARM_NODE_RECOVER_SRV   = "/arm_node/recover";
+// mode_manager_node 的速度总线急停闩锁（内部接口，非 Director 直调）
+const char * VELOCITY_ESTOP_SRV     = "/robot_arm/velocity_estop";
+const char * SWITCH_MODE_SRV        = "/robot_arm/switch_control_mode";
 
 const std::vector<double> HOMING_JOINTS(6, 0.0);
 constexpr double HOMING_DURATION = 4.0;
@@ -72,6 +76,10 @@ ArmCommanderNode::ArmCommanderNode()
   mtj_srv_   = std::make_unique<MoveToJointServer>(*this, *motion_, *status_, *monitor_);
   em_srv_    = std::make_unique<TrajectoryShotServer>(*this, *motion_, *status_, *monitor_, is_stopped_fn);
   track_srv_ = std::make_unique<TrackTargetServer>(*this, *status_, is_stopped_fn);
+  // 速度流控制：topic 流式，不占状态机。与 action 的互斥由「控制模式」保证 ——
+  // 速度流只在 JOINT_VELOCITY 模式下下发，而轨迹类动作执行前会切回 TRAJECTORY，
+  // 一切模式速度流自己就停了（两者都发同一个 JTC 话题，靠模式串行化，不会打架）。
+  vstream_srv_ = std::make_unique<VelocityStreamServer>(*this, *status_, is_stopped_fn);
 
   // ── Action Server（全部 ACCEPT_AND_EXECUTE，非空闲检查在执行线程内 abort，与 Python 一致）──
   const auto opts = rcl_action_server_get_default_options();
@@ -160,10 +168,15 @@ ArmCommanderNode::ArmCommanderNode()
   drv_enable_cli_  = create_client<Trigger>(ARM_NODE_ENABLE_SRV);
   drv_disable_cli_ = create_client<Trigger>(ARM_NODE_DISABLE_SRV);
   drv_recover_cli_ = create_client<Trigger>(ARM_NODE_RECOVER_SRV);
+  vel_estop_cli_   = create_client<std_srvs::srv::SetBool>(VELOCITY_ESTOP_SRV);
+  // 轨迹类动作在速度模式下会静默失效，执行前自动切回 TRAJECTORY（仍走 mode_manager 唯一入口）
+  mode_switch_cli_ = create_client<SwitchControlMode>(SWITCH_MODE_SRV,
+                                                      rmw_qos_profile_services_default, cb_group_);
 
-  RCLCPP_INFO(get_logger(), "Arm Commander 已就绪  |  状态=%s  |  action: %s / %s / %s / %s",
+  RCLCPP_INFO(get_logger(),
+              "Arm Commander 已就绪  |  状态=%s  |  action: %s / %s / %s / %s  |  速度流: %s",
               state_name(state()), ACTION_MOVE_TO_POSE, ACTION_MOVE_TO_JOINT,
-              ACTION_TRAJECTORY_SHOT, ACTION_TRACK_TARGET);
+              ACTION_TRAJECTORY_SHOT, ACTION_TRACK_TARGET, TOPIC_FOLLOW_COMMAND);
 }
 
 // ── 状态机 ──────────────────────────────────────────────────────────────────────
@@ -213,6 +226,15 @@ void ArmCommanderNode::mtp_execute(std::shared_ptr<rclcpp_action::ServerGoalHand
   if (!is_idle()) {
     RCLCPP_WARN(get_logger(), "拒绝 goal: 当前状态=%s，非空闲", state_name(state()));
     gh->abort(std::make_shared<MoveToPose::Result>());
+    return;
+  }
+  std::string why;
+  if (!ensure_trajectory_mode(&why)) {
+    auto r = std::make_shared<MoveToPose::Result>();
+    r->success = false;
+    r->exit_reason = "error";
+    r->error_code = ArmStatus::ERR_DRIVER;
+    gh->abort(r);
     return;
   }
   RCLCPP_INFO(get_logger(), "MoveToPose goal 已接受，开始执行");
@@ -275,6 +297,15 @@ void ArmCommanderNode::mtj_execute(std::shared_ptr<rclcpp_action::ServerGoalHand
     gh->abort(std::make_shared<MoveToJoint::Result>());
     return;
   }
+  std::string why;
+  if (!ensure_trajectory_mode(&why)) {
+    auto r = std::make_shared<MoveToJoint::Result>();
+    r->success = false;
+    r->exit_reason = "error";
+    r->error_code = ArmStatus::ERR_DRIVER;
+    gh->abort(r);
+    return;
+  }
   RCLCPP_INFO(get_logger(), "MoveToJoint goal 已接受，开始执行");
   transition(CommanderState::MOVING);
   const uint32_t cmd_id = ++cmd_counter_;
@@ -328,6 +359,15 @@ void ArmCommanderNode::em_execute(std::shared_ptr<rclcpp_action::ServerGoalHandl
   if (!is_idle()) {
     RCLCPP_WARN(get_logger(), "拒绝 goal: 当前状态=%s，非空闲", state_name(state()));
     gh->abort(std::make_shared<TrajectoryShot::Result>());
+    return;
+  }
+  std::string why;
+  if (!ensure_trajectory_mode(&why)) {
+    auto r = std::make_shared<TrajectoryShot::Result>();
+    r->success = false;
+    r->exit_reason = "error";
+    r->error_code = ArmStatus::ERR_DRIVER;
+    gh->abort(r);
     return;
   }
   transition(CommanderState::MOVING);
@@ -427,16 +467,79 @@ void ArmCommanderNode::on_arm_stop(
     const std::shared_ptr<robot_arm_interfaces::srv::ArmStop::Request>,
     std::shared_ptr<robot_arm_interfaces::srv::ArmStop::Response> response)
 {
+  // 速度流不走状态机（topic 流式、不占 goal），所以急停要单独处理这一路：
+  //   ① 停 Commander 自己的笛卡尔速度流（立刻喂 0）
+  //   ② 闩住 mode_manager 的速度总线 —— Director 可能自己在直发关节速度指令，
+  //      只停 ① 拦不住它；总线闩锁是速度指令的唯一必经之路。
+  const bool was_streaming = vstream_srv_ && vstream_srv_->is_streaming();
+  if (vstream_srv_) vstream_srv_->emergency_stop();
+  latch_velocity_estop(true);
+
   if (state() == CommanderState::MOVING) {
     motion_->stop();
     transition(CommanderState::STOPPED);
     response->success = true;
     response->message = "已急停，状态 MOVING → STOPPED";
-  } else {
+  } else if (was_streaming) {
+    transition(CommanderState::STOPPED);
     response->success = true;
-    response->message = std::string("当前状态=") + state_name(state()) + "，无需急停";
+    response->message = "已急停速度流，状态 → STOPPED（需 ArmResetError 复位）";
+  } else {
+    // 没有 goal 在跑也没在发速度流：状态机不动，但速度总线仍已闩锁 ——
+    // Director 可能正在直发关节速度，那条路不经状态机
+    response->success = true;
+    response->message = std::string("当前状态=") + state_name(state())
+                      + "，无运动可停；速度总线已闩锁（ArmResetError 解除）";
   }
   RCLCPP_INFO(get_logger(), "ArmStop: %s", response->message.c_str());
+}
+
+// ── 轨迹类动作的模式前置条件 ──────────────────────────────────────────────────────
+//   MoveToPose / MoveToJoint / TrajectoryShot 全都靠 JTC 执行；速度模式下 JTC 被停用，
+//   轨迹发出去也不会动（表现为动作静默超时）。这类动作的语义本身就要求轨迹模式，
+//   所以这里**自动切回 TRAJECTORY** 而不是让上层先手动切一次 —— 与「速度流不自动切模式」
+//   的约定不冲突：速度流是持续控制权，动作是一次性位置指令。
+//   切换仍然只经 mode_manager（唯一入口），失败则放弃执行并让调用方拿到明确原因。
+bool ArmCommanderNode::ensure_trajectory_mode(std::string * why)
+{
+  if (status_->active_control_mode() == ControlMode::TRAJECTORY) return true;
+
+  if (!mode_switch_cli_->wait_for_service(1s)) {
+    if (why) *why = "mode_manager 不可用，无法从速度模式切回轨迹模式";
+    RCLCPP_ERROR(get_logger(), "%s", why ? why->c_str() : "");
+    return false;
+  }
+  auto req = std::make_shared<SwitchControlMode::Request>();
+  req->target_mode = ControlMode::TRAJECTORY;
+  auto future = mode_switch_cli_->async_send_request(req);
+  if (future.wait_for(10s) != std::future_status::ready) {
+    mode_switch_cli_->remove_pending_request(future);
+    if (why) *why = "切回 TRAJECTORY 超时";
+    RCLCPP_ERROR(get_logger(), "%s", why ? why->c_str() : "");
+    return false;
+  }
+  auto resp = future.get();
+  if (!resp || !resp->success) {
+    if (why) *why = std::string("切回 TRAJECTORY 失败：") + (resp ? resp->message : "无应答");
+    RCLCPP_ERROR(get_logger(), "%s", why ? why->c_str() : "");
+    return false;
+  }
+  RCLCPP_INFO(get_logger(), "动作执行前已自动切回 TRAJECTORY 模式");
+  return true;
+}
+
+// ── 速度总线急停闩锁（Commander → ModeManager）────────────────────────────────────
+//   异步发：急停必须立刻返回，不能卡在等 mode_manager 应答上。
+//   mode_manager 不在（如 MuJoCo 后端）时静默跳过 —— 那种后端也没有速度控制器。
+void ArmCommanderNode::latch_velocity_estop(bool engage)
+{
+  if (!vel_estop_cli_->service_is_ready()) {
+    RCLCPP_DEBUG(get_logger(), "%s 不可用，跳过速度总线闩锁", VELOCITY_ESTOP_SRV);
+    return;
+  }
+  auto req = std::make_shared<std_srvs::srv::SetBool::Request>();
+  req->data = engage;
+  vel_estop_cli_->async_send_request(req);
 }
 
 // ── 驱动层 Trigger 同步调用 ──────────────────────────────────────────────────────
@@ -520,6 +623,7 @@ void ArmCommanderNode::on_arm_reset_error(
     std::shared_ptr<robot_arm_interfaces::srv::ArmResetError::Response> response)
 {
   auto [drv_ok, drv_msg] = call_driver_trigger(drv_recover_cli_, ARM_NODE_RECOVER_SRV);
+  latch_velocity_estop(false);   // 解除速度总线急停闩锁（与 ArmStop 成对）
 
   const auto current = state();
   if (current == CommanderState::ERROR || current == CommanderState::STOPPED) {

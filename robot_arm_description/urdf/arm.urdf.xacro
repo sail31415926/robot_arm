@@ -241,6 +241,23 @@
       </xacro:unless>
     </hardware>
     <joint name="Joint1">
+      <xacro:unless value="${backend == 'real'}">
+        <!-- Gazebo 速度模式的力矩来源（2026-08-04 加）：
+             GazeboSystem 在没有 PID 参数时，velocity 命令走 ODE 关节马达的运动学设定，
+             对本模型**扛不住重力** —— 表现为切到 JOINT_VELOCITY 后机械臂缓慢自然下垂、
+             指令 0 也停不住，且抬升方向（J2 正向）几乎跟不动。配上速度 PID 后，插件改用
+             SetForce(PID(v_target − v_actual))，才有真正的力矩。
+             必须带积分项：纯 P 在重力负载下只能减慢下垂（稳态 v = −τ_g/kp ≠ 0），
+             靠 ki 把稳态速度误差压到 0 才是「停住不动」。
+             实物不需要：PV(3) 的速度环闭在驱动器里。max_integral_error 取各轴
+             effort 限值量级（J1/J3=5、J2=30 N·m）留够重力补偿余量。 -->
+        <param name="vel_kp">150.0</param>
+        <param name="vel_ki">400.0</param>
+        <param name="vel_kd">0.0</param>
+        <param name="vel_max_integral_error">20.0</param>
+        <param name="vel_min_integral_error">-20.0</param>
+        <param name="vel_antiwindup">true</param>
+      </xacro:unless>
       <param name="device_name">joint_1</param>
       <command_interface name="position">
         <param name="min">-2.618</param>
@@ -251,6 +268,23 @@
       <state_interface name="velocity"/>
     </joint>
     <joint name="Joint2">
+      <xacro:unless value="${backend == 'real'}">
+        <!-- Gazebo 速度模式的力矩来源（2026-08-04 加）：
+             GazeboSystem 在没有 PID 参数时，velocity 命令走 ODE 关节马达的运动学设定，
+             对本模型**扛不住重力** —— 表现为切到 JOINT_VELOCITY 后机械臂缓慢自然下垂、
+             指令 0 也停不住，且抬升方向（J2 正向）几乎跟不动。配上速度 PID 后，插件改用
+             SetForce(PID(v_target − v_actual))，才有真正的力矩。
+             必须带积分项：纯 P 在重力负载下只能减慢下垂（稳态 v = −τ_g/kp ≠ 0），
+             靠 ki 把稳态速度误差压到 0 才是「停住不动」。
+             实物不需要：PV(3) 的速度环闭在驱动器里。max_integral_error 取各轴
+             effort 限值量级（J1/J3=5、J2=30 N·m）留够重力补偿余量。 -->
+        <param name="vel_kp">500.0</param>
+        <param name="vel_ki">1500.0</param>
+        <param name="vel_kd">0.0</param>
+        <param name="vel_max_integral_error">100.0</param>
+        <param name="vel_min_integral_error">-100.0</param>
+        <param name="vel_antiwindup">true</param>
+      </xacro:unless>
       <param name="device_name">joint_2</param>
       <command_interface name="position">
         <param name="min">-0.981</param>
@@ -261,6 +295,23 @@
       <state_interface name="velocity"/>
     </joint>
     <joint name="Joint3">
+      <xacro:unless value="${backend == 'real'}">
+        <!-- Gazebo 速度模式的力矩来源（2026-08-04 加）：
+             GazeboSystem 在没有 PID 参数时，velocity 命令走 ODE 关节马达的运动学设定，
+             对本模型**扛不住重力** —— 表现为切到 JOINT_VELOCITY 后机械臂缓慢自然下垂、
+             指令 0 也停不住，且抬升方向（J2 正向）几乎跟不动。配上速度 PID 后，插件改用
+             SetForce(PID(v_target − v_actual))，才有真正的力矩。
+             必须带积分项：纯 P 在重力负载下只能减慢下垂（稳态 v = −τ_g/kp ≠ 0），
+             靠 ki 把稳态速度误差压到 0 才是「停住不动」。
+             实物不需要：PV(3) 的速度环闭在驱动器里。max_integral_error 取各轴
+             effort 限值量级（J1/J3=5、J2=30 N·m）留够重力补偿余量。 -->
+        <param name="vel_kp">250.0</param>
+        <param name="vel_ki">800.0</param>
+        <param name="vel_kd">0.0</param>
+        <param name="vel_max_integral_error">40.0</param>
+        <param name="vel_min_integral_error">-40.0</param>
+        <param name="vel_antiwindup">true</param>
+      </xacro:unless>
       <param name="device_name">joint_3</param>
       <command_interface name="position">
         <param name="min">-2.5</param>

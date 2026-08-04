@@ -10,6 +10,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ArmPose.msg"
   "msg/ArmTwist.msg"
   "msg/ArmFollowCommand.msg"
+  "msg/ArmJointVelocityCommand.msg"
   "msg/ArmStatus.msg"
   "msg/ControlMode.msg"
   "srv/ArmEnable.srv"
