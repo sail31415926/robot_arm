@@ -6,6 +6,22 @@
 
 ---
 
+## CAN 接口准备（实物，每次开机或总线异常后）
+
+```bash
+sudo modprobe peak_usb
+
+# txqueuelen 必须 ≥128，否则 ros2_control_node 启动即崩 "Operation not permitted"
+sudo ip link set can0 txqueuelen 128
+
+sudo ip link set can0 down
+sudo ip link set can0 type can bitrate 500000
+sudo ip link set can0 up
+```
+
+> 起 launch 前用 `timeout 3 candump can0` 确认 0x701/702/703 三个心跳都在；
+> 心跳缺失就断电重启机械臂（详见 [CLAUDE.md](../CLAUDE.md) 高频坑）。
+
 ## 节点信息
 
 | 项目 | 值 |
@@ -79,7 +95,9 @@ Arm Commander 是机械臂的中间层状态机，对外暴露 **4 个 Action �
 
 ```bash
 # 终端 1：启动 commander 模式
-ros2 launch robot_arm_bringup real.launch.py controller:=commander
+ros2 launch robot_arm_bringup real.launch.py controller:=commander 
+  ros2 launch robot_arm_bringup real.launch.py controller:=commander gui:=false
+
 
 # 终端 2：使能伺服
 ros2 service call /robot_arm/enable robot_arm_interfaces/srv/ArmEnable "{enable: true}"
