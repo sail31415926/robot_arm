@@ -54,7 +54,7 @@ ArmCommanderNode::ArmCommanderNode()
   using rclcpp_action::CancelResponse;
 
   // ── 参数：OBSERVE 预定义位姿（可覆盖）─────────────────────────────────────────
-  declare_parameter("pose_observe_x", 0.1);
+  declare_parameter("pose_observe_x", 0.3);
   declare_parameter("pose_observe_y", 0.0);
   declare_parameter("pose_observe_z", 0.65);
   // 2026-07-29 云台换 V2：画面水平所需的 EEF roll 由 90° 变为 0°
