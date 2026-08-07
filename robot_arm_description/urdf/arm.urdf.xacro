@@ -72,8 +72,6 @@
                      can_interface:='can0'
                      emit_camera_control:='true'
                      with_gimbal:='true'
-                     depth_camera:='false'
-                     depth_xyz:='0 0.020 0'
                      controllers_yaml:=''">
 
   <!-- ══ 挂载关节：连接父 link 与机械臂基座 ══════════════════════════════════ -->
@@ -343,8 +341,6 @@
         gazebo_camera="${gazebo_camera}"
         emit_camera_control="${emit_camera_control}"
         tool_link="gimbal_tool0"
-        depth_camera="${depth_camera}"
-        depth_xyz="${depth_xyz}"
         controllers_yaml=""/>
 
     <!-- 兼容别名：V2 以 Cam0 的 link 系为光学系（REP-103，z 光轴 / y 下 / x 右），
