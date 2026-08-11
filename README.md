@@ -148,7 +148,7 @@ claim 一个命令接口 = 只能处于一种 402 模式」，故**模式切换 
 | :--- | :--- | :--- | :--- | :--- |
 | `TRAJECTORY`（0，默认） | `arm_controller`(JTC) | IP(7) | `/arm_controller/joint_trajectory` | ✅ |
 | `JOINT_VELOCITY`（1） | `arm_controller`(JTC)，**不切控制器** | IP(7) | `/robot_arm/cmd/joint_velocity`（`ArmJointVelocityCommand`，J1-3）<br>或末端 6 维 twist `/robot_arm/follow_command`（`ArmFollowCommand`）<br>Commander 6×6 Jacobian → 积分成位置流（50Hz）→ 同一条 `joint_trajectory` | ✅ |
-| `JOINT_EFFORT`（2） | `arm_effort_controller` | PT(4) | `/robot_arm/cmd/joint_effort` | ⏳ P3（需 URDF 加 effort 接口） |
+| `JOINT_EFFORT`（2） | `arm_effort_controller` | PT(4) | `/robot_arm/cmd/joint_effort`（`Float64MultiArray`，N·m，J1-3）<br>下发 = **g(q) + 用户增量 − d·q̇**（重力补偿+阻尼，见下） | ✅ 仿真<br>⏳ 实物（缺 N·m↔0.1% 换算） |
 | `ADMITTANCE`（3） | `arm_controller`(JTC) | IP(7) | 末端力 → 位置微调，底层仍走位置总线 | ⏳ P3（需 F/T 传感器） |
 
 ```bash
@@ -188,7 +188,23 @@ ModeManager 职责：① 唯一切换入口 `/robot_arm/switch_control_mode`（�
 > **约定**：默认（trajectory 后端）下切模式无需静止、也不跳变，云台 J4-6 由同一条 JTC 轨迹带着走；
 > 切到 PV 后端时才恢复「必须静止时切换 + 云台靠 `hold_controllers` 保持」的老约定。
 > 驱动层 `/arm_node/set_mode_pp|ip`（402 profile 微调，不换控制器）仍是实物专属细化，与 ModeManager 不冲突。
-> `JOINT_EFFORT` / `ADMITTANCE` 为 P3 预留（`effort_controller` 默认未配置，切换会被明确拒绝）。
+> **`JOINT_EFFORT`（2026-08-11 开通，仿真先行）**：`gazebo.launch.py` 配了
+> `effort_controller:=arm_effort_controller`，切换会真的切控制器（力矩没有「积分成位置流」
+> 那种取巧路径），因此 `hold_controllers`（云台 `gimbal_controller`）**一定生效** ——
+> `arm_controller` 一停，J4-6 就没了命令通道。
+>
+> 下发力矩 = **g(q)（pinocchio 重力补偿）+ 用户增量 − d·q̇（阻尼）**，再按 URDF
+> `<limit effort>` 限幅 + 限位刹车。关键语义：**零用户力矩 = 原地悬停**，不是自由下垂；
+> 急停/断流也只清用户增量、继续维持 g(q)（力矩模式下「停住」就是托住）。
+> 没有重力补偿时实测切进去 J2 直接从 +0.500 砸到下限 -0.981。
+> 参数：`gravity_compensation`(true) / `effort_damping`(1.5 N·m·s/rad) /
+> `effort_rate_hz`(100) / `max_joint_effort`(0=只用 URDF 限值)。
+>
+> **实物仍未开通**：`real.launch.py` 故意不配 `effort_controller`（切换会被明确拒绝）。
+> 缺两件：① 6071 是「0.1% 额定转矩」而这一层是 N·m，换算系数要查手册额定转矩
+> （vendored ros2_canopen 的 `scale_eff_*` 上游未实现，按 VENDOR.md 不改 vendored，
+> 换算应落在 relay 层）；② `6077` 力矩反馈没映进 TPDO（TPDO1 还空 5 字节，
+> `6077` 是 INTEGER16 只占 2B，塞得进去）。`ADMITTANCE` 仍为 P3 预留（需 F/T 传感器）。
 
 ---
 

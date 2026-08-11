@@ -77,6 +77,7 @@
 #include <robot_arm_interfaces/msg/control_mode.hpp>
 #include <robot_arm_interfaces/srv/switch_control_mode.hpp>
 
+#include "robot_arm_node/motion/gravity_model.hpp"
 #include "robot_arm_node/motion/joint_limits.hpp"
 
 namespace robot_arm_node::mode
@@ -118,7 +119,25 @@ public:
     cmd_joints_    = declare_parameter<std::vector<std::string>>(
         "command_joint_names", std::vector<std::string>{"Joint1", "Joint2", "Joint3"});
     num_joints_    = cmd_joints_.size();
+    // 力矩总线的关节表单独一份：arm_effort_controller 只 claim 臂 J1-3，
+    // 而速度/轨迹的关节表将来可能扩到别的轴，别让两者互相牵连。
+    eff_joints_    = declare_parameter<std::vector<std::string>>(
+        "effort_joint_names", cmd_joints_);
     max_joint_vel_ = declare_parameter<double>("max_joint_velocity", 1.0);
+    // 力矩额外总限幅（N·m）。<=0 = 不额外限，只用 URDF <limit effort>。
+    // 调试限力时把它调小，比改 URDF 安全（URDF 是多方共用的真相源）。
+    max_joint_eff_ = declare_parameter<double>("max_joint_effort", 0.0);
+    // 重力补偿：下发力矩 = g(q) + 用户增量。默认开 —— 关掉它力矩模式几乎不可用
+    // （零指令即自由下垂，实测 J2 直接从 +0.500 掉到下限 -0.981）。
+    // 留开关是为了对比实验和排查（想看纯开环力矩时关掉）。
+    grav_enabled_  = declare_parameter<bool>("gravity_compensation", true);
+    // 力矩输出频率。JTC 那条 50Hz 的教训（发太快会一直重启轨迹）不适用于这里 ——
+    // ForwardCommandController 只是把最后一帧写进命令接口，没有轨迹重规划。
+    // 100Hz 与 Gazebo 的 controller_manager update_rate 对齐。
+    eff_rate_hz_   = declare_parameter<double>("effort_rate_hz", 100.0);
+    // 关节阻尼系数（N·m·s/rad）。0 = 纯重力补偿（会缓慢漂移，见 effortTick 注释）。
+    // 调大 = 更"粘"、更稳但手动拖动更费力；调过头会在采样频率上抖。
+    eff_damping_   = declare_parameter<double>("effort_damping", 1.5);
     brake_zone_    = declare_parameter<double>("limit_brake_zone", 0.15);
     watchdog_timeout_ = declare_parameter<double>("watchdog_timeout", 0.3);
     traj_cmd_topic_ = declare_parameter<std::string>(
@@ -182,6 +201,17 @@ public:
     joint_sub_ = create_subscription<sensor_msgs::msg::JointState>(
         "/joint_states", rclcpp::QoS(10),
         [this](const sensor_msgs::msg::JointState & m) { onJointState(m); });
+
+    // 重力补偿：同样从 latched /robot_description 建模（限位/惯量单一真相源都是 URDF）
+    if (grav_enabled_) {
+      gravity_ = std::make_unique<motion::GravityModel>(*this);
+    }
+    user_eff_.assign(eff_joints_.size(), 0.0);
+    // 力矩输出节拍。常驻而非按模式起停：定时器生命周期跟着模式切换走容易漏关/重复建，
+    // 而 effortTick() 首行就在非力矩模式下 return，100Hz 空转的代价可以忽略。
+    eff_timer_ = create_wall_timer(
+        std::chrono::microseconds(static_cast<int64_t>(1e6 / std::max(1.0, eff_rate_hz_))),
+        std::bind(&ModeManagerNode::effortTick, this), cbg_);
 
     // 看门狗：速度/力矩模式下命令断流超时 → 归零兜底
     last_cmd_time_ = now();
@@ -414,17 +444,124 @@ private:
                 resync_time_);
   }
 
-  // ── 力矩输入总线（P3 预留，仍是裸数组）──────────────────────────────────────
+  // ── 力矩输入总线（2026-08-11 开通，仿真先行；仍是裸数组，待类型化）───────────────
+  //   与速度总线的安全闸对齐：急停闩锁 → 模式闸 → 长度校验 → 限幅 → 限位刹车。
+  //   单位 N·m（与 URDF <limit effort> 一致）。实物侧 6071 是「0.1% 额定转矩」，
+  //   N·m ↔ 0.1% 的换算要落在这一层（vendored ros2_canopen 的 scale_eff_* 上游未实现，
+  //   按 VENDOR.md 的约定不改 vendored 源码）—— 需要手册里的额定转矩才能定系数，
+  //   所以现在只跑仿真，real.launch.py 不配 effort_controller。
+  //   用户指令只是「在重力之上的增量」，不直接下发 —— 存起来，由 effortTick()
+  //   以固定频率与 g(q) 相加后统一发。这样「不发指令」= 原地悬停而不是自由下垂。
   void onEffortInput(const Float64MultiArray & msg)
   {
+    if (estop_.load()) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+          "力矩总线处于急停闩锁，指令已丢弃（调 /robot_arm/reset_error 解除）");
+      return;
+    }
     if (current_mode_ != ControlMode::JOINT_EFFORT) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
           "当前非 JOINT_EFFORT 模式，忽略力矩命令（先调 /robot_arm/switch_control_mode）");
       return;
     }
-    eff_cmd_pub_->publish(msg);
+    if (msg.data.size() != eff_joints_.size()) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+          "力矩命令长度 %zu ≠ 力矩关节数 %zu，已丢弃（顺序须为 %s）",
+          msg.data.size(), eff_joints_.size(), effJointListStr().c_str());
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> lk(eff_mtx_);
+      user_eff_ = msg.data;
+    }
     last_cmd_time_ = now();
     watchdog_stopped_ = false;
+  }
+
+  // ── 力矩输出节拍：g(q) + 用户增量 → 限幅 → 限位刹车 → 控制器 ──────────────────
+  //   为什么必须是定时器而不是「收到指令才发」：g(q) 随位形变，而且**不发指令时也
+  //   必须持续下发** —— ForwardCommandController 会一直把最后一帧命令写给硬件，
+  //   位形一变那帧重力力矩就不再平衡；更要紧的是「用户松手」不能退化成零力矩，
+  //   否则又变成自由下垂（这正是加重力补偿要解决的问题）。
+  void effortTick()
+  {
+    if (current_mode_ != ControlMode::JOINT_EFFORT) return;
+
+    std::vector<double> user;
+    {
+      std::lock_guard<std::mutex> lk(eff_mtx_);
+      user = user_eff_;
+    }
+    if (user.size() != eff_joints_.size()) user.assign(eff_joints_.size(), 0.0);
+
+    // 急停 / 断流：用户增量清零，但**重力补偿继续** —— 急停的语义是「停住」，
+    // 而力矩模式下"停住"就是维持 g(q)；喂 0 才是让它砸下去。
+    if (estop_.load() || watchdog_stopped_) {
+      std::fill(user.begin(), user.end(), 0.0);
+    }
+
+    std::map<std::string, double> q, qd;
+    {
+      std::lock_guard<std::mutex> lk(joint_mtx_);
+      q  = joint_pos_;
+      qd = joint_vel_;
+    }
+
+    std::vector<double> grav(eff_joints_.size(), 0.0);
+    if (grav_enabled_ && gravity_) {
+      if (!gravity_->gravity(q, eff_joints_, grav)) {
+        // 拿不到 g(q)（模型未就绪 / 回读不全）→ 不下发任何力矩。
+        // fail-closed：宁可让 JTC 之前的保持失效（关节靠限位停住），也不能把
+        // 「只有用户增量、没有重力项」的力矩发下去 —— 那等于主动往下推。
+        std::fill(grav.begin(), grav.end(), 0.0);
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+            "重力补偿不可用（模型未就绪或 /joint_states 位形不全），力矩输出已抑制");
+        return;
+      }
+    }
+
+    Float64MultiArray out;
+    out.data.resize(eff_joints_.size());
+    for (size_t i = 0; i < eff_joints_.size(); ++i) {
+      // 上限取 URDF <limit effort>。**拿不到限值就整条丢弃（fail-closed）** ——
+      // 这与位置校验的 fail-open 约定故意相反：力矩模式没有位置闭环，限值是唯一的
+      // 安全边界，缺了它还下发等于放弃兜底；而写死一个常量就是制造第二份真相
+      // （见 joint_limits.hpp 开头的说明），改了 URDF 必然漏同步。
+      auto lim = limits_->limit(eff_joints_[i]);
+      if (!lim || lim->effort <= 0.0) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+            "取不到 '%s' 的 URDF <limit effort>，力矩输出已抑制（URDF 未就绪或未给 effort）",
+            eff_joints_[i].c_str());
+        return;
+      }
+      const double cap = max_joint_eff_ > 0.0 ? std::min(lim->effort, max_joint_eff_)
+                                              : lim->effort;
+      // 重力项若本身就顶到限幅，说明该轴的 <limit effort> 撑不住自重 —— 补偿会被
+      // 削弱、关节仍会往下走。这是配置问题（URDF 限值/负载不匹配），必须让人知道。
+      if (grav_enabled_ && std::fabs(grav[i]) > cap) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+            "'%s' 的重力力矩 %.2f N·m 超出限幅 %.2f N·m —— 补偿被削弱，该轴仍会下坠"
+            "（检查 URDF <limit effort> 或 max_joint_effort）",
+            eff_joints_[i].c_str(), grav[i], cap);
+      }
+      // 阻尼项 −d·q̇：纯重力补偿是无耗散的，模型与仿真的任何残差（离散化、惯量
+      // 差异、命令延迟一拍）都会积分成持续漂移 —— 实测无阻尼时 8s 内 J2 上飘
+      // 0.100 rad、J3 上飘 0.046 rad，松手后 J1 还会一直滑。加一点速度负反馈把
+      // 能量耗掉，「悬停」才真的停得住，手动拖动时的手感也更像有阻尼的真实关节。
+      // 只对本轴速度做反馈，不做全耦合 —— 目的是耗散而非解耦。
+      double damp = 0.0;
+      if (eff_damping_ > 0.0) {
+        auto it = qd.find(eff_joints_[i]);
+        if (it != qd.end()) damp = -eff_damping_ * it->second;
+      }
+      out.data[i] = std::clamp(grav[i] + user[i] + damp, -cap, cap);
+      // 复用速度那套方向性衰减：只削「朝限位方向」的力矩，反向（把关节从限位拉回来）
+      // 不受限。力矩模式下位置不闭环，这是唯一能阻止硬顶限位的软措施。
+      // 注意作用在总量上：顶到限位时连重力项一起削，让关节软着落在限位上而不是硬砸。
+      out.data[i] = brakeNearLimit(eff_joints_[i], out.data[i]);
+    }
+    eff_cmd_pub_->publish(out);
   }
 
   // ── 限位刹车：朝限位方向的速度在减速区内线性衰减，到限位处为 0 ──────────────────
@@ -461,12 +598,22 @@ private:
     std::lock_guard<std::mutex> lk(joint_mtx_);
     const size_t n = std::min(msg.name.size(), msg.position.size());
     for (size_t i = 0; i < n; ++i) joint_pos_[msg.name[i]] = msg.position[i];
+    // 速度回读供力矩模式的阻尼项用（纯重力补偿没有耗散，残差会积分成漂移）
+    const size_t nv = std::min(msg.name.size(), msg.velocity.size());
+    for (size_t i = 0; i < nv; ++i) joint_vel_[msg.name[i]] = msg.velocity[i];
   }
 
   std::string jointListStr() const
   {
     std::string s;
     for (const auto & j : cmd_joints_) s += (s.empty() ? "" : ", ") + j;
+    return s;
+  }
+
+  std::string effJointListStr() const
+  {
+    std::string s;
+    for (const auto & j : eff_joints_) s += (s.empty() ? "" : ", ") + j;
     return s;
   }
 
@@ -484,9 +631,19 @@ private:
                 modeName(current_mode_), watchdog_timeout_ * 1000.0);
   }
 
+  //   「归零」在两种流式模式下语义不同：
+  //     速度模式：零速度 = 停住 → 直接把 0 写给控制器。
+  //     力矩模式：零力矩 = **自由下垂**，不是停住。所以这里只把「用户增量」清零，
+  //               不碰控制器命令 —— 由 effortTick() 继续发 g(q) 把臂托住。
+  //               （早期版本这里对力矩也发字面 0，效果就是急停/断流时臂直接砸下去。）
   void publishZero(uint8_t mode)
   {
-    auto pub = (mode == ControlMode::JOINT_VELOCITY) ? vel_cmd_pub_ : eff_cmd_pub_;
+    if (mode == ControlMode::JOINT_EFFORT) {
+      std::lock_guard<std::mutex> lk(eff_mtx_);
+      user_eff_.assign(eff_joints_.size(), 0.0);
+      return;
+    }
+    auto pub = vel_cmd_pub_;
     if (!pub) return;   // trajectory 后端下速度控制器不参与，没有这个发布者
     Float64MultiArray z;
     z.data.assign(num_joints_, 0.0);
@@ -532,7 +689,16 @@ private:
   bool holds_active_{false};              // 保持控制器当前是否已激活（本节点自己记账）
   std::vector<std::string> cmd_joints_;
   size_t num_joints_{3};
+  std::vector<std::string> eff_joints_;   // 力矩总线的关节表（arm_effort_controller 的 joints）
   double max_joint_vel_{1.0};
+  double max_joint_eff_{0.0};             // N·m；<=0 = 只用 URDF <limit effort>
+  bool   grav_enabled_{true};             // 力矩模式是否叠加 g(q)
+  double eff_rate_hz_{100.0};             // 力矩输出节拍
+  double eff_damping_{1.5};               // 关节阻尼 N·m·s/rad（0 = 纯重力补偿）
+  std::unique_ptr<motion::GravityModel> gravity_;
+  rclcpp::TimerBase::SharedPtr eff_timer_;
+  std::vector<double> user_eff_;          // 用户力矩增量（N·m），由 effortTick 消费
+  std::mutex eff_mtx_;
   double brake_zone_{0.15};
   double watchdog_timeout_{0.3};
   std::string traj_cmd_topic_;
@@ -543,6 +709,7 @@ private:
   std::unique_ptr<motion::JointLimitsCache> limits_;
   std::mutex joint_mtx_;
   std::map<std::string, double> joint_pos_;
+  std::map<std::string, double> joint_vel_;
 
   // 状态（切换经 switch_mtx_ 串行化；current_mode_ 单写多读，切换/回调都在同一 Reentrant 组）
   std::mutex switch_mtx_;

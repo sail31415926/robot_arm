@@ -32,11 +32,15 @@
 namespace robot_arm_node::motion
 {
 
-// 单轴限位（rad）。连续轴（continuous）不产出条目 —— 无界即不校验。
+// 单轴限位。连续轴（continuous）不产出条目 —— 无界即不校验。
 struct JointLimit
 {
-  double lower{0.0};
-  double upper{0.0};
+  double lower{0.0};    // rad
+  double upper{0.0};    // rad
+  // URDF <limit effort>，N·m。力矩总线用它夹紧指令（JOINT_EFFORT 模式）。
+  // URDF 未给或给 0 时保持 0 —— 调用方须把 0 当作「无限值信息」而不是「上限为 0」，
+  // 否则会把力矩全夹成 0，表现为「切进力矩模式后怎么发都不动」。
+  double effort{0.0};
 };
 
 class JointLimitsCache

@@ -57,6 +57,7 @@ from robot_arm_interfaces.msg import (ArmFollowCommand, ArmJointVelocityCommand,
 from robot_arm_interfaces.srv import (ArmStop, ArmEnable, ArmHoming, ArmResetError,
                                       SwitchControlMode)
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray   # 力矩总线（待类型化）
 
 try:
     from arm_utils import aim_quat, sphere_to_cart, quat_to_rpy
@@ -74,6 +75,7 @@ TOPIC_JOINTS = '/joint_states'
 # 速度控制（2026-08-04 开通）：两条产品总线 + 模式切换/广播
 TOPIC_JOINT_VEL = '/robot_arm/cmd/joint_velocity'   # ArmJointVelocityCommand
 TOPIC_FOLLOW    = '/robot_arm/follow_command'       # ArmFollowCommand（末端线速度）
+TOPIC_JOINT_EFF = '/robot_arm/cmd/joint_effort'     # Float64MultiArray（N·m，待类型化）
 TOPIC_MODE      = '/robot_arm/control_mode'
 SRV_SWITCH_MODE = '/robot_arm/switch_control_mode'
 
@@ -90,6 +92,11 @@ ARM_JOINT_RANGE = [
     ('Joint2', -0.981, 2.959),
     ('Joint3', -2.500, 0.020),
 ]
+
+# 各轴 URDF <limit effort>（N·m）—— 仅用于 GUI 的滑条上界显示/输入范围。
+# 真正的限幅由 mode_manager 按 /robot_description 解析出的 URDF 值执行，
+# 这里只是界面刻度：改了 URDF 这张表不同步也不会造成越限下发。
+ARM_JOINT_EFFORT_LIMIT = {'Joint1': 5.0, 'Joint2': 30.0, 'Joint3': 5.0}
 
 STATE_LABELS = [
     (ArmMoveToPose.Goal.POSE_STATE_STOWED,   'STOWED  (0)  收纳位'),
@@ -125,11 +132,16 @@ class CommanderTestNode(Node):
         self._status_sub  = self.create_subscription(ArmStatus, TOPIC_STATUS, self._on_status, 10)
         # 关节反馈：ArmStatus 只报末端位姿，关节角按总线约定从 /joint_states 读
         self._joints_sub  = self.create_subscription(JointState, TOPIC_JOINTS, self._on_joints, 10)
-        self._last_arm_joints = None   # [J1,J2,J3]，供 GUI「读当前值」用
+        self._last_arm_joints  = None   # [J1,J2,J3]，供 GUI「读当前值」用
+        self._last_arm_efforts = None   # [J1,J2,J3] 实际力矩 N·m；实物无回读时为 None
 
         # ── 速度控制（关节速度 / 笛卡尔速度）────────────────────────────────────
         self._jv_pub = self.create_publisher(ArmJointVelocityCommand, TOPIC_JOINT_VEL, 10)
         self._fc_pub = self.create_publisher(ArmFollowCommand, TOPIC_FOLLOW, 10)
+        # ── 力矩控制（2026-08-11 开通，仿真先行）────────────────────────────────
+        # 力矩总线还是裸 Float64MultiArray（mode_manager 侧待类型化，与速度总线
+        # 2026-08-04 的做法对齐后再换成 ArmJointEffortCommand）。单位 N·m。
+        self._je_pub = self.create_publisher(Float64MultiArray, TOPIC_JOINT_EFF, 10)
         self._mode_client = self.create_client(SwitchControlMode, SRV_SWITCH_MODE)
         # mode_manager 是 latched 广播，晚订阅也能立刻拿到当前模式
         self._mode_sub = self.create_subscription(
@@ -166,6 +178,14 @@ class CommanderTestNode(Node):
         msg.twist.vx, msg.twist.vy, msg.twist.vz = (float(x) for x in v3)
         msg.twist.wroll, msg.twist.wpitch, msg.twist.wyaw = (float(x) for x in w3)
         self._fc_pub.publish(msg)
+
+    def publish_joint_effort(self, t3):
+        """臂 J1-3 关节力矩，N·m。mode_manager 按 URDF <limit effort> 夹紧后转发。
+
+        注意与速度流的本质区别：**发 0 不等于「停住」**，而是「不施加力矩」——
+        没有重力补偿时 J2/J3 会直接下垂。停止的正确含义是切回 TRAJECTORY 模式。
+        """
+        self._je_pub.publish(Float64MultiArray(data=[float(x) for x in t3]))
 
     # ── ArmMoveToPose ─────────────────────────────────────────────────────────────
     def send_mtp_goal(self, state, speed, return_to_start,
@@ -240,12 +260,19 @@ class CommanderTestNode(Node):
         self._q.put(('log', f'{flag} MTJ {r.exit_reason}  err={r.error_code}  实际[{j}]'))
 
     def _on_joints(self, msg: JointState):
+        # 实际力矩：仿真侧 URDF 声明了 effort 状态接口，jsb 会填 msg.effort；
+        # 实物侧没有（RobotSystem 不读转矩、TPDO 也没映 6077）→ effort 为空，显示 '--'。
+        eff = dict(zip(msg.name, msg.effort)) if msg.effort else {}
+        self._last_arm_efforts = ([eff.get(n) for n, _, _ in ARM_JOINT_RANGE]
+                                  if eff else None)
         pos = dict(zip(msg.name, msg.position))
         try:
             self._last_arm_joints = [pos[n] for n, _, _ in ARM_JOINT_RANGE]
         except KeyError:
             return
         self._q.put(('joints', list(self._last_arm_joints)))
+        if self._last_arm_efforts is not None:
+            self._q.put(('efforts', list(self._last_arm_efforts)))
 
     def current_arm_joints(self):
         return self._last_arm_joints
@@ -396,6 +423,7 @@ class App:
             ('姿态切换',  self._build_mtp_panel),
             ('关节点动',  self._build_mtj_panel),
             ('速度控制',  self._build_vel_panel),
+            ('力矩控制',  self._build_eff_panel),
             ('运镜轨迹',  self._build_tss_panel),
         ):
             tab = ttk.Frame(self._nb)
@@ -702,6 +730,69 @@ class App:
         ttk.Label(srow, textvariable=self._sv_vel_out, width=52,
                   font=('Courier', 9)).pack(side=tk.LEFT)
 
+    # ── 力矩控制（JOINT_EFFORT）───────────────────────────────────────────────────
+    def _build_eff_panel(self, parent, pad):
+        ef = ttk.LabelFrame(parent, text='力矩控制  (JOINT_EFFORT 模式)  '
+                                        '—  按住即施力，松手归零', padding=6)
+        ef.pack(fill=tk.X, **pad)
+
+        # 警示行：力矩模式与位置/速度模式的本质区别，写在最显眼处
+        warn = ttk.Frame(ef); warn.pack(fill=tk.X)
+        ttk.Label(warn, text='⚠ 力矩模式没有位置闭环，且尚未做重力补偿：',
+                  foreground='#cc3300').pack(side=tk.LEFT, padx=(4, 2))
+        ttk.Label(warn, text='切进来 J2/J3 会因自重下垂，松手不等于停住。仅限仿真。',
+                  foreground='gray').pack(side=tk.LEFT)
+
+        # 模式行
+        mrow = ttk.Frame(ef); mrow.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(mrow, text='当前模式:').pack(side=tk.LEFT, padx=(4, 2))
+        self._sv_eff_mode = tk.StringVar(value='--')
+        ttk.Label(mrow, textvariable=self._sv_eff_mode, width=16,
+                  foreground='gray').pack(side=tk.LEFT)
+        ttk.Button(mrow, text='切到 JOINT_EFFORT', width=20,
+                   command=lambda: self.node.switch_mode(ControlMode.JOINT_EFFORT)
+                   ).pack(side=tk.LEFT, padx=4)
+        ttk.Button(mrow, text='切回 TRAJECTORY', width=17,
+                   command=lambda: self.node.switch_mode(ControlMode.TRAJECTORY)
+                   ).pack(side=tk.LEFT, padx=4)
+
+        # 力矩点动：每轴一对 −/+，幅值 N·m
+        trow = ttk.Frame(ef); trow.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(trow, text='关节力矩', width=9).pack(side=tk.LEFT, padx=(4, 2))
+        self._eff_mag = tk.DoubleVar(value=0.50)
+        ttk.Spinbox(trow, from_=0.0, to=max(ARM_JOINT_EFFORT_LIMIT.values()),
+                    increment=0.25, textvariable=self._eff_mag, width=6,
+                    format='%.2f').pack(side=tk.LEFT)
+        ttk.Label(trow, text='N·m').pack(side=tk.LEFT, padx=(1, 8))
+        for i, (name, _, _) in enumerate(ARM_JOINT_RANGE):
+            ttk.Label(trow, text=name).pack(side=tk.LEFT, padx=(6, 1))
+            for sign, txt in ((-1.0, '−'), (+1.0, '＋')):
+                b = ttk.Button(trow, text=txt, width=3)
+                b.pack(side=tk.LEFT, padx=1)
+                self._bind_jog(b, 'effort', i, sign)
+        ttk.Label(trow, text='（超 URDF <limit effort> 会被 mode_manager 夹紧）',
+                  foreground='gray').pack(side=tk.LEFT, padx=(10, 0))
+
+        # 实际力矩回读（仿真才有；实物没映 6077 → '--'）
+        frow = ttk.Frame(ef); frow.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(frow, text='实际力矩:').pack(side=tk.LEFT, padx=(4, 2))
+        self._eff_fb_vars = {}
+        for name, _, _ in ARM_JOINT_RANGE:
+            ttk.Label(frow, text=f'{name}:').pack(side=tk.LEFT, padx=(6, 1))
+            v = tk.StringVar(value='--')
+            self._eff_fb_vars[name] = v
+            ttk.Entry(frow, textvariable=v, width=8, state='readonly',
+                      justify='center').pack(side=tk.LEFT)
+        ttk.Label(frow, text='N·m（实物无回读，显示 --）',
+                  foreground='gray').pack(side=tk.LEFT, padx=(10, 0))
+
+        # 正在下发回显
+        srow = ttk.Frame(ef); srow.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(srow, text='正在下发:').pack(side=tk.LEFT, padx=(4, 2))
+        self._sv_eff_out = tk.StringVar(value='未下发')
+        ttk.Label(srow, textvariable=self._sv_eff_out, width=52,
+                  font=('Courier', 9)).pack(side=tk.LEFT)
+
     def _bind_jog(self, widget, kind, index, sign):
         """把按钮绑成「按住即动」：按下记住方向，松开清零。"""
         widget.bind('<ButtonPress-1>',   lambda _e: self._vel_press(kind, index, sign))
@@ -710,12 +801,17 @@ class App:
         widget.bind('<Leave>',           lambda _e: self._vel_release())
 
     def _vel_press(self, kind, index, sign):
-        if self.node.active_mode() != ControlMode.JOINT_VELOCITY:
-            self._log('✗ 当前不是 JOINT_VELOCITY 模式，速度指令会被忽略 —— 先点「切到 JOINT_VELOCITY」')
+        # 力矩点动要求 JOINT_EFFORT，其余三种要求 JOINT_VELOCITY —— 模式不对就别发，
+        # 否则命令会被 mode_manager 的模式闸静默丢弃（只在它那侧打节流日志）。
+        need = ControlMode.JOINT_EFFORT if kind == 'effort' else ControlMode.JOINT_VELOCITY
+        if self.node.active_mode() != need:
+            self._log(f'✗ 当前不是 {MODE_NAMES[need]} 模式，指令会被忽略 —— '
+                      f'先点「切到 {MODE_NAMES[need]}」')
             return
-        mag = {'joint': self._vel_joint_mag,
-               'cart':  self._vel_cart_mag,
-               'ang':   self._vel_ang_mag}[kind].get()
+        mag = {'joint':  self._vel_joint_mag,
+               'cart':   self._vel_cart_mag,
+               'ang':    self._vel_ang_mag,
+               'effort': self._eff_mag}[kind].get()
         v = [0.0, 0.0, 0.0]
         v[index] = sign * mag
         self._vel_hold = (kind, v)
@@ -727,13 +823,19 @@ class App:
         self._vel_hold = None
         # 松手立刻补一帧 0：比等 mode_manager 的 0.3s 断流看门狗停得更干脆
         self._publish_vel(kind, [0.0, 0.0, 0.0])
-        self._sv_vel_out.set('停止')
+        if kind == 'effort':
+            # 力矩归零 ≠ 停住（没有重力补偿，臂会继续下垂）—— 别用「停止」误导操作者
+            self._sv_eff_out.set('已归零（注意：零力矩不等于停住）')
+        else:
+            self._sv_vel_out.set('停止')
 
     def _publish_vel(self, kind, v):
         if kind == 'joint':
             self.node.publish_joint_velocity(v)
         elif kind == 'ang':
             self.node.publish_cartesian_velocity([0.0, 0.0, 0.0], v)
+        elif kind == 'effort':
+            self.node.publish_joint_effort(v)
         else:
             self.node.publish_cartesian_velocity(v)
 
@@ -742,10 +844,11 @@ class App:
         if self._vel_hold is not None:
             kind, v = self._vel_hold
             self._publish_vel(kind, v)
-            unit = {'joint': 'rad/s', 'cart': 'm/s', 'ang': '°/s'}[kind]
-            tag  = {'joint': '关节', 'cart': '末端线速度', 'ang': '末端角速度'}[kind]
-            self._sv_vel_out.set(
-                f'{tag} [{v[0]:+.3f}, {v[1]:+.3f}, {v[2]:+.3f}] {unit}')
+            unit = {'joint': 'rad/s', 'cart': 'm/s', 'ang': '°/s', 'effort': 'N·m'}[kind]
+            tag  = {'joint': '关节', 'cart': '末端线速度', 'ang': '末端角速度',
+                    'effort': '关节力矩'}[kind]
+            txt = f'{tag} [{v[0]:+.3f}, {v[1]:+.3f}, {v[2]:+.3f}] {unit}'
+            (self._sv_eff_out if kind == 'effort' else self._sv_vel_out).set(txt)
         self.root.after(VEL_TICK_MS, self._vel_tick)
 
     # ── ArmTrajectoryShot ─────────────────────────────────────────────────────────
@@ -983,13 +1086,26 @@ class App:
         elif t == 'joints':
             for (name, _, _), val in zip(ARM_JOINT_RANGE, item[1]):
                 self._mtj_cur_vars[name].set(f'{val:.3f}')
+        elif t == 'efforts':
+            # 仿真侧 jsb 填了 msg.effort 才会走到这里；实物无回读时保持 '--'
+            for (name, _, _), val in zip(ARM_JOINT_RANGE, item[1]):
+                self._eff_fb_vars[name].set('--' if val is None else f'{val:+.2f}')
         elif t == 'mode':
             mode = item[1]
-            self._sv_mode.set(MODE_NAMES.get(mode, f'? ({mode})'))
+            name = MODE_NAMES.get(mode, f'? ({mode})')
+            self._sv_mode.set(name)
+            self._sv_eff_mode.set(name)
             in_vel = mode == ControlMode.JOINT_VELOCITY
+            in_eff = mode == ControlMode.JOINT_EFFORT
             self._mode_lbl.configure(foreground='green' if in_vel else 'gray')
-            if not in_vel:
-                self._vel_release()   # 模式被切走，立刻停掉正在按住的点动
+            # 模式被切走就停掉正在按住的点动 —— 速度和力矩共用 _vel_hold，
+            # 任一模式退出都要释放（否则会往已经无效的总线继续发）
+            if not (in_vel or in_eff):
+                self._vel_release()
+            elif self._vel_hold is not None:
+                held_kind = self._vel_hold[0]
+                if (held_kind == 'effort') != in_eff:
+                    self._vel_release()
         elif t == 'fb_mtj':
             _, prog, joints = item
             j = ', '.join(f'{v:.3f}' for v in joints)

@@ -14,6 +14,14 @@ controller_manager:
     arm_velocity_controller:
       type: velocity_controllers/JointGroupVelocityController
 
+    # JOINT_EFFORT 模式用（2026-08-11 开通）：claim J1-3 effort 接口。
+    # 与 arm_controller / arm_velocity_controller 三者互斥（同关节一次只准一个命令接口）。
+    # launch 只 --inactive 加载，activate 由 mode_manager_node 管。
+    # ⚠️ 力矩模式没有位置闭环：一旦激活，关节只受指令力矩与重力支配 ——
+    #    尚未做重力补偿，切进来时 J2/J3 会下垂（仿真里安全，实物先别开）。
+    arm_effort_controller:
+      type: effort_controllers/JointGroupEffortController
+
     gimbal_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
@@ -40,6 +48,15 @@ arm_controller:
 
 arm_velocity_controller:
   ros__parameters:
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
+
+arm_effort_controller:
+  ros__parameters:
+    # 只 claim 臂 J1-3：云台 J4-6 没有 effort 接口（转发插件只有 position），
+    # 力矩模式期间由 mode_manager 的 hold_controllers 用 gimbal_controller 顶住。
     joints:
       - Joint1
       - Joint2

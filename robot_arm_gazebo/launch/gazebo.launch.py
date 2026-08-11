@@ -276,10 +276,23 @@ def generate_launch_description():
                    '--controller-manager-timeout', '30'] + base_log,
     )
 
-    # 云台保持控制器：默认（velocity_backend=trajectory）用不到 —— 速度也走 arm_controller
-    # 那条 joint_trajectory，J4-6 跟着同一条轨迹走。只有切到 PV 后端时 arm_controller 被停，
-    # 云台 J4-6 才会没人命令（在重力下垂、把末端带偏），那时由 mode_manager 的
-    # hold_controllers 激活它锁住当前位姿。故只 load 不 activate。
+    # JOINT_EFFORT 模式备用（2026-08-11 开通，仿真先行）：claim J1-3 effort 接口。
+    # 同样只 load 不 activate，由 mode_manager_node 仲裁。
+    # ⚠️ 力矩模式没有位置闭环，且**尚未做重力补偿** —— 切进来时指令力矩为 0，
+    #    J2/J3 会直接下垂。这在 Gazebo 里是安全的（也正好证明力矩真的下去了），
+    #    但实物 real.launch.py 故意**不配** effort_controller，切换会被拒。
+    arm_effort_controller_loader = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['arm_effort_controller', '--inactive',
+                   '--controller-manager-timeout', '30'] + base_log,
+    )
+
+    # 云台保持控制器：默认（velocity_backend=trajectory）速度也走 arm_controller
+    # 那条 joint_trajectory，J4-6 跟着同一条轨迹走，用不到它。但**力矩模式一定用得到** ——
+    # 切 JOINT_EFFORT 必然停掉 claim 全 6 轴的 arm_controller，云台 J4-6 就没人命令了
+    # （在重力下垂、把末端带偏），那时由 mode_manager 的 hold_controllers 激活它锁住
+    # 当前位姿。切到 PV 后端时同理。故只 load 不 activate。
     gimbal_controller_loader = Node(
         package='controller_manager',
         executable='spawner',
@@ -289,7 +302,8 @@ def generate_launch_description():
 
     # 控制模式仲裁器（常驻基础设施）
     mode_manager = common.mode_manager_node(use_sim_time=True,
-                                            hold_controllers=['gimbal_controller'])
+                                            hold_controllers=['gimbal_controller'],
+                                            effort_controller='arm_effort_controller')
 
     camera_view = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -328,7 +342,8 @@ def generate_launch_description():
             OnProcessExit(
                 target_action=spawn_entity,
                 on_exit=[joint_state_broadcaster_spawner, arm_controller_spawner,
-                         arm_velocity_controller_loader, gimbal_controller_loader],
+                         arm_velocity_controller_loader, arm_effort_controller_loader,
+                         gimbal_controller_loader],
             )
         ),
         mode_manager,   # 常驻，惰性等 controller_manager，切换时才调 switch_controller

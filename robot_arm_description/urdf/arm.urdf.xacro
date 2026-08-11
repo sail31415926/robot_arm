@@ -264,8 +264,23 @@
         <param name="max">2.618</param>
       </command_interface>
       <command_interface name="velocity"/>
+      <!-- JOINT_EFFORT 模式（2026-08-11 开通）：min/max 取 <limit effort>，单位 N·m。
+           实物侧 bus.yml 已配 effort_mode:4(PT)，cia402_data 见到本接口才会 export
+           HW_IF_EFFORT → set_target 写 6071；仿真侧 GazeboSystem 直接 SetForce。
+           同关节的 position/velocity/effort 三个命令接口互斥，同一时刻只准一个
+           控制器 claim（由 mode_manager_node 经 switch_controller 仲裁）。 -->
+      <command_interface name="effort">
+        <param name="min">-5.0</param>
+        <param name="max">5.0</param>
+      </command_interface>
       <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
       <state_interface name="velocity"/>
+      <!-- 力矩回读只在仿真侧声明：RobotSystem 的 read_state() 不读转矩（TPDO 也没映
+           6077），实物声明了也拿不到值，反而会让 joint_state_broadcaster 找不到接口。
+           实物要力矩反馈得先把 6077 映进 TPDO1（那里还空 5 字节）。 -->
+      <xacro:unless value="${backend == 'real'}">
+        <state_interface name="effort"/>
+      </xacro:unless>
     </joint>
     <joint name="Joint2">
       <xacro:unless value="${backend == 'real'}">
@@ -291,8 +306,16 @@
         <param name="max">2.959</param>
       </command_interface>
       <command_interface name="velocity"/>
+      <!-- J2 扛整臂重力，<limit effort> 是 30 N·m（三轴里最大）。见 Joint1 注释。 -->
+      <command_interface name="effort">
+        <param name="min">-30.0</param>
+        <param name="max">30.0</param>
+      </command_interface>
       <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
       <state_interface name="velocity"/>
+      <xacro:unless value="${backend == 'real'}">
+        <state_interface name="effort"/>
+      </xacro:unless>
     </joint>
     <joint name="Joint3">
       <xacro:unless value="${backend == 'real'}">
@@ -318,8 +341,16 @@
         <param name="max">0.02</param>
       </command_interface>
       <command_interface name="velocity"/>
+      <!-- 见 Joint1 注释；<limit effort> 5 N·m。 -->
+      <command_interface name="effort">
+        <param name="min">-5.0</param>
+        <param name="max">5.0</param>
+      </command_interface>
       <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
       <state_interface name="velocity"/>
+      <xacro:unless value="${backend == 'real'}">
+        <state_interface name="effort"/>
+      </xacro:unless>
     </joint>
   </ros2_control>
 

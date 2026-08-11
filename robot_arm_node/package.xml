@@ -27,6 +27,7 @@
   <depend>ruckig</depend>          <!-- MotionExecutor OTG，CMake find_package(ruckig REQUIRED) -->
   <depend>urdf</depend>            <!-- motion/joint_limits：解析 /robot_description 取关节限位 -->
   <depend>eigen</depend>           <!-- motion/jacobian：3×3 SVD / DLS 伪逆（笛卡尔速度控制） -->
+  <depend>pinocchio</depend>       <!-- motion/gravity_model：力矩模式的重力补偿 g(q) -->
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -41,7 +41,8 @@ void JointLimitsCache::on_description(const std_msgs::msg::String & msg)
     // continuous 轴无界、fixed 轴无 limit 字段 —— 都不产出条目（即不校验）
     if (joint->type == urdf::Joint::CONTINUOUS || joint->type == urdf::Joint::FIXED) continue;
     if (!joint->limits) continue;
-    parsed[name] = JointLimit{joint->limits->lower, joint->limits->upper};
+    parsed[name] = JointLimit{joint->limits->lower, joint->limits->upper,
+                              joint->limits->effort};
   }
 
   {

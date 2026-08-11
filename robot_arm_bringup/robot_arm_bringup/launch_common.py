@@ -148,21 +148,29 @@ def safe_pose_action(condition):
 
 
 # ── 控制模式仲裁器（基础设施，所有模式常驻）──────────────────────────────────────
-def mode_manager_node(use_sim_time, hold_controllers=None):
+def mode_manager_node(use_sim_time, hold_controllers=None, effort_controller=None):
     """语义控制模式的唯一权威（TRAJECTORY/JOINT_VELOCITY/...），后端无感。
 
     非模式相关基础设施，与 ctrl 无关、常驻启动：上层通过
     /robot_arm/switch_control_mode 切模式，本节点做 switch_controller + 播种 + 看门狗
-    + 速度总线限幅/限位刹车。
+    + 速度/力矩总线限幅/限位刹车。
     仅需 controller_manager 存在（gazebo/real 均有；mujoco 无 → 切换会明确报错，不崩）。
 
-    hold_controllers：**仅 PV 后端（velocity_backend:=velocity_controller）生效** ——
-    进入速度/力矩模式时与流式控制器一起激活、回轨迹模式时一起停用的「保持控制器」。
-    默认 trajectory 后端不切控制器，速度和位置共用 arm_controller，用不到它。
+    hold_controllers：进入速度/力矩模式时与流式控制器一起激活、回轨迹模式时一起停用的
+    「保持控制器」（云台 J4-6，它没有 effort/velocity 接口，主控制器一停就没了命令通道）。
+    对 **JOINT_EFFORT 一定生效**（力矩必须真切控制器）；对 JOINT_VELOCITY 仅在 PV 后端
+    （velocity_backend:=velocity_controller）生效 —— 默认 trajectory 后端不切控制器，
+    速度和位置共用 arm_controller，用不到它。
+
+    effort_controller：JOINT_EFFORT 模式要激活的控制器名（如 arm_effort_controller）。
+    **留空 = 力矩模式未配置，切 JOINT_EFFORT 会被明确拒绝** —— 这是有意的安全默认，
+    只有 launch 显式给了名字的后端才允许进力矩模式。
     """
     params = {'use_sim_time': use_sim_time}
     if hold_controllers:
         params['hold_controllers'] = list(hold_controllers)
+    if effort_controller:
+        params['effort_controller'] = effort_controller
     return Node(package='robot_arm_node', executable='mode_manager_node', output='screen',
                 parameters=[params])
 

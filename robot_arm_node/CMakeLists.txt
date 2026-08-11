@@ -37,7 +37,14 @@ find_package(std_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(tf2_ros REQUIRED)
 
+# pinocchio：力矩模式的重力补偿（g(q)）。cmake 3.22 的 FindBoost 没有 python310
+# 头文件映射，eigenpy（pinocchio 依赖）会触发无害警告 —— 与 robot_arm_debug 同样处理。
+set(Boost_NO_WARN_NEW_VERSIONS ON)
+set(_Boost_PYTHON310_HEADERS "boost/python.hpp")
+find_package(pinocchio REQUIRED)
+
 add_library(robot_arm_motion SHARED
+  src/motion/gravity_model.cpp
   src/motion/jacobian.cpp
   src/motion/joint_limits.cpp
   src/motion/kinematics.cpp
@@ -51,7 +58,7 @@ target_include_directories(robot_arm_motion PUBLIC
 target_compile_features(robot_arm_motion PUBLIC cxx_std_17)
 ament_target_dependencies(robot_arm_motion
   rclcpp trajectory_msgs builtin_interfaces geometry_msgs moveit_msgs urdf std_msgs tf2_ros)
-target_link_libraries(robot_arm_motion ruckig::ruckig Eigen3::Eigen)
+target_link_libraries(robot_arm_motion ruckig::ruckig Eigen3::Eigen pinocchio::pinocchio)
 
 install(TARGETS robot_arm_motion
   ARCHIVE DESTINATION lib
