@@ -1,0 +1,40 @@
+# robot_arm 包族 Python 依赖 —— 可选组（按需安装）
+# ---------------------------------------------------------------------------
+# 核心依赖见 requirements.txt。本文件按功能分组，只在用到对应功能时才装。
+#
+# 安装（推荐用脚本，它会自动按组挑包）：
+#   bash setup_venv.sh --with-mujoco      # 只加 MuJoCo 仿真
+#   bash setup_venv.sh --with-rl          # 只加 RL 训练（下载大，torch 走 CPU 轮子）
+#   bash setup_venv.sh --with-analysis    # 只加 MATLAB 离线分析
+#   bash setup_venv.sh --all              # 三组全装
+#
+# 也可以手工全装：pip install -r requirements-optional.txt
+#
+# ★ 格式约定：分组以 "# [组名]" 行开头，setup_venv.sh 按这个标记提取。
+#   增删依赖请保持这个格式，并把版本号只写在这里（脚本不硬编码版本）。
+
+# [mujoco]
+# MuJoCo 仿真后端：robot_arm_mujoco/scripts/mujoco_node.py
+# 只跑 Gazebo / 实机可不装。
+mujoco==3.8.1
+
+# [rl]
+# 强化学习训练与部署：robot_arm_rl/（train_sac.py / eval_policy.py /
+# envs/emeet_arm_env.py / deploy/rl_policy_node.py）。
+# 注意：这一组会额外拉 mujoco（RL 环境基于 MJCF），且 torch 体积较大
+#       —— setup_venv.sh 默认从 PyTorch 官方 CPU 源装，避免拉进 CUDA 包。
+gymnasium==1.2.3
+stable-baselines3==2.8.0
+tensorboard==2.20.0
+torch==2.12.0
+mujoco==3.8.1
+
+# [analysis]
+# MATLAB 离线分析工具箱：robot_arm_matlab/reach_oracle.py
+#   判定核心需 numpy + scipy；GUI 另需 matplotlib（tkinter 由 apt python3-tk 提供）。
+# ⚠️ 必须装 pip 版、不能只靠系统 apt 版：Ubuntu 22.04 的 python3-scipy 是 1.8.0，
+#    它要求 numpy<1.25，与本工程锁定的 numpy 1.26.4 不兼容（import 时会警告
+#    "A NumPy version >=1.17.3 and <1.25.0 is required"，数值行为不保证）。
+#    下面的版本是能与 numpy 1.26.4 共存的最低一档往上取。
+scipy==1.14.1
+matplotlib==3.9.4

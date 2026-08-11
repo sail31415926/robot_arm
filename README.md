@@ -295,31 +295,59 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 
 **系统基础**：Ubuntu 22.04 + ROS 2 Humble + Python 3.10；`colcon` / `ament_cmake` 编译（接口包用 `rosidl`）；C++ 驱动基于内核 SocketCAN + 随包编译的 CANopen 协议栈。
 
-**ROS 2（apt，不进 venv）**：`rclcpp` / `rclpy` / `rclcpp_action`、消息包（`sensor_msgs` `geometry_msgs` `trajectory_msgs` `control_msgs` `moveit_msgs` 等）、`ros-humble-moveit` + `pick_ik`、`ros2_control` / `ros2_controllers`、`gazebo_ros` / `gazebo_ros2_control`、`cv_bridge` / `image_transport`、`tf2_ros` / `tf-transformations`、`robot_state_publisher` / `xacro`、`robot_gimbal_driver_v2`（云台 V2 转发插件，源码在 `robot_gimbal_V2` 仓库）、`python3-tk`。
+**ROS 2（apt，不进 venv）**：`rclcpp` / `rclpy` / `rclcpp_action`、消息包（`sensor_msgs` `geometry_msgs` `trajectory_msgs` `control_msgs` `moveit_msgs` 等）、`ros-humble-moveit` + `pick_ik`、`ros2_control` / `ros2_controllers`、`gazebo_ros` / `gazebo_ros2_control`、`cv_bridge` / `image_transport`、`tf2_ros`、`pinocchio`（`visp_ibvs` 的 C++ 运动学）、`ruckig`、`diagnostic_updater`、`robot_state_publisher` / `xacro` / `rviz2`、`robot_gimbal_driver_v2`（云台 V2 转发插件，源码在 `robot_gimbal_V2` 仓库）、`python3-tk`（tkinter GUI）、`python3-yaml`。
 
-**Python（pip，见 [`requirements.txt`](requirements.txt)）** —— 核心运行依赖：
+> `setup_venv.sh` 会逐项体检这些 apt 前置依赖，缺的会拼成一条 `apt install` 命令打出来。
+
+**Python（pip）** —— 核心运行依赖（见 [`requirements.txt`](requirements.txt)）：
 
 | 依赖 | 版本 | 用途 |
 | :--- | :--- | :--- |
 | `numpy` | 1.26.4（**必须 <2**） | 数值计算（全包） |
-| `PyYAML` | 5.4.1 | 配置读取 |
+| `PyYAML` | 5.4.1 | 配置读取（由 apt `python3-yaml` 提供，pip 不重新构建） |
 | `ruckig` | 0.17.3 | 在线轨迹生成（jerk-limited OTG） |
-| `opencv-python-headless` | 4.13.0.92 | 视觉 / IBVS / 红盒检测 |
-| `PyQt5` | 5.15.11 | 电机测试 / 滑块 GUI |
+| `PyQt5` | 5.15.11 | 滑块 GUI |
 
-> 可选：`mujoco` 3.8.1（跑 MuJoCo 仿真时）；RL 训练（`robot_arm_rl`）另需 `gymnasium` / `stable-baselines3` / `torch`(CPU) / `tensorboard`。
-> `scipy` / `matplotlib` / `pinocchio` 在本包无 `import`，无需安装（存在于共享 venv 仅因别的项目）。
+> ⚠️ **`cv2` 不用 pip 装**，由 apt `python3-opencv`（实测 4.5.4）提供。两条硬理由：
+> ① `opencv-python-headless` 是**不带 GUI** 编译的，而 `red_box_detector` 默认
+> `show_window:=true` 会调 `cv2.imshow`，headless 下直接抛 *The function is not implemented*；
+> ② 4.12+ 的 `opencv-python*` 都依赖 `numpy>=2`，与 `numpy<2` 硬约束冲突，pip 报
+> `ResolutionImpossible`。确需更新时装**完整版** `opencv-python==4.11.0.86`
+> （最后一个兼容 numpy 1.26 的版本），再用 `setup_venv.sh --check` 确认来源与 GUI 支持。
+
+可选依赖按功能分组（见 [`requirements-optional.txt`](requirements-optional.txt)），用脚本开关安装：
+
+| 组 | 包 | 谁在用 |
+| :--- | :--- | :--- |
+| `--with-mujoco` | `mujoco` 3.8.1 | `robot_arm_mujoco/scripts/mujoco_node.py` |
+| `--with-rl` | `gymnasium` / `stable-baselines3` / `tensorboard` / `torch`(CPU) / `mujoco` | 仅 `robot_arm_rl/` |
+| `--with-analysis` | `scipy` / `matplotlib` | 仅 `robot_arm_matlab/reach_oracle.py` |
+
+> `analysis` 组必须装 pip 版：Ubuntu 22.04 的 apt `python3-scipy` 是 1.8.0，它要求
+> `numpy<1.25`，与本工程锁定的 numpy 1.26.4 不兼容（import 时会警告）。
 
 ---
 
 ## 环境配置
 
-一键脚本创建 `--system-site-packages` 的 venv 并装齐 pip 依赖（source ROS → 建/复用 venv → 装 CPU 版 `torch` + `requirements.txt` → 校验可 import 且 `numpy<2`）。apt 前置依赖（moveit / ros2_control / gazebo 等）需自行装好，脚本只检查不安装。
+一键脚本：**体检 apt 前置依赖**（只报告不自动装）→ 建/复用 `--system-site-packages` 的 venv
+→ 装 `requirements.txt` 核心依赖（可选组按开关）→ 校验关键 import、实际版本是否与 pin 一致、
+`numpy<2` 约束。依赖版本的唯一权威是两个 requirements 文件，脚本不硬编码版本号。
 
 ```bash
-bash src/E7009/robot_arm/setup_venv.sh
+bash src/E7009/robot_arm/setup_venv.sh                  # 默认：只装核心（够跑仿真/实机/GUI）
+bash src/E7009/robot_arm/setup_venv.sh --with-mujoco    # 追加 MuJoCo
+bash src/E7009/robot_arm/setup_venv.sh --with-rl        # 追加 RL 训练（torch 走 CPU 轮子源）
+bash src/E7009/robot_arm/setup_venv.sh --with-analysis  # 追加 MATLAB 离线分析
+bash src/E7009/robot_arm/setup_venv.sh --all            # 三组全装
+bash src/E7009/robot_arm/setup_venv.sh --check          # 只体检，不安装任何东西
+bash src/E7009/robot_arm/setup_venv.sh --help
 # 可选指定路径：VENV_DIR=/path/to/venv ROS_SETUP=/opt/ros/humble/setup.bash bash .../setup_venv.sh
 ```
+
+> 环境出怪问题先跑 `--check`：它会打印每个包的**实际版本与来源**（`venv` / `系统` / `ROS`），
+> 与 requirements 不一致的标 `[!!]` —— 「apt 版遮挡 pip 版」「venv 里安装残缺」这类
+> 静默漂移就是这样查出来的。
 
 每个新终端：
 
