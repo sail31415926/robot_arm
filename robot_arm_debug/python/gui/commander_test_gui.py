@@ -372,7 +372,9 @@ class App:
         self.gui_q = gui_q
 
         root.title('Arm Commander 调试 GUI')
-        root.resizable(True, False)
+        # 允许竖向缩放：原来是 resizable(True, False)，高度被锁死 —— 六个面板纵向
+        # 堆叠时总高 1000px+，一旦超出屏幕既不能缩也没有滚动条，等于没救。
+        root.resizable(True, True)
 
         pad  = dict(padx=6, pady=3)
         main = ttk.Frame(root, padding=10)
@@ -381,11 +383,29 @@ class App:
         # 速度点动的「按住即动」状态：None 或 ('joint'|'cart', [v1,v2,v3])
         self._vel_hold = None
 
+        # 布局：ArmStatus 与日志常驻（操作任何面板时都要能看状态、看回显），
+        # 四个动作面板收进标签页 —— 窗口高度从「六个面板之和」降到
+        # 「status + 最高的那一个面板 + 日志」。
+        # 附带好处：Notebook 的请求高度取各页最大值，所以切页时窗口不再忽高忽低
+        #（以前切到 ORBIT 页会把整个窗口撑高）。
         self._build_status_panel(main, pad)
-        self._build_mtp_panel(main, pad)
-        self._build_mtj_panel(main, pad)
-        self._build_vel_panel(main, pad)
-        self._build_tss_panel(main, pad)
+
+        self._nb = ttk.Notebook(main)
+        self._nb.pack(fill=tk.X, padx=pad['padx'], pady=(6, 0))
+        for title, builder in (
+            ('姿态切换',  self._build_mtp_panel),
+            ('关节点动',  self._build_mtj_panel),
+            ('速度控制',  self._build_vel_panel),
+            ('运镜轨迹',  self._build_tss_panel),
+        ):
+            tab = ttk.Frame(self._nb)
+            self._nb.add(tab, text=title)
+            builder(tab, pad)
+
+        # 切页即停点动：<Leave> 已能兜住「按住时鼠标移开」，这里再补一道，
+        # 确保任何切页路径（含键盘 Ctrl-Tab）都不会把速度流留在按住状态。
+        self._nb.bind('<<NotebookTabChanged>>', lambda _e: self._vel_release())
+
         self._build_log_panel(main, pad)
         self._poll()
         self._vel_tick()
