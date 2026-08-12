@@ -162,6 +162,15 @@ std::vector<double> StatusAggregator::joint_position_list(
   return out;
 }
 
+bool StatusAggregator::has_joint_positions(const std::vector<std::string> & names) const
+{
+  std::lock_guard<std::mutex> lk(joint_mtx_);
+  for (const auto & n : names) {
+    if (joint_positions_.find(n) == joint_positions_.end()) return false;
+  }
+  return !names.empty();
+}
+
 uint8_t StatusAggregator::active_control_mode() const
 {
   std::lock_guard<std::mutex> lk(state_mtx_);

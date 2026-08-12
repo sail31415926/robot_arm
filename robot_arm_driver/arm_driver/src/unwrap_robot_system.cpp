@@ -13,6 +13,7 @@
 #include <string>
 
 #include <hardware_interface/types/hardware_interface_type_values.hpp>
+#include <lifecycle_msgs/msg/state.hpp>
 #include <pluginlib/class_list_macros.hpp>
 
 namespace robot_arm_driver
@@ -174,6 +175,82 @@ hardware_interface::return_type UnwrapRobotSystem::write(
     robot_motor_data_[i].target_position = saved_targets_[i];
   }
   return ret;
+}
+
+// ── 关停即失能 ────────────────────────────────────────────────────────────────
+//   见头文件注释：Ctrl-C 时 ros2_control_node 以 SIGABRT 挂掉，生命周期的
+//   on_shutdown/on_cleanup 根本跑不到，所以主路挂在 rclcpp::on_shutdown 上。
+hardware_interface::CallbackReturn UnwrapRobotSystem::haltIfActive(const char * hook)
+{
+  // 只有仍 active 才需要补 halt；已经 inactive 说明 on_deactivate 跑过了，
+  // 再 halt 一次虽无害，但会在正常流程里刷无谓日志。
+  bool was_active = true;
+  if (!active_.compare_exchange_strong(was_active, false))
+  {
+    return hardware_interface::CallbackReturn::SUCCESS;   // 已经不是 active，或被并发抢先
+  }
+  RCLCPP_WARN(
+    rclcpp::get_logger("UnwrapRobotSystem"),
+    "%s：组件仍处于 active，先让电机失力矩再拆 CANopen master", hook);
+  // 委托基类 on_deactivate —— 它内部对每个关节 halt_motor()，不必碰基类私有成员。
+  // previous_state 基类实现并不使用，给个空状态即可。
+  const auto ret =
+    canopen_ros2_control::RobotSystem::on_deactivate(rclcpp_lifecycle::State());
+  if (ret != hardware_interface::CallbackReturn::SUCCESS)
+  {
+    // 失能失败也必须继续往下走，否则 master 更不可能干净关闭；只是要吼出来。
+    RCLCPP_ERROR(
+      rclcpp::get_logger("UnwrapRobotSystem"),
+      "%s：halt 电机失败 —— 退出后驱动器可能仍带力矩，请断电确认", hook);
+  }
+  return ret;
+}
+
+hardware_interface::CallbackReturn UnwrapRobotSystem::on_activate(
+  const rclcpp_lifecycle::State & previous_state)
+{
+  const auto ret = canopen_ros2_control::RobotSystem::on_activate(previous_state);
+  if (ret != hardware_interface::CallbackReturn::SUCCESS)
+  {
+    return ret;
+  }
+  active_.store(true);
+
+  // 进程级失能兜底：SIGINT/SIGTERM 让 rclcpp 上下文关停时执行，早于析构与那个
+  // DeviceContainer abort，此时 CANopen master 还活着、SDO 写得下去。
+  // 只注册一次；回调里靠 active_ 判断是否真的需要 halt（幂等）。
+  if (!shutdown_hook_registered_)
+  {
+    shutdown_hook_registered_ = true;
+    rclcpp::on_shutdown([this]() { haltIfActive("rclcpp::on_shutdown"); });
+    // ⚠️ 别把这条读成「Ctrl-C 会自动失能」——2026-08-12 实机实测它**不生效**，
+    //    详见头文件注释。仅在进程能正常走完关停流程时才有用。
+    RCLCPP_INFO(
+      rclcpp::get_logger("UnwrapRobotSystem"),
+      "组件已 active；已注册关停失能钩子（仅正常关停路径有效，SIGABRT 路径拿不到执行机会）");
+  }
+  return ret;
+}
+
+hardware_interface::CallbackReturn UnwrapRobotSystem::on_deactivate(
+  const rclcpp_lifecycle::State & previous_state)
+{
+  active_.store(false);   // 正常 deactivate：基类自己会 halt，这里只更新标志
+  return canopen_ros2_control::RobotSystem::on_deactivate(previous_state);
+}
+
+hardware_interface::CallbackReturn UnwrapRobotSystem::on_shutdown(
+  const rclcpp_lifecycle::State & previous_state)
+{
+  haltIfActive("on_shutdown");
+  return canopen_ros2_control::RobotSystem::on_shutdown(previous_state);
+}
+
+hardware_interface::CallbackReturn UnwrapRobotSystem::on_cleanup(
+  const rclcpp_lifecycle::State & previous_state)
+{
+  haltIfActive("on_cleanup");
+  return canopen_ros2_control::RobotSystem::on_cleanup(previous_state);
 }
 
 }  // namespace robot_arm_driver

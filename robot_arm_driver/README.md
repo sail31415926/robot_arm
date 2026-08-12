@@ -136,9 +136,22 @@ Joint1 三秒走到 0.1 rad 再回零。
 
 1. **`boot_timeout_ms` 必须显式配**：402 驱动 boot 等待默认 20ms，必超时。bus.yml
    已配 2000ms，别删。
-2. **Ctrl-C 退出时 ros2_control_node 报 `terminate called without an active
-   exception`**：0.2.13 上游 DeviceContainer 析构 bug，发生在电机已失力矩之后，
-   无功能影响，忽略即可。
+2. **Ctrl-C 退出时 ros2_control_node 以 SIGABRT 挂掉**（`terminate called without an
+   active exception`，exit code -6）：0.2.13 上游 DeviceContainer 析构 bug。
+   **⚠️ 2026-08-12 实机实测修正：此前本条写「发生在电机已失力矩之后，无功能影响」是错的。**
+   实测抓 RPDO1 共 11631 帧，控制字一直是 `0x001F`（Operation Enabled）直到总线静默 ——
+   **进程死时电机仍然使能带着力矩**，机械臂"硬"着不放；且 master 没干净关闭会让驱动器/
+   PCAN 卡在坏状态（下次 launch 报 `SDO protocol timed out`、can0 变 NO-CARRIER，
+   见 CLAUDE.md 高频坑第 1 条）。
+   这条路径上**任何进程内钩子都拿不到执行机会**（生命周期 `on_shutdown`/`on_cleanup`
+   与 `rclcpp::on_shutdown` 都验证过，`UnwrapRobotSystem` 里保留的重写只对正常
+   deactivate 路径有效）。
+   **当前正确做法**：关停前先显式失能 —— `ros2 service call /arm_node/disable
+   std_srvs/srv/Trigger`（或 `/robot_arm/enable "{enable: false}"`），再 Ctrl-C。
+   崩溃后的兜底：`cansend can0 000#8100`（NMT Reset Node 广播，驱动器复位即掉力矩）。
+   ⚠️ 失能会让 J2/J3 失去支撑、机械臂下沉，操作前先确认下方无人无障碍。
+   **TODO**：做成独立 SocketCAN 工具（写控制字 0x0006，与 `set_encoder_zero` 同套路）
+   并挂进 launch 的 `OnShutdown`，把这一步自动化。
 3. **假从站要比主站先起**：test_arm.launch 的 fake_slaves 模式已内置主站延迟 3s。
 4. EDS 为手册转写，个别对象手册自身有出入（6070 类型、60C2:01 范围等）；真机 SDO
    Abort 时用 `candump` + 厂商 VCSDSoft_L 工具核对。

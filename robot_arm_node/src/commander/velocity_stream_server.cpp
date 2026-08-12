@@ -42,9 +42,42 @@ VelocityStreamServer::VelocityStreamServer(rclcpp::Node & node,
 : node_(node), logger_(node.get_logger()), status_(status), is_stopped_(std::move(is_stopped)),
   jacobian_(node), limits_(node)
 {
+  // 下发频率。50Hz 是 2026-08-04 在仿真里定的值，保持不变。
+  //
+  // 【2026-08-12 实机抖动排查记录，改这里前先读】JTC 每收一条新单点轨迹就丢弃旧的、
+  // 从**当前实际状态**重新插值，所以"发布周期 vs 计划时长(lookahead_)"的比例直接决定
+  // 手感，而两端都不好：
+  //   · 50Hz/20ms 周期 + 50ms 时长：每条计划只执行 40% 就被替换，且计划开头是样条最慢
+  //     的一段 → 跟踪率仅 71%，设定点被迫领先实测 L≈0.097rad 才能维持速度，
+  //     实测速度在 0～0.246 之间摆动（指令 0.15），标准差 0.048。
+  //   · 20Hz（周期 == 时长）：每条计划走完，跟踪率回到 100.4%、L 降到 0.022rad，
+  //     但每段样条自身的加减速形状暴露出来，纹波反而更大（标准差 0.117，
+  //     −0.06～0.58 之间摆）。
+  // 另外试过并否掉的两条：把前瞻基准改成实测位置（L 消失但臂几乎不动，0.0064rad/s
+  //   —— L 正是驱动位置环产生速度的必要误差）；把时长按真实距离/q̇ 拉长到 1.0s
+  //   （每周期只执行样条更小的比例，臂同样不动）。
+  // 结论：抖动是"单点轨迹 + 每周期重规划"方案的固有问题，调常数只能在
+  //   跟踪率和纹波之间挪，治本要换驱动器内部速度环（PV(3)）——
+  //   即 mode_manager_node 的 velocity_backend:=velocity_controller。
   rate_hz_           = node_.declare_parameter("velocity_stream.rate_hz", 50.0);
   command_timeout_   = node_.declare_parameter("velocity_stream.command_timeout", 0.3);
   lookahead_         = node_.declare_parameter("velocity_stream.lookahead", 0.05);
+  // 停止点的 time_from_start。比 lookahead_ 长一些，给 JTC/驱动器一段确定的减速区间；
+  // 太短接近零时长阶跃，太长则松手后"软绵绵"地才停住。
+  stop_time_         = node_.declare_parameter("velocity_stream.stop_time", 0.15);
+  // 设定点允许领先实测位置的上限（rad）。这是**兜底闸**而非主修复 ——
+  // 消除"松手猛冲"靠的是 halt() 里显式停在实测位置；本闸另外封住设定点被无界拉开的
+  // 情况（关节顶限位、负载重跟不动、驱动器报警不动了：设定点还在积分，关节原地不动）。
+  //
+  // 定值要够宽，否则会把正常点动限速：稳态滞后 ≈ q̇ × 伺服时间常数，
+  // 最高点动 1.0rad/s（max_joint_speed）× 约 0.1s ≈ 0.1rad，所以 0.10 正好卡边界。
+  // 取 0.20rad 留一倍余量：正常点动碰不到它，异常时又有上界。0 = 不限（老行为）。
+  max_lag_           = node_.declare_parameter("velocity_stream.max_lag", 0.20);
+  // 关节加速度上限（rad/s²），用于把阶跃速度指令平滑成梯形加减速。
+  // 2.0 时从 0 爬到 0.3rad/s 约 150ms。0 = 不限（老行为）。
+  max_accel_         = node_.declare_parameter("velocity_stream.max_accel", 2.0);
+  // 单点轨迹时长的上界（s）。见 on_tick 里"下发时长"一段：时长按 (lead−实测)/q̇ 算，
+  // 关节被堵住时这个比值会爆掉，须封顶，否则 JTC 会以极慢的斜率磨。
   max_linear_speed_  = node_.declare_parameter("velocity_stream.max_linear_speed",
                                                motion::MAX_V_LIN_FOLLOW);
   max_angular_speed_ = node_.declare_parameter("velocity_stream.max_angular_speed",
@@ -241,6 +274,7 @@ void VelocityStreamServer::on_tick()
   if (!seeded_) {
     const auto cur = status_.joint_position_list(all_joints_);
     target_.assign(cur.begin(), cur.end());
+    prev_qdot_.assign(all_joints_.size(), 0.0);   // 斜率限幅从 0 起爬，起步不顿
     seeded_      = true;
     last_tick_s_ = tick_now;
   }
@@ -249,11 +283,54 @@ void VelocityStreamServer::on_tick()
   const double dt = std::clamp(tick_now - last_tick_s_, 0.0, 5.0 / rate_hz_);
   last_tick_s_ = tick_now;
 
+  // 速度斜率限幅（= 加速度上限）。GUI 的按住/松手是**阶跃**速度指令，直接积分会让
+  // JTC 每拍收到一条斜率突变的新轨迹，实机上表现为起停顿挫、点动过程抖动。
+  // 限住 q̇ 的变化率相当于给指令加梯形加减速。0 = 不限（老行为）。
+  if (prev_qdot_.size() != qdot.size()) prev_qdot_.assign(qdot.size(), 0.0);
+  if (max_accel_ > 0.0) {
+    // 限幅步长不能直接用 dt：播种那一拍 last_tick_s_ 刚被设成 tick_now，dt 恰好是 0，
+    // 若此时跳过限幅，prev_qdot_ 会被整个阶跃值灌满，后面就没有可爬的斜坡了
+    //（实测症状：第一拍就是满速 0.300，梯形加速完全不生效）。
+    // 位置积分仍用真实 dt（那一拍确实没有时间流过，不该前进）。
+    const double dv_max = max_accel_ * (dt > 0.0 ? dt : 1.0 / rate_hz_);
+    for (size_t i = 0; i < qdot.size(); ++i) {
+      qdot[i] = prev_qdot_[i] + std::clamp(qdot[i] - prev_qdot_[i], -dv_max, dv_max);
+    }
+  }
+  prev_qdot_ = qdot;
+
+  // 开环积分的防跑飞闸：不让设定点领先实测位置超过 max_lag_。
+  // 实机上关节位置滞后于设定点（IP 模式 + 伺服动态），而 target_ 只在起步时播种、
+  // 流期间从不与回读对齐 —— 滞后量会一路累积。松手时那段累积差就是"猛冲"的幅度；
+  // 关节顶到限位或负载过大跟不动时更明显（设定点继续走，关节原地不动）。
+  //
+  // ★ 实现方式很关键：**只"冻结积分"，绝不把实测位置写进 target_**。
+  //   曾经写成 target_ = clamp(target_, meas ± max_lag)，实机上抖得很厉害 ——
+  //   一旦闸生效，位置指令就成了实测位置的函数：① 编码器噪声/量化直接进指令；
+  //   ② 构成 cmd = meas + max_lag → 伺服追 → meas 上升 → cmd 上升 的闭环，
+  //   回路增益约 1 且含伺服滞后，临界稳定 → 自激振动。
+  //   现在的做法只是拒绝把差距**继续拉大**，指令仍是纯开环积分量，噪声进不来。
+  std::vector<double> meas;
+  const bool have_meas = max_lag_ > 0.0 && status_.has_joint_positions(all_joints_);
+  if (have_meas) meas = status_.joint_position_list(all_joints_);
+
   std::vector<double> lead(all_joints_.size());
   for (size_t i = 0; i < all_joints_.size(); ++i) {
-    target_[i] += qdot[i] * dt;
-    // 下发点 = 设定点再前伸 lookahead，配 time_from_start=lookahead，使 JTC 插值斜率
-    // 恰为 q̇。若直接发设定点，实际执行速度会被稀释成 q̇×dt/lookahead。
+    const double step = qdot[i] * dt;
+    target_[i] += step;
+    if (have_meas) {
+      const double lag = target_[i] - meas[i];       // 设定点领先量（带符号）
+      // 只在「差距已超限、且本拍还在朝拉大方向走」时撤销这一步；
+      // 反向（把差距缩小、或把关节从限位拉回来）永不受限。
+      if (std::fabs(lag) > max_lag_ && (lag > 0.0) == (step > 0.0) && step != 0.0) {
+        target_[i] -= step;
+        RCLCPP_WARN_THROTTLE(logger_, *node_.get_clock(), 2000,
+            "'%s' 设定点已领先实测 %.3f rad（上限 %.3f）—— 暂停积分。"
+            "关节可能顶到限位/负载过重跟不动，或 max_lag 设得太小",
+            all_joints_[i].c_str(), lag, max_lag_);
+      }
+    }
+    // 下发点 = 设定点再前伸 lookahead。时长不再固定用 lookahead_，见下方 traj_time。
     lead[i] = target_[i] + qdot[i] * lookahead_;
     if (auto lim = limits_.limit(all_joints_[i])) {
       target_[i] = std::clamp(target_[i], lim->lower, lim->upper);
@@ -267,14 +344,17 @@ void VelocityStreamServer::on_tick()
 }
 
 void VelocityStreamServer::publish_trajectory(const std::vector<double> & positions,
-                                              const std::vector<double> & velocities)
+                                              const std::vector<double> & velocities,
+                                              double duration_s)
 {
   JointTrajectory traj;
   traj.joint_names = all_joints_;
   trajectory_msgs::msg::JointTrajectoryPoint pt;
   pt.positions  = positions;
   pt.velocities = velocities;
-  pt.time_from_start = rclcpp::Duration::from_seconds(lookahead_);
+  // duration_s <= 0 时用 lookahead_（流期间的常规点）；停止点单独给一个更长的
+  // stop_time_，让 JTC 有一段确定的减速区间，而不是零时长阶跃。
+  pt.time_from_start = rclcpp::Duration::from_seconds(duration_s > 0.0 ? duration_s : lookahead_);
   traj.points.push_back(std::move(pt));
   traj_pub_->publish(traj);
 }
@@ -295,9 +375,36 @@ void VelocityStreamServer::halt(const char * reason)
 {
   seeded_ = false;   // 积分器复位，下次起步重新用回读播种
   if (!streaming_.exchange(false)) return;   // 幂等
-  // 不下发任何命令：JTC 自动保持最后一个轨迹点，原地停住
+
+  // ★ 必须显式下发一条「停在这里」的轨迹，不能靠 JTC 自己保持最后一点。
+  //
+  // 为什么（实机 2026-08-12 实测：松手瞬间电机猛冲）：流期间最后发出去的那一点是
+  // **前伸点** lead = target_ + q̇·lookahead，且 velocities = q̇（非零）。什么都不发的话，
+  // JTC 保持的就是这个「比设定点还靠前、末端速度非零」的目标 —— 松手后伺服继续朝它冲。
+  // 更要紧的是 target_ 是**开环积分**的：实机上关节位置滞后于设定点（CANopen IP +
+  // 伺服动态），滞后量随点动时长累积，于是那个悬空目标离实际位置可能很远，松手瞬间
+  // 变成阶跃指令 → 全速补齐 = 猛冲。
+  // Gazebo 看不到这个问题：位置接口是 SetPosition（运动学瞬移），实际位置恒等于设定点，
+  // 差值只有 q̇·lookahead 且瞬移完成 —— 又一个"仿真结论不能外推到实物"的例子。
+  //
+  // 停止点取**实测位置**而不是 target_：target_ 含累积滞后，拿它当目标仍会往前走一段。
+  if (status_.has_joint_positions(all_joints_)) {
+    const auto cur = status_.joint_position_list(all_joints_);
+    publish_trajectory(std::vector<double>(cur.begin(), cur.end()),
+                       std::vector<double>(all_joints_.size(), 0.0),
+                       stop_time_);
+    // 设定点也拉回实测，避免下一次起步前这段差值以别的路径漏出去
+    target_.assign(cur.begin(), cur.end());
+    RCLCPP_INFO(logger_, "速度流停止（%s），已下发「停在实测位置」轨迹（%.2fs，零终端速度）",
+                reason, stop_time_);
+  } else {
+    // 没有回读：joint_position_list() 会把缺失关节记成 0，拿它下发等于命令臂摆到零位。
+    // 退化为发「设定点」（至少去掉 lookahead 前伸和非零终端速度）。
+    publish_trajectory(target_, std::vector<double>(all_joints_.size(), 0.0), stop_time_);
+    RCLCPP_WARN(logger_, "速度流停止（%s），但缺 /joint_states 回读 —— "
+                         "退化为按设定点停（可能残留跟踪误差）", reason);
+  }
   status_.set_moving(false);
-  RCLCPP_INFO(logger_, "速度流停止（%s），JTC 保持当前位置", reason);
 }
 
 }  // namespace robot_arm_node::commander

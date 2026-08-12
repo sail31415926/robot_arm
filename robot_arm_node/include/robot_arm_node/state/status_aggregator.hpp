@@ -72,7 +72,14 @@ public:
   std::map<std::string, double> joint_positions() const;
   std::map<std::string, double> joint_velocities() const;
   // 按指定顺序返回关节位置；未知关节记 0（缺省用 motion::JOINT_NAMES）。
+  // ⚠️ 未知关节返回 0 而不是报错 —— 拿它当「目标位置」下发前**必须**先用
+  //    has_joint_positions() 确认回读齐全，否则缺回读时会命令关节摆到 0 位。
   std::vector<double> joint_position_list(
+      const std::vector<std::string> & names = motion::JOINT_NAMES) const;
+
+  /// 指定的关节是否**全部**有回读。用于区分 joint_position_list() 里的
+  /// 「真实的 0」与「缺回读被记成 0」。
+  bool has_joint_positions(
       const std::vector<std::string> & names = motion::JOINT_NAMES) const;
 
   // ── 运动 / 运镜 / 跟随 flag ──────────────────────────────────────────────────

@@ -88,8 +88,10 @@ private:
   bool solve_joint_velocity(Source src, const double * cmd, std::vector<double> * qdot);
   // 整体等比缩放到各自速度上限内，保运动方向
   void scale_to_limits(std::vector<double> * qdot) const;
+  /// duration_s <= 0 → 用 lookahead_（流期间常规点）；停止点传 stop_time_。
   void publish_trajectory(const std::vector<double> & positions,
-                          const std::vector<double> & velocities);
+                          const std::vector<double> & velocities,
+                          double duration_s = 0.0);
   // 停止下发（幂等）。不发任何命令 —— JTC 自动保持最后一个点。
   void halt(const char * reason);
 
@@ -102,11 +104,16 @@ private:
   motion::JointLimitsCache limits_;
 
   // 参数
-  double rate_hz_{50.0};             // 下发频率。**别调到 100Hz**：JTC 每收一条新轨迹就
-                                     // 丢弃旧的重新插值，抢占太频繁反而跟不动（实测只剩
-                                     // 两三成，本仓 servo_config.yaml 同样压到 50Hz）
+  double rate_hz_{50.0};             // 下发频率。改前必读 .cpp 里的实机抖动排查记录：
+                                     // 周期/时长比例只能在跟踪率与纹波之间取舍，
+                                     // 治本要换 PV 后端（velocity_backend）
   double command_timeout_{0.3};
   double lookahead_{0.05};           // s，轨迹点的 time_from_start，同时用于位置前伸
+  double stop_time_{0.15};           // s，停止点的 time_from_start（给 JTC 一段减速区间）
+  double max_lag_{0.20};             // rad，设定点允许领先实测位置的上限（0 = 不限）
+                                     //   开环积分的防跑飞兜底闸，见 halt() 与 tick() 注释
+  double max_accel_{2.0};            // rad/s²，q̇ 的斜率限幅（0 = 不限）
+  std::vector<double> prev_qdot_;    // 上一拍限幅后的 q̇，斜率限幅用；起步时清零
   double max_linear_speed_{0.2};     // m/s
   double max_angular_speed_{1.0};    // rad/s（消息里是 deg/s，进来先换算）
   double max_joint_speed_{1.0};      // rad/s，臂 J1-3
