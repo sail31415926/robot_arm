@@ -127,6 +127,15 @@ robot_description = xacro.process_file(
 | `sim_mode` | `true` | `true` | `false` |
 | `gazebo_camera` | `true` | `false` | `false` |
 | `controllers_yaml` | 实际路径 | `''` | `''` |
+| `base_height` | `0.40`（默认） | `0.40` | `0.40` |
+
+`base_height` 是**基座垫高**：`arm_base_link` 相对 `world`（地面）的高度，默认 0.40m
+—— 实机机械臂坐在 40cm 立柱上，才够得着人用高度（0.75m）的桌面。垫高的几何在场景
+侧（`robot_arm_gazebo/worlds/emeet_arm.world` 的 `arm_riser`），**不做成 link**：
+URDF 凭空多一个连杆会进 MoveIt 碰撞检查，而 SRDF 的 `disable_collisions` 是手工
+维护的，新连杆不在矩阵里会误报自碰撞。所有笛卡尔量的参考系是 `arm_base_link`
+（`BASE_FRAME` / servo `planning_frame`），跟着基座一起抬，所以改这个参数不影响
+任何关节/笛卡尔资产；只有「世界系下的场景高度」相对变化。
 
 ---
 

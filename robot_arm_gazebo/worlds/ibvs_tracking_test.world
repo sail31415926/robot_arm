@@ -13,9 +13,13 @@
       • 红色方块（libgazebo_ros_planar_move）在前方桌面做 r=0.12m 圆周运动，周期 12s
         尺寸与 red_box_detector 期望一致：0.06×0.04×0.04 m
       • 另有蓝圆柱、绿方块、黄球陪衬
-    坐标系（机械臂 base_link 在原点）：
+    坐标系（world 原点在地面，机械臂 arm_base_link 在 (0,0,0.40) 垫高柱顶）：
       +X 前方   -Y 左侧   +Z 上方
-    桌面顶端 z = 0.45 m，方块中心 z = 0.47 m（底贴桌面）
+    桌面顶端 world z = 0.85 m，方块中心 z = 0.87 m（底贴桌面）
+    ⚠️ 2026-08-12 机械臂加了 40cm 垫高（arm_sim.urdf.xacro 的 base_height），
+       本世界的桌子/布幔/物体**整体 +0.40** 与之配平 —— 换算到 arm_base_link 系
+       台面仍是 0.45、方块仍是 0.47，**IBVS 相对几何与调好的参数一字未变**。
+       改 base_height 就必须同步改这里，否则方块会跑到基座平面上。
 
     启动：
       ros2 launch robot_arm_bringup gazebo.launch.py \
@@ -47,7 +51,7 @@
     <!-- ── 初始视角（与 emeet_arm.world 一致）──────────────────────────── -->
     <gui fullscreen="0">
       <camera name="user_camera">
-        <pose>-1.8 -2.2 1.6 0 0.38 0.62</pose>
+        <pose>-2.1 -2.5 2.0 0 0.38 0.62</pose>
         <view_controller>orbit</view_controller>
       </camera>
     </gui>
@@ -150,15 +154,34 @@
       <cast_shadows>false</cast_shadows>
     </light>
 
+    <!-- ── 机械臂垫高柱（40cm，对应 arm_sim.urdf.xacro 的 base_height=0.40）──
+         与 emeet_arm.world 的 arm_riser 保持一致；每个 spawn 机械臂的世界都要有
+         这块几何，否则机械臂会悬空 40cm。 -->
+    <model name="arm_riser">
+      <static>true</static>
+      <link name="column"><pose>0 0 0.19 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.26 0.26 0.38</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.26 0.26 0.38</size></box></geometry>
+          <material><ambient>0.26 0.27 0.29 1</ambient><diffuse>0.28 0.29 0.31 1</diffuse><specular>0.10 0.10 0.12 15</specular></material>
+        </visual>
+      </link>
+      <link name="top_plate"><pose>0 0 0.39 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.34 0.34 0.02</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.34 0.34 0.02</size></box></geometry>
+          <material><ambient>0.42 0.42 0.44 1</ambient><diffuse>0.44 0.44 0.46 1</diffuse><specular>0.15 0.15 0.16 25</specular></material>
+        </visual>
+      </link>
+    </model>
+
     <!-- ═══════════════════════════════════════════════════════════════════
          前方工作台（IBVS 主跟踪区域）
-         台面中心 (0.80, 0, 0.43)，尺寸 0.70m×0.80m×0.04m
+         台面中心 (0.80, 0, 0.83)，尺寸 0.70m×0.80m×0.04m
          材质与 emeet_arm.world workbench 一致
     ═══════════════════════════════════════════════════════════════════ -->
     <model name="table_front">
       <static>true</static>
       <link name="surface">
-        <pose>0.80 0 0.43 0 0 0</pose>
+        <pose>0.80 0 0.83 0 0 0</pose>
         <collision name="col">
           <geometry><box><size>0.70 0.80 0.04</size></box></geometry>
         </collision>
@@ -171,27 +194,27 @@
           </material>
         </visual>
       </link>
-      <link name="leg_fl"><pose>0.47 -0.37 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_fl"><pose>0.47 -0.37 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_fr"><pose>0.47  0.37 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_fr"><pose>0.47  0.37 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_bl"><pose>1.13 -0.37 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_bl"><pose>1.13 -0.37 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_br"><pose>1.13  0.37 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_br"><pose>1.13  0.37 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
@@ -200,7 +223,7 @@
     <!-- 前方桌面检测底板（浅灰，与 emeet_arm.world inspection_plate 一致）-->
     <model name="inspection_plate">
       <static>true</static>
-      <pose>0.80 0 0.453 0 0 0</pose>
+      <pose>0.80 0 0.853 0 0 0</pose>
       <link name="link">
         <collision name="col">
           <geometry><box><size>0.64 0.74 0.005</size></box></geometry>
@@ -223,7 +246,7 @@
     <model name="table_left">
       <static>true</static>
       <link name="surface">
-        <pose>0.25 -0.75 0.43 0 0 0</pose>
+        <pose>0.25 -0.75 0.83 0 0 0</pose>
         <collision name="col">
           <geometry><box><size>0.80 0.50 0.04</size></box></geometry>
         </collision>
@@ -236,27 +259,27 @@
           </material>
         </visual>
       </link>
-      <link name="leg_fl"><pose>-0.15 -0.52 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_fl"><pose>-0.15 -0.52 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_fr"><pose>-0.15 -0.98 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_fr"><pose>-0.15 -0.98 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_bl"><pose>0.65 -0.52 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_bl"><pose>0.65 -0.52 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_br"><pose>0.65 -0.98 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_br"><pose>0.65 -0.98 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
@@ -269,7 +292,7 @@
     <model name="table_right">
       <static>true</static>
       <link name="surface">
-        <pose>0.25 0.75 0.43 0 0 0</pose>
+        <pose>0.25 0.75 0.83 0 0 0</pose>
         <collision name="col">
           <geometry><box><size>0.80 0.50 0.04</size></box></geometry>
         </collision>
@@ -282,27 +305,27 @@
           </material>
         </visual>
       </link>
-      <link name="leg_fl"><pose>-0.15  0.52 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_fl"><pose>-0.15  0.52 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_fr"><pose>-0.15  0.98 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_fr"><pose>-0.15  0.98 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_bl"><pose>0.65  0.52 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_bl"><pose>0.65  0.52 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_br"><pose>0.65  0.98 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_br"><pose>0.65  0.98 0.405 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.81</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.81</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
@@ -315,13 +338,13 @@
     ──────────────────────────────────────────────────────────────────── -->
     <model name="cloth_front">
       <static>true</static>
-      <pose>1.22 0 0.45 0 0 0</pose>
+      <pose>1.22 0 0.65 0 0 0</pose>
       <link name="link">
         <collision name="col">
-          <geometry><box><size>0.01 1.10 0.90</size></box></geometry>
+          <geometry><box><size>0.01 1.10 1.30</size></box></geometry>
         </collision>
         <visual name="vis">
-          <geometry><box><size>0.01 1.10 0.90</size></box></geometry>
+          <geometry><box><size>0.01 1.10 1.30</size></box></geometry>
           <material>
             <ambient>0.52 0.52 0.52 1</ambient>
             <diffuse>0.52 0.52 0.52 1</diffuse>
@@ -333,13 +356,13 @@
 
     <model name="cloth_left">
       <static>true</static>
-      <pose>0.25 -1.07 0.45 0 0 0</pose>
+      <pose>0.25 -1.07 0.65 0 0 0</pose>
       <link name="link">
         <collision name="col">
-          <geometry><box><size>0.90 0.01 0.90</size></box></geometry>
+          <geometry><box><size>0.90 0.01 1.30</size></box></geometry>
         </collision>
         <visual name="vis">
-          <geometry><box><size>0.90 0.01 0.90</size></box></geometry>
+          <geometry><box><size>0.90 0.01 1.30</size></box></geometry>
           <material>
             <ambient>0.52 0.52 0.52 1</ambient>
             <diffuse>0.52 0.52 0.52 1</diffuse>
@@ -351,13 +374,13 @@
 
     <model name="cloth_right">
       <static>true</static>
-      <pose>0.25 1.07 0.45 0 0 0</pose>
+      <pose>0.25 1.07 0.65 0 0 0</pose>
       <link name="link">
         <collision name="col">
-          <geometry><box><size>0.90 0.01 0.90</size></box></geometry>
+          <geometry><box><size>0.90 0.01 1.30</size></box></geometry>
         </collision>
         <visual name="vis">
-          <geometry><box><size>0.90 0.01 0.90</size></box></geometry>
+          <geometry><box><size>0.90 0.01 1.30</size></box></geometry>
           <material>
             <ambient>0.52 0.52 0.52 1</ambient>
             <diffuse>0.52 0.52 0.52 1</diffuse>
@@ -400,7 +423,7 @@
     ──────────────────────────────────────────────────────────────────── -->
     <model name="obj_cylinder_blue">
       <static>false</static>
-      <pose>0.25 -0.72 0.485 0 0 0</pose>
+      <pose>0.25 -0.72 0.885 0 0 0</pose>
       <link name="link">
         <inertial><mass>0.15</mass>
           <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>5e-5</izz></inertia>
@@ -419,7 +442,7 @@
 
     <model name="obj_box_green">
       <static>false</static>
-      <pose>0.10 -0.80 0.4625 0 0 -0.5</pose>
+      <pose>0.10 -0.80 0.8625 0 0 -0.5</pose>
       <link name="link">
         <inertial><mass>0.08</mass>
           <inertia><ixx>5e-5</ixx><iyy>5e-5</iyy><izz>5e-5</izz></inertia>
@@ -438,7 +461,7 @@
 
     <model name="obj_sphere_yellow">
       <static>false</static>
-      <pose>0.25 0.72 0.475 0 0 0</pose>
+      <pose>0.25 0.72 0.875 0 0 0</pose>
       <link name="link">
         <inertial><mass>0.05</mass>
           <inertia><ixx>2e-5</ixx><iyy>2e-5</iyy><izz>2e-5</izz></inertia>
@@ -468,7 +491,7 @@
     ═══════════════════════════════════════════════════════════════════ -->
     <model name="obj_box_red">
       <static>false</static>
-      <pose>0.75 -0.10 0.47 0 0 -1.5708</pose>
+      <pose>0.75 -0.10 0.87 0 0 -1.5708</pose>
       <link name="link">
         <inertial>
           <mass>0.1</mass>

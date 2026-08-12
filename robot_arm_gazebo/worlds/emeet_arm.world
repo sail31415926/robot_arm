@@ -25,7 +25,7 @@
     <!-- ── 初始视角：机械臂后侧方 ───────────────────────────────────────────── -->
     <gui fullscreen="0">
       <camera name="user_camera">
-        <pose>-1.8 -2.2 1.6 0 0.38 0.62</pose>
+        <pose>-2.1 -2.5 2.0 0 0.38 0.62</pose>
         <view_controller>orbit</view_controller>
       </camera>
     </gui>
@@ -131,18 +131,49 @@
     </light>
 
     <!--
-      空间布局：
-        机械臂 base (0,0,0)
-        桌子近端 x=0.50，中心 x=0.90，深 0.80m，宽 0.80m，桌面 z=0.50
-        灰布距桌边 20cm，高 0.90m
+      空间布局（2026-08-12 全场景改成「人坐着用桌子」的真实高度）：
+        机械臂 base：xy 原点，**z=0.40（垫高柱顶面）** —— 高度由
+          arm_sim.urdf.xacro 的 base_height 参数决定，本文件的 arm_riser
+          只是与之对应的几何，改一个必须改另一个。
+        桌子近端 x=0.40，中心 x=0.90，1.00×1.00m，**台面顶 z=0.75**（人用高度）
+        左右灰布距桌边 20cm（y=±0.70），高 1.30m
+        桌子对面：椅子座心 x=1.85、座面顶 z=0.48（由 sitting.dae 的坐姿定死，
+          配 0.75 桌面 = 落座差 0.27m），人坐在椅上面朝机械臂（-X），
+          骨盆 (1.85, 0, 0.641)、头 z≈1.10、脚踩地
+        桌面装饰：花瓶（瓶口 z≈0.95）+ 三朵花（z≈1.10）在 (1.28, -0.38)
+        人像背景布 x=2.60，高 1.80m
+      高度关系（换算到 arm_base_link 系，笛卡尔指令都用这个系）：
+        台面 0.75-0.40 = **0.35**（旧场景是 0.45，即台面相对机械臂低了 10cm）
+        人脸 ≈1.05-0.40 = 0.65，头顶 ≈1.20-0.40 = 0.80，都在臂+云台取景高度上
     -->
 
+    <!-- ── 机械臂垫高柱（40cm，对应 arm_sim.urdf.xacro 的 base_height=0.40）──
+         做成场景里的静态模型而不是 URDF link：URDF 里凭空多一个连杆会落到
+         MoveIt 的碰撞检查里，而 SRDF 的 disable_collisions 是手工维护的，
+         新连杆不在矩阵里会误报自碰撞（/check_state_validity 会被卡）。 -->
+    <model name="arm_riser">
+      <static>true</static>
+      <link name="column"><pose>0 0 0.19 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.26 0.26 0.38</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.26 0.26 0.38</size></box></geometry>
+          <material><ambient>0.26 0.27 0.29 1</ambient><diffuse>0.28 0.29 0.31 1</diffuse><specular>0.10 0.10 0.12 15</specular></material>
+        </visual>
+      </link>
+      <!-- 顶板：0.38~0.40，机械臂基座就坐在它上面 -->
+      <link name="top_plate"><pose>0 0 0.39 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.34 0.34 0.02</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.34 0.34 0.02</size></box></geometry>
+          <material><ambient>0.42 0.42 0.44 1</ambient><diffuse>0.44 0.44 0.46 1</diffuse><specular>0.15 0.15 0.16 25</specular></material>
+        </visual>
+      </link>
+    </model>
+
     <!-- ── 工作台 ──────────────────────────────────────────────────────────── -->
-    <!-- 桌子 1.00×1.00m，台面顶部 z=0.50，桌面改为深色亚光木色 -->
+    <!-- 桌子 1.00×1.00m，台面顶部 z=0.75（人用高度，桌腿 0.71），深色亚光木色 -->
     <model name="workbench">
       <static>true</static>
       <link name="surface">
-        <pose>0.90 0 0.43 0 0 0</pose>
+        <pose>0.90 0 0.73 0 0 0</pose>
         <collision name="col">
           <geometry><box><size>1.00 1.00 0.04</size></box></geometry>
         </collision>
@@ -155,27 +186,27 @@
           </material>
         </visual>
       </link>
-      <link name="leg_fl"><pose>0.435 -0.455 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_fl"><pose>0.435 -0.455 0.355 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.71</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.71</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_fr"><pose>0.435  0.455 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_fr"><pose>0.435  0.455 0.355 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.71</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.71</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_bl"><pose>1.365 -0.455 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_bl"><pose>1.365 -0.455 0.355 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.71</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.71</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
-      <link name="leg_br"><pose>1.365  0.455 0.205 0 0 0</pose>
-        <collision name="col"><geometry><box><size>0.05 0.05 0.41</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+      <link name="leg_br"><pose>1.365  0.455 0.355 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.05 0.71</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.05 0.71</size></box></geometry>
           <material><ambient>0.45 0.45 0.45 1</ambient><diffuse>0.45 0.45 0.45 1</diffuse></material>
         </visual>
       </link>
@@ -184,7 +215,7 @@
     <!-- ── 拍摄底板（浅灰，比之前暗一些避免刺眼）────────────────────────── -->
     <model name="inspection_plate">
       <static>true</static>
-      <pose>0.90 0 0.453 0 0 0</pose>
+      <pose>0.90 0 0.753 0 0 0</pose>
       <link name="link">
         <collision name="col">
           <geometry><box><size>0.72 0.72 0.005</size></box></geometry>
@@ -201,16 +232,19 @@
     </model>
 
     <!-- ── 三侧灰布（距桌边 20cm，与桌子同步扩大）────────────────────────── -->
-    <!-- 桌子远端 x=1.40，布在 x=1.60；桌子左右 y=±0.50，布在 y=±0.70 -->
+    <!-- 桌子左右 y=±0.50，布在 y=±0.70 -->
+    <!-- 后布：原在 x=1.60（高 0.90）当台面背景，2026-08-12 桌子对面加了坐着的人后
+         那块布正好挡在人前面 → 后移到人身后 x=2.60 并加高到 1.80，
+         改为「人像背景」：人成为被拍主体，相机视线全程无遮挡 -->
     <model name="cloth_back">
       <static>true</static>
-      <pose>1.60 0 0.45 0 0 0</pose>
+      <pose>2.60 0 0.90 0 0 0</pose>
       <link name="link">
         <collision name="col">
-          <geometry><box><size>0.01 1.50 0.90</size></box></geometry>
+          <geometry><box><size>0.02 2.20 1.80</size></box></geometry>
         </collision>
         <visual name="vis">
-          <geometry><box><size>0.01 1.50 0.90</size></box></geometry>
+          <geometry><box><size>0.02 2.20 1.80</size></box></geometry>
           <material>
             <ambient>0.52 0.52 0.52 1</ambient>
             <diffuse>0.52 0.52 0.52 1</diffuse>
@@ -222,13 +256,13 @@
 
     <model name="cloth_left">
       <static>true</static>
-      <pose>0.90 -0.70 0.45 0 0 0</pose>
+      <pose>0.90 -0.70 0.65 0 0 0</pose>
       <link name="link">
         <collision name="col">
-          <geometry><box><size>1.30 0.01 0.90</size></box></geometry>
+          <geometry><box><size>1.30 0.01 1.30</size></box></geometry>
         </collision>
         <visual name="vis">
-          <geometry><box><size>1.30 0.01 0.90</size></box></geometry>
+          <geometry><box><size>1.30 0.01 1.30</size></box></geometry>
           <material>
             <ambient>0.52 0.52 0.52 1</ambient>
             <diffuse>0.52 0.52 0.52 1</diffuse>
@@ -240,13 +274,13 @@
 
     <model name="cloth_right">
       <static>true</static>
-      <pose>0.90 0.70 0.45 0 0 0</pose>
+      <pose>0.90 0.70 0.65 0 0 0</pose>
       <link name="link">
         <collision name="col">
-          <geometry><box><size>1.30 0.01 0.90</size></box></geometry>
+          <geometry><box><size>1.30 0.01 1.30</size></box></geometry>
         </collision>
         <visual name="vis">
-          <geometry><box><size>1.30 0.01 0.90</size></box></geometry>
+          <geometry><box><size>1.30 0.01 1.30</size></box></geometry>
           <material>
             <ambient>0.52 0.52 0.52 1</ambient>
             <diffuse>0.52 0.52 0.52 1</diffuse>
@@ -255,6 +289,170 @@
         </visual>
       </link>
     </model>
+
+    <!-- ── 桌面装饰：花瓶 + 花（原始几何拼的，Gazebo 本地模型库里没有花瓶）──
+         位置 (1.28, -0.38)：桌子远端左角，**故意不放在正中**，一是不挡住相机
+         看人脸（相机在 x≈0 光轴上，这里偏轴约 20°，落在 Cam0 56.7° 水平视场的
+         边缘，画面里看得到但不遮主体），二是让中间那块浅灰检测底板保持干净。
+         瓶身 0.75~0.95（桌面顶 0.75），花朵 z≈1.10。
+         static：多 link 模型如果不 static 又没有 joint，SDF 里每个 link 都是
+         独立自由体，会当场散架 —— 装饰件直接 static 最省事。 -->
+    <model name="flower_vase">
+      <static>true</static>
+      <!-- 瓶：圈足 → 鼓腹 → 收颈 → 唇口（青瓷釉色）-->
+      <link name="foot"><pose>1.28 -0.38 0.760 0 0 0</pose>
+        <collision name="col"><geometry><cylinder><radius>0.038</radius><length>0.020</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>0.038</radius><length>0.020</length></cylinder></geometry>
+          <material><ambient>0.62 0.68 0.70 1</ambient><diffuse>0.66 0.72 0.74 1</diffuse><specular>0.45 0.48 0.50 60</specular></material>
+        </visual>
+      </link>
+      <link name="belly"><pose>1.28 -0.38 0.825 0 0 0</pose>
+        <collision name="col"><geometry><cylinder><radius>0.058</radius><length>0.110</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>0.058</radius><length>0.110</length></cylinder></geometry>
+          <material><ambient>0.66 0.72 0.75 1</ambient><diffuse>0.70 0.76 0.79 1</diffuse><specular>0.50 0.53 0.55 70</specular></material>
+        </visual>
+      </link>
+      <link name="neck"><pose>1.28 -0.38 0.910 0 0 0</pose>
+        <collision name="col"><geometry><cylinder><radius>0.036</radius><length>0.060</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>0.036</radius><length>0.060</length></cylinder></geometry>
+          <material><ambient>0.66 0.72 0.75 1</ambient><diffuse>0.70 0.76 0.79 1</diffuse><specular>0.50 0.53 0.55 70</specular></material>
+        </visual>
+      </link>
+      <link name="rim"><pose>1.28 -0.38 0.946 0 0 0</pose>
+        <visual name="vis"><geometry><cylinder><radius>0.042</radius><length>0.012</length></cylinder></geometry>
+          <material><ambient>0.58 0.65 0.68 1</ambient><diffuse>0.62 0.69 0.72 1</diffuse><specular>0.50 0.53 0.55 70</specular></material>
+        </visual>
+      </link>
+
+      <!-- 花茎：长 0.17，从瓶口向三个方向散开（pose 由脚本按倾角算好，见 git 记录）
+           绕 x 正转把 +z 倒向 -y，绕 y 正转把 +z 倒向 +x -->
+      <link name="stem_a"><pose>1.2985 -0.3800 1.0230 0 0.22 0</pose>
+        <visual name="vis"><geometry><cylinder><radius>0.0035</radius><length>0.170</length></cylinder></geometry>
+          <material><ambient>0.16 0.40 0.14 1</ambient><diffuse>0.18 0.45 0.16 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="stem_b"><pose>1.2800 -0.4019 1.0221 0.26 0 0</pose>
+        <visual name="vis"><geometry><cylinder><radius>0.0035</radius><length>0.170</length></cylinder></geometry>
+          <material><ambient>0.16 0.40 0.14 1</ambient><diffuse>0.18 0.45 0.16 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="stem_c"><pose>1.2667 -0.3631 1.0222 -0.20 -0.16 0</pose>
+        <visual name="vis"><geometry><cylinder><radius>0.0035</radius><length>0.170</length></cylinder></geometry>
+          <material><ambient>0.16 0.40 0.14 1</ambient><diffuse>0.18 0.45 0.16 1</diffuse></material>
+        </visual>
+      </link>
+
+      <!-- 花朵：三色，落在各自花茎顶端 -->
+      <link name="bloom_a"><pose>1.3171 -0.3800 1.1059 0 0 0</pose>
+        <visual name="vis"><geometry><sphere><radius>0.030</radius></sphere></geometry>
+          <material><ambient>0.80 0.20 0.26 1</ambient><diffuse>0.86 0.24 0.30 1</diffuse><specular>0.20 0.08 0.10 12</specular></material>
+        </visual>
+      </link>
+      <link name="bloom_b"><pose>1.2800 -0.4237 1.1043 0 0 0</pose>
+        <visual name="vis"><geometry><sphere><radius>0.028</radius></sphere></geometry>
+          <material><ambient>0.92 0.78 0.20 1</ambient><diffuse>0.96 0.82 0.24 1</diffuse><specular>0.25 0.20 0.06 12</specular></material>
+        </visual>
+      </link>
+      <link name="bloom_c"><pose>1.2535 -0.3462 1.1045 0 0 0</pose>
+        <visual name="vis"><geometry><sphere><radius>0.026</radius></sphere></geometry>
+          <material><ambient>0.90 0.58 0.68 1</ambient><diffuse>0.94 0.62 0.72 1</diffuse><specular>0.22 0.14 0.16 12</specular></material>
+        </visual>
+      </link>
+
+      <!-- 两片叶子（压扁的盒子，给个轮廓）-->
+      <link name="leaf_a"><pose>1.3050 -0.3700 0.985 0 0.55 0.30</pose>
+        <visual name="vis"><geometry><box><size>0.070 0.026 0.005</size></box></geometry>
+          <material><ambient>0.18 0.42 0.16 1</ambient><diffuse>0.20 0.48 0.18 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leaf_b"><pose>1.2600 -0.3980 0.998 0 -0.62 -0.40</pose>
+        <visual name="vis"><geometry><box><size>0.062 0.024 0.005</size></box></geometry>
+          <material><ambient>0.18 0.42 0.16 1</ambient><diffuse>0.20 0.48 0.18 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ── 访客椅（桌子对面，座面顶 z=0.48，靠背在 +X 侧 → 人面朝机械臂）────
+         ⚠️ 0.48 这个座高**不是随便定的，是被 sitting.dae 的坐姿反过来定死的**：
+         对 sitting.dae 做正运动学（脚踩地、actor 无 z 偏移）得到
+             Hips 0.641 / 髋 0.570 / 膝 0.536 / 踝 0.112 / 脚趾 0.072 / 头 1.103
+         大腿轴在 z≈0.55，往下扣腿肉厚度 → 臀底约 0.47~0.49，所以座面取 0.48
+         （略陷 1cm 正好像坐垫压下去）。**座面高了或低了都会穿模**：椅子往下
+         调人就浮在空中、往上调大腿就陷进座板。配 0.75 台面 = 落座差 0.27m，
+         标准餐/办公桌椅比例。
+         座心 x=1.85：膝盖落在 x≈1.31、大腿顶 z≈0.60 从台面底（0.71）下方
+         穿过去，人「坐到桌前」；脚在 x≈1.32、y=-0.10/+0.16，与四条桌腿
+         （x=0.435/1.365，y=±0.455）错开，不穿模。 -->
+    <model name="guest_chair">
+      <static>true</static>
+      <link name="seat"><pose>1.85 0 0.455 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.45 0.45 0.05</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.45 0.45 0.05</size></box></geometry>
+          <material><ambient>0.20 0.22 0.26 1</ambient><diffuse>0.22 0.24 0.28 1</diffuse><specular>0.03 0.03 0.04 5</specular></material>
+        </visual>
+      </link>
+      <link name="backrest"><pose>2.055 0 0.690 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.05 0.45 0.42</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.05 0.45 0.42</size></box></geometry>
+          <material><ambient>0.20 0.22 0.26 1</ambient><diffuse>0.22 0.24 0.28 1</diffuse><specular>0.03 0.03 0.04 5</specular></material>
+        </visual>
+      </link>
+      <link name="leg_fl"><pose>1.67 -0.19 0.2275 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.04 0.04 0.455</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.04 0.04 0.455</size></box></geometry>
+          <material><ambient>0.42 0.42 0.44 1</ambient><diffuse>0.44 0.44 0.46 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_fr"><pose>1.67  0.19 0.2275 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.04 0.04 0.455</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.04 0.04 0.455</size></box></geometry>
+          <material><ambient>0.42 0.42 0.44 1</ambient><diffuse>0.44 0.44 0.46 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_bl"><pose>2.03 -0.19 0.2275 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.04 0.04 0.455</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.04 0.04 0.455</size></box></geometry>
+          <material><ambient>0.42 0.42 0.44 1</ambient><diffuse>0.44 0.44 0.46 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="leg_br"><pose>2.03  0.19 0.2275 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.04 0.04 0.455</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.04 0.04 0.455</size></box></geometry>
+          <material><ambient>0.42 0.42 0.44 1</ambient><diffuse>0.44 0.44 0.46 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ── 坐在桌子对面的人（Gazebo Classic actor + 自带 sitting.dae 骨骼皮肤）──
+         与 robot_bringup 的 person_tracking / filming_studio 用法一致：actor 是
+         kinematic 无碰撞的带贴图人体网格，HOG/YOLO 能识别，位姿可复现、不会被撞倒。
+         ⚠️ **waypoint 的 z 必须是 0，不要试图用它把人「放到椅子上」**（踩过）：
+         actor 的最终位姿 = waypoint ⊕ 动画根节点(Hips)平移，sitting.dae 的 Hips
+         局部偏移是 (-0.383, 0.010, 0.641)。曾按「Hips 落到座面上方 5cm」反算出
+         z=-0.141，结果把**整个人**下压 14cm —— 大腿陷进座板 10cm、脚穿到地板
+         下 7cm。这个 mocap 本来就是「脚踩地坐着」拍的，z=0 时脚底刚好在地面、
+         臀底在 0.48 附近，所以正确做法是 **z 给 0，改椅子座高去接坐姿**（见上）。
+         x/y 仍需反算，两条规则不同：
+             x：Gazebo 的 `Actor::Update` 对带位移的动画会把根节点 x 分量清零
+                （`if (translated) rootPos.x = 0`，本是给行走动画让轨迹接管前进
+                方向），所以 x **直接生效** → 填目标骨盆 x = 1.85
+             y：偏移照常叠加，yaw=π 把局部 +y 翻成 -y → 填 0 + 0.010 = 0.010
+         yaw=π 让人面朝 -X，即正对机械臂。
+         单帧 trajectory（首末同姿）保持静止坐姿。
+    ──────────────────────────────────────────────────────────────────────── -->
+    <actor name="seated_person">
+      <skin><filename>sitting.dae</filename><scale>1.0</scale></skin>
+      <animation name="sitting"><filename>sitting.dae</filename><interpolate_x>false</interpolate_x></animation>
+      <script>
+        <loop>true</loop>
+        <delay_start>0.0</delay_start>
+        <auto_start>true</auto_start>
+        <trajectory id="0" type="sitting">
+          <waypoint><time>0.0</time>  <pose>1.85 0.010 0 0 0 3.1416</pose></waypoint>
+          <waypoint><time>10.0</time> <pose>1.85 0.010 0 0 0 3.1416</pose></waypoint>
+        </trajectory>
+      </script>
+    </actor>
 
     <!-- ── 三面墙（素色，前侧开放）──────────────────────────────────────────── -->
     <!-- 后墙 x=4.00，左右墙 y=±4.00，形成宽敞的 U 形空间 -->
@@ -288,7 +486,7 @@
     <!-- ── 被检测物体（台面顶部 z=0.50）──────────────────────────────────── -->
     <model name="obj_box_red">
       <static>false</static>
-      <pose>0.60 -0.12 0.47 0 0 0.4</pose>
+      <pose>0.60 -0.12 0.77 0 0 0.4</pose>
       <link name="link">
         <inertial><mass>0.1</mass>
           <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
@@ -307,7 +505,7 @@
 
     <model name="obj_cylinder_blue">
       <static>false</static>
-      <pose>0.92 0.10 0.485 0 0 0</pose>
+      <pose>0.92 0.10 0.785 0 0 0</pose>
       <link name="link">
         <inertial><mass>0.15</mass>
           <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>5e-5</izz></inertia>
@@ -326,7 +524,7 @@
 
     <model name="obj_box_green">
       <static>false</static>
-      <pose>1.00 -0.08 0.4625 0 0 -0.5</pose>
+      <pose>1.00 -0.08 0.7625 0 0 -0.5</pose>
       <link name="link">
         <inertial><mass>0.08</mass>
           <inertia><ixx>5e-5</ixx><iyy>5e-5</iyy><izz>5e-5</izz></inertia>
@@ -345,7 +543,7 @@
 
     <model name="obj_sphere_yellow">
       <static>false</static>
-      <pose>0.80 0.13 0.475 0 0 0</pose>
+      <pose>0.80 0.13 0.775 0 0 0</pose>
       <link name="link">
         <inertial><mass>0.05</mass>
           <inertia><ixx>2e-5</ixx><iyy>2e-5</iyy><izz>2e-5</izz></inertia>

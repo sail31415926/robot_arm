@@ -45,7 +45,7 @@
            ros2 launch robot_arm_gazebo gazebo.launch.py controller:=commander gui:=false                                         # Arm Commander 中间层（无 GUI）
 
          world 参数（默认 emeet_arm）：
-           world:=emeet_arm            → 标准工作台场景（默认）
+           world:=emeet_arm            → 标准工作台场景（默认，桌子对面坐着一个人，可作检测/跟踪目标）
            world:=ibvs_tracking_test   → IBVS 跟踪测试专用：U 形三桌 + 红色方块圆周运动（r=0.12m，周期 12s）
 
 @copyright Copyright (c) 2026 eMeet

@@ -8,10 +8,21 @@
                                   Gazebo 仿真时须设为 true
     controllers_yaml              gazebo_ros2_control 控制器配置文件路径
                                   空字符串时跳过插件（MuJoCo/display 不需要）
+    base_height     [m]           基座垫高：arm_base_link 相对 world（地面）的高度，
+                                  默认 0.40 —— 实机机械臂坐在 40cm 立柱上，
+                                  这样才够得着人用高度（0.75m）的桌面。
+                                  垫高的**几何**在场景侧（Gazebo 世界文件的
+                                  arm_riser 模型），不做成 link，避免给 MoveIt
+                                  凭空塞一个不在 SRDF 碰撞矩阵里的连杆。
+                                  设 0 可回到「基座贴地」的旧行为。
+
+  ⚠️ 所有笛卡尔量的参考系是 arm_base_link（BASE_FRAME / servo planning_frame），
+     跟着基座一起抬升，所以改 base_height **不会**动到任何关节/笛卡尔资产；
+     但世界系下的场景高度会相对变化（桌面 world 0.75 = base 系 0.35）。
 
   TF 树：
-    world
-      └─ arm_base_joint (fixed)
+    world                                （地面，z=0）
+      └─ arm_base_joint (fixed, z=base_height)
            └─ arm_base_link
                 └─ Joint1..3 → tool0（臂法兰）→ gimbal_base_link（云台 V2）
                      → Joint4..6 → gimbal_tool0 → Cam0 → camera_optical_frame
@@ -25,6 +36,7 @@
   <xacro:arg name="can_interface"       default="can0"/>
   <xacro:arg name="emit_camera_control" default="true"/>
   <xacro:arg name="controllers_yaml"    default=""/>
+  <xacro:arg name="base_height"         default="0.40"/>
 
   <xacro:include filename="$(find robot_arm_description)/urdf/arm.urdf.xacro"/>
 
@@ -32,7 +44,7 @@
 
   <xacro:emeet_arm
       parent="world"
-      xyz="0 0 0"
+      xyz="0 0 $(arg base_height)"
       rpy="0 0 0"
       sim_mode="$(arg sim_mode)"
       gazebo_camera="$(arg gazebo_camera)"
