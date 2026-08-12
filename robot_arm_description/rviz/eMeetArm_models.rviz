@@ -124,7 +124,8 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: base_link
+    # 同 moveit.rviz：base_link 是基座改名成 arm_base_link 之前的旧名字，已不存在
+    Fixed Frame: world
     Frame Rate: 30
   Name: root
   Tools:

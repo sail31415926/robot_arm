@@ -233,7 +233,11 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: base_link
+    # world = URDF 根 / MoveIt planning frame（SRDF virtual_joint 的 parent_frame）。
+    # 原来写的是 base_link —— 那是机械臂基座改名成 arm_base_link 之前的旧名字，
+    # 这套栈里根本没有这个 frame，会让所有以 <Fixed Frame> 为基准的 display 报
+    # "base_link ... does not exist"（最吵的是 interactive_marker_display）。
+    Fixed Frame: world
     Frame Rate: 25
   Name: root
   Tools:
