@@ -2,8 +2,8 @@
 """
 @file   commander_test_gui.py
 @brief  Arm Commander 调试 GUI —— Director 视角的完整测试工具
-@version 2.2
-@date   2026-08-04
+@version 2.3
+@date   2026-08-12
 
 功能（面板自上而下，与 Commander 的 4 个 action 对应）：
   1. ArmStatus 实时监控 —— 位姿/状态/错误码/**当前控制模式** + 到位指示灯 + 急停/清错/回零/使能
@@ -18,6 +18,10 @@
                            Jacobian 统一解算，臂 J1-3 走速度、云台走位置流）
   5. ArmTrajectoryShot  —— 直线运镜（LINEAR）/ 球面环绕运镜（ORBIT）+ return_to_start
   （ArmTrackTarget 由 visp_ibvs_gui 单独覆盖，不在本 GUI）
+  6. 等效 ROS2 指令（2026-08-12 新增，位于日志上方）—— 每次下发都把等价的
+     `ros2 action send_goal` / `ros2 service call` / `ros2 topic pub` 显示出来，
+     一键复制到终端即可重放。内容由 cli_action/cli_service/cli_topic 从**真正发出去
+     的那个消息对象**序列化（见文件中段注释），不是手写模板，所以不会和实际下发漂开。
 
 订阅：/robot_arm/arm_status（语义状态）+ /joint_states（关节角 —— ArmStatus 只报末端
       位姿，关节角按总线约定从 /joint_states 读）+ /robot_arm/control_mode（当前控制模式）
@@ -98,6 +102,92 @@ ARM_JOINT_RANGE = [
 # 这里只是界面刻度：改了 URDF 这张表不同步也不会造成越限下发。
 ARM_JOINT_EFFORT_LIMIT = {'Joint1': 5.0, 'Joint2': 30.0, 'Joint3': 5.0}
 
+# ── 等效 ROS2 CLI 指令生成 ────────────────────────────────────────────────────────
+# 「等效指令」面板的内容全部由下面这几个函数从**真正要发出去的那个消息对象**生成，
+# 不另写一份字段拼接 —— 手写第二份必然会和实际下发内容漂开（改了 .action/.msg 定义
+# 或改了某个字段的填法，面板还在显示旧的），那样这个面板就成了误导。
+def _ros_type(cls):
+    """rosidl 接口类 → 'pkg/kind/Name'（kind = action | srv | msg）。
+
+    从 cls.__module__ 反推（如 robot_arm_interfaces.action._arm_move_to_pose），
+    不写死字符串，接口改名时跟着变。
+    """
+    pkg, kind = cls.__module__.split('.')[:2]
+    return f'{pkg}/{kind}/{cls.__name__}'
+
+
+def _yaml_val(v):
+    if isinstance(v, bool):                          # 必须在 int 之前：bool 是 int 子类
+        return 'true' if v else 'false'
+    if isinstance(v, float):
+        # 用 repr 保证留小数点（'1.0' 而不是 '1'）：YAML 把 1 读成 int，
+        # 赋给 double 字段在部分版本会触发类型断言
+        return repr(round(v, 6))
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, str):
+        return f"'{v}'"
+    if hasattr(v, 'get_fields_and_field_types'):      # 嵌套消息（如 ArmPose / ArmTwist）
+        return _yaml_msg(v)
+    if hasattr(v, 'tolist'):                          # array.array / numpy（如 Float64MultiArray.data）
+        v = v.tolist()
+    if isinstance(v, (list, tuple)):
+        return '[' + ', '.join(_yaml_val(x) for x in v) + ']'
+    return str(v)
+
+
+def _omittable(v):
+    """这个值「仍是默认值」时能不能省掉不写。
+
+    能省：浮点标量、嵌套消息、数组/序列 —— 它们是默认值时通常意味着「这一路用不到」
+          （ORBIT 目标里的 linear_*_pose、非 SHOOTING 时的 target_pose、
+           Float64MultiArray 的 layout、duration_sec=0 表示"按档位算"）。
+    不能省：整数 / 布尔 / 字符串 —— 这些多是枚举判别位，省了就看不出发的是哪一路
+            （motion_type: 0 = LINEAR、target_pose_state: 0 = STOWED、
+             return_to_start: false、enable: false），所以即使是默认值也照写。
+    这个取舍是照着 robot_arm_node/README.md 里手写的示例定的。
+    """
+    return not isinstance(v, (bool, int, str))
+
+
+def _yaml_msg(msg, full=False):
+    """消息对象 → ros2 CLI 吃的 flow 风格 YAML。
+
+    默认按 README 的写法**省掉仍是默认值的可省字段**（见 _omittable），这样一条
+    ORBIT 目标不会把一整套零值 linear_*_pose 抖出来、指令长度和 README 里手写的
+    示例一致。省掉的字段 = 默认值 = CLI 不填时的取值，所以短版与全版**语义完全
+    等价**，复制出去执行结果一样。full=True 可拿到全字段版（排查用）。
+
+    判等走序列化后的字符串比较，不用 == ：数组字段是 array.array/numpy，
+    == 可能返回逐元素结果而不是单个 bool。
+    """
+    dflt = None if full else type(msg)()
+    out = []
+    for f in msg.get_fields_and_field_types():
+        v = getattr(msg, f)
+        if dflt is not None and _omittable(v) and _yaml_val(v) == _yaml_val(getattr(dflt, f)):
+            continue
+        out.append(f'{f}: {_yaml_val(v)}')
+    return '{' + ', '.join(out) + '}'
+
+
+# 引号统一用双引号、action 默认不带 -f：与 robot_arm_node/README.md 里的示例一致，
+# 两边能直接对照（要看 feedback 就自己在 send_goal 后补 -f，README 也是这么写的）。
+# YAML 里只会出现数字/字母/{}[],.:- ，没有 $ 和反引号，双引号下不会被 shell 展开。
+def cli_action(name, action_cls, goal):
+    return f'ros2 action send_goal {name} {_ros_type(action_cls)} "{_yaml_msg(goal)}"'
+
+
+def cli_service(name, srv_cls, req):
+    return f'ros2 service call {name} {_ros_type(srv_cls)} "{_yaml_msg(req)}"'
+
+
+def cli_topic(name, msg, rate_hz=None):
+    """rate_hz=None → --once；给了就 --rate（点动是持续流，靠 Ctrl-C 停）。"""
+    opt = f'--rate {rate_hz} ' if rate_hz else '--once '
+    return f'ros2 topic pub {opt}{name} {_ros_type(type(msg))} "{_yaml_msg(msg)}"'
+
+
 STATE_LABELS = [
     (ArmMoveToPose.Goal.POSE_STATE_STOWED,   'STOWED  (0)  收纳位'),
     (ArmMoveToPose.Goal.POSE_STATE_OBSERVE,  'OBSERVE (1)  观察位'),
@@ -165,12 +255,15 @@ class CommanderTestNode(Node):
             self._q.put(('error', f'✗ {SRV_SWITCH_MODE} 不可用（mode_manager_node 没起来？）'))
             return
         req = SwitchControlMode.Request(); req.target_mode = target
+        self._q.put(('cmd', cli_service(SRV_SWITCH_MODE, SwitchControlMode, req)))
         self._mode_client.call_async(req).add_done_callback(
             lambda f: self._on_simple_result(f, f'SwitchMode→{MODE_NAMES.get(target, target)}'))
 
     # ── 速度指令下发（GUI 以 VEL_TICK_MS 周期调用；停止 = 发一帧 0，不是停止发布）──
     def publish_joint_velocity(self, v3):
-        self._jv_pub.publish(ArmJointVelocityCommand(velocities=[float(x) for x in v3]))
+        msg = ArmJointVelocityCommand(velocities=[float(x) for x in v3])
+        self._jv_pub.publish(msg)
+        return TOPIC_JOINT_VEL, msg      # 回传给 GUI 生成等效 CLI（按下时才用）
 
     def publish_cartesian_velocity(self, v3, w3=(0.0, 0.0, 0.0)):
         """末端 6 维 twist：v3 线速度 m/s，w3 角速度 °/s（绕 base 系 X/Y/Z）。"""
@@ -178,6 +271,7 @@ class CommanderTestNode(Node):
         msg.twist.vx, msg.twist.vy, msg.twist.vz = (float(x) for x in v3)
         msg.twist.wroll, msg.twist.wpitch, msg.twist.wyaw = (float(x) for x in w3)
         self._fc_pub.publish(msg)
+        return TOPIC_FOLLOW, msg
 
     def publish_joint_effort(self, t3):
         """臂 J1-3 关节力矩，N·m。mode_manager 按 URDF <limit effort> 夹紧后转发。
@@ -185,7 +279,9 @@ class CommanderTestNode(Node):
         注意与速度流的本质区别：**发 0 不等于「停住」**，而是「不施加力矩」——
         没有重力补偿时 J2/J3 会直接下垂。停止的正确含义是切回 TRAJECTORY 模式。
         """
-        self._je_pub.publish(Float64MultiArray(data=[float(x) for x in t3]))
+        msg = Float64MultiArray(data=[float(x) for x in t3])
+        self._je_pub.publish(msg)
+        return TOPIC_JOINT_EFF, msg
 
     # ── ArmMoveToPose ─────────────────────────────────────────────────────────────
     def send_mtp_goal(self, state, speed, return_to_start,
@@ -203,6 +299,7 @@ class CommanderTestNode(Node):
         spd  = {0:'SLOW',1:'NORMAL',2:'FAST'}.get(speed, str(speed))
         rts  = ' ↩return' if return_to_start else ''
         self._q.put(('log', f'→ MTP {name} speed={spd}{rts}'))
+        self._q.put(('cmd', cli_action(ACTION_MTP, ArmMoveToPose, goal)))
         self._mtp_client.send_goal_async(
             goal, feedback_callback=self._on_mtp_fb
         ).add_done_callback(self._on_mtp_response)
@@ -238,6 +335,7 @@ class CommanderTestNode(Node):
         dur  = f' {duration_sec:.2f}s' if duration_sec > 0 else f' speed={spd}'
         self._q.put(('log', f'→ MTJ {mode} [{joints[0]:.3f}, {joints[1]:.3f}, '
                             f'{joints[2]:.3f}]{dur}'))
+        self._q.put(('cmd', cli_action(ACTION_MTJ, ArmMoveToJoint, goal)))
         self._mtj_client.send_goal_async(
             goal, feedback_callback=self._on_mtj_fb
         ).add_done_callback(self._on_mtj_response)
@@ -297,6 +395,7 @@ class CommanderTestNode(Node):
         rts = ' ↩return' if return_to_start else ''
         self._q.put(('log', f'→ TSS LINEAR speed={spd}{rts}  '
                      f'起({sx:.2f},{sy:.2f},{sz:.2f})→终({ex:.2f},{ey:.2f},{ez:.2f})'))
+        self._q.put(('cmd', cli_action(ACTION_TSS, ArmTrajectoryShot, goal)))
         self._tss_client.send_goal_async(
             goal, feedback_callback=self._on_tss_fb
         ).add_done_callback(self._on_tss_response)
@@ -323,6 +422,7 @@ class CommanderTestNode(Node):
                      f'球心=({cx:.2f},{cy:.2f},{cz:.2f})  '
                      f'az({az_s:.1f}°→{az_e:.1f}°) el({el_s:.1f}°→{el_e:.1f}°) '
                      f'r({r_s:.3f}→{r_e:.3f}m)'))
+        self._q.put(('cmd', cli_action(ACTION_TSS, ArmTrajectoryShot, goal)))
         self._tss_client.send_goal_async(
             goal, feedback_callback=self._on_tss_fb
         ).add_done_callback(self._on_tss_response)
@@ -348,6 +448,7 @@ class CommanderTestNode(Node):
     def call_arm_stop(self):
         if not self._stop_client.wait_for_service(timeout_sec=0.5):
             self._q.put(('error', '✗ /robot_arm/stop 服务不可用')); return
+        self._q.put(('cmd', cli_service('/robot_arm/stop', ArmStop, ArmStop.Request())))
         self._stop_client.call_async(ArmStop.Request()).add_done_callback(
             lambda f: self._on_simple_result(f, 'Stop'))
 
@@ -355,18 +456,23 @@ class CommanderTestNode(Node):
         if not self._enable_client.wait_for_service(timeout_sec=0.5):
             self._q.put(('error', '✗ /robot_arm/enable 服务不可用')); return
         req = ArmEnable.Request(); req.enable = enable
+        self._q.put(('cmd', cli_service('/robot_arm/enable', ArmEnable, req)))
         self._enable_client.call_async(req).add_done_callback(
             lambda f: self._on_simple_result(f, 'Enable'))
 
     def call_arm_homing(self):
         if not self._homing_client.wait_for_service(timeout_sec=0.5):
             self._q.put(('error', '✗ /robot_arm/homing 服务不可用')); return
+        self._q.put(('cmd', cli_service('/robot_arm/homing', ArmHoming,
+                                        ArmHoming.Request())))
         self._homing_client.call_async(ArmHoming.Request()).add_done_callback(
             lambda f: self._on_simple_result(f, 'Homing'))
 
     def call_arm_reset_error(self):
         if not self._reset_error_client.wait_for_service(timeout_sec=0.5):
             self._q.put(('error', '✗ /robot_arm/reset_error 服务不可用')); return
+        self._q.put(('cmd', cli_service('/robot_arm/reset_error', ArmResetError,
+                                        ArmResetError.Request())))
         self._reset_error_client.call_async(ArmResetError.Request()).add_done_callback(
             lambda f: self._on_reset_error_result(f))
 
@@ -409,6 +515,7 @@ class App:
 
         # 速度点动的「按住即动」状态：None 或 ('joint'|'cart', [v1,v2,v3])
         self._vel_hold = None
+        self._vel_announce = False
 
         # 布局：ArmStatus 与日志常驻（操作任何面板时都要能看状态、看回显），
         # 四个动作面板收进标签页 —— 窗口高度从「六个面板之和」降到
@@ -434,6 +541,7 @@ class App:
         # 确保任何切页路径（含键盘 Ctrl-Tab）都不会把速度流留在按住状态。
         self._nb.bind('<<NotebookTabChanged>>', lambda _e: self._vel_release())
 
+        self._build_cmd_panel(main, pad)     # 等效 ROS2 指令（就在日志上面）
         self._build_log_panel(main, pad)
         self._poll()
         self._vel_tick()
@@ -815,12 +923,15 @@ class App:
         v = [0.0, 0.0, 0.0]
         v[index] = sign * mag
         self._vel_hold = (kind, v)
+        # 等效 CLI 只在「按下后的第一帧」生成，不是每 20ms 刷一次
+        self._vel_announce = True
 
     def _vel_release(self):
         if self._vel_hold is None:
             return
         kind, _ = self._vel_hold
         self._vel_hold = None
+        self._vel_announce = False
         # 松手立刻补一帧 0：比等 mode_manager 的 0.3s 断流看门狗停得更干脆
         self._publish_vel(kind, [0.0, 0.0, 0.0])
         if kind == 'effort':
@@ -830,20 +941,24 @@ class App:
             self._sv_vel_out.set('停止')
 
     def _publish_vel(self, kind, v):
+        """发一帧，并把 (topic, msg) 回传给调用方（_vel_tick 用它生成等效 CLI）。"""
         if kind == 'joint':
-            self.node.publish_joint_velocity(v)
-        elif kind == 'ang':
-            self.node.publish_cartesian_velocity([0.0, 0.0, 0.0], v)
-        elif kind == 'effort':
-            self.node.publish_joint_effort(v)
-        else:
-            self.node.publish_cartesian_velocity(v)
+            return self.node.publish_joint_velocity(v)
+        if kind == 'ang':
+            return self.node.publish_cartesian_velocity([0.0, 0.0, 0.0], v)
+        if kind == 'effort':
+            return self.node.publish_joint_effort(v)
+        return self.node.publish_cartesian_velocity(v)
 
     def _vel_tick(self):
         """50Hz 速度流：按住期间持续发布。tkinter after 驱动（不依赖 /clock）。"""
         if self._vel_hold is not None:
             kind, v = self._vel_hold
-            self._publish_vel(kind, v)
+            topic, msg = self._publish_vel(kind, v)
+            if self._vel_announce:
+                self._vel_announce = False
+                # 点动是 50Hz 持续流（松手补一帧 0 停），CLI 对应 --rate + Ctrl-C
+                self._set_cmd(cli_topic(topic, msg, rate_hz=int(1000 / VEL_TICK_MS)))
             unit = {'joint': 'rad/s', 'cart': 'm/s', 'ang': '°/s', 'effort': 'N·m'}[kind]
             tag  = {'joint': '关节', 'cart': '末端线速度', 'ang': '末端角速度',
                     'effort': '关节力矩'}[kind]
@@ -1036,6 +1151,48 @@ class App:
                   f'az={s["方位角Az"].get():.1f}° el={s["俯仰角El"].get():.1f}° '
                   f'r={r:.3f}m → ({px:.3f},{py:.3f},{pz:.3f})')
 
+    # ── 等效 ROS2 指令 ────────────────────────────────────────────────────────────
+    def _build_cmd_panel(self, parent, pad):
+        """显示最近一次下发对应的 ros2 CLI 指令，可一键复制到终端重放。
+
+        内容不是手写模板，而是从真正发出去的消息对象序列化出来的（见 cli_* 函数），
+        所以看到什么就是发了什么。
+        """
+        cf = ttk.LabelFrame(parent, text='等效 ROS2 指令（最近一次下发，可复制到终端重放）',
+                            padding=4)
+        cf.pack(fill=tk.X, padx=pad['padx'], pady=(6, 0))
+
+        btns = ttk.Frame(cf)
+        btns.pack(side=tk.RIGHT, fill=tk.Y, padx=(4, 0))
+        ttk.Button(btns, text='复制', width=6, command=self._copy_cmd).pack(pady=(0, 2))
+        ttk.Button(btns, text='清空', width=6,
+                   command=lambda: self._set_cmd('')).pack()
+
+        # state='disabled' 只挡编辑，鼠标选中 + Ctrl-C 仍然可用（不想点按钮时也能复制）
+        self._cmd_text = tk.Text(cf, height=3, font=('Courier', 9), wrap=tk.WORD,
+                                 state='disabled', relief=tk.SOLID, borderwidth=1)
+        self._cmd_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._last_cmd = ''
+        self._set_cmd('')
+
+    def _set_cmd(self, cmd: str):
+        self._last_cmd = cmd
+        self._cmd_text.configure(state='normal')
+        self._cmd_text.delete('1.0', tk.END)
+        self._cmd_text.insert('1.0', cmd or
+                              '（还没下发指令 —— 点上面任意动作/服务/点动按钮，'
+                              '这里出现等效的 ros2 命令）')
+        self._cmd_text.configure(state='disabled')
+
+    def _copy_cmd(self):
+        if not self._last_cmd:
+            self._log('✗ 还没有可复制的指令'); return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self._last_cmd)
+        # X11 下剪贴板归属要等一次事件循环才生效，不 update 的话粘贴可能拿到空
+        self.root.update()
+        self._log('⧉ 等效 ROS2 指令已复制到剪贴板')
+
     # ── 日志 ──────────────────────────────────────────────────────────────────────
     def _build_log_panel(self, parent, pad):
         lf = ttk.LabelFrame(parent, text='日志', padding=4)
@@ -1114,6 +1271,8 @@ class App:
             _, prog, elapsed, pose, az, el, r = item
             self._log(f'… TSS {prog:5.1f}%  {elapsed:.1f}s  '
                       f'z={pose.z:.3f}m  az={az:.1f}° el={el:.1f}° r={r:.3f}m')
+        elif t == 'cmd':
+            self._set_cmd(item[1])
         elif t in ('log', 'error'):
             self._log(item[1])
 
