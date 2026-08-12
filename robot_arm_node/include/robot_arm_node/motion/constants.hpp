@@ -31,11 +31,12 @@ inline const std::string PLANNING_GROUP = "arm";
 inline const std::string EEF_LINK       = "gimbal_tool0";
 inline const std::string BASE_FRAME     = "arm_base_link";
 
-// ── Ruckig / IK 时序 ────────────────────────────────────────────────────────
+// ── Ruckig 时序 ─────────────────────────────────────────────────────────────
 constexpr double STREAM_DT    = 0.01;   // s，Ruckig 步长（100Hz）
-constexpr double IK_SAMPLE_DT = 0.03;   // s，IK 采样步长
-constexpr int    IK_DECIMATE  = 3;      // round(IK_SAMPLE_DT / STREAM_DT)
-constexpr double IK_TIMEOUT_S = 0.05;   // 单次 IK 超时
+// IK 采样步长 / 抽取比 / 单次超时已于 2026-08-12 移入 tuning::params()
+//（ik.sample_dt / ik.timeout_s，抽取比由 sample_dt / STREAM_DT 推导），
+// 由 robot_arm_bringup/config/arm_params.yaml 配置。此处不再保留副本 —— 留一份
+// constexpr 就等于多一个会和 YAML 打架的来源。
 
 // ── 默认运动限制 ────────────────────────────────────────────────────────────
 constexpr double DEFAULT_V_POS = 0.05, DEFAULT_A_POS = 0.10, DEFAULT_J_POS = 1.00;

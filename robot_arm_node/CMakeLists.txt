@@ -44,6 +44,11 @@ set(_Boost_PYTHON310_HEADERS "boost/python.hpp")
 find_package(pinocchio REQUIRED)
 
 add_library(robot_arm_motion SHARED
+  # tuning：可调参数的单一入口（见 include/robot_arm_node/tuning.hpp）。放在最底层的
+  # motion 库里，因为 motion 与 commander 两层的头文件都要用 tuning::params()
+  # （kinematics/trajectory 的默认实参、各 server 的超时与容差），而 commander 已经
+  # link 了 motion —— 不必为它单开一个库。
+  src/tuning.cpp
   src/motion/gravity_model.cpp
   src/motion/jacobian.cpp
   src/motion/joint_limits.cpp

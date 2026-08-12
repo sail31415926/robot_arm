@@ -25,7 +25,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
-#include "robot_arm_node/motion/constants.hpp"    // JOINT_NAMES 等默认值
+#include "robot_arm_node/motion/constants.hpp"
+#include "robot_arm_node/tuning.hpp"    // JOINT_NAMES 等默认值
 #include "robot_arm_node/motion/kinematics.hpp"   // GetPositionIK / solve_ik / make_pose_stamped
 #include "robot_arm_node/motion/planning.hpp"     // Waypoint
 
@@ -71,8 +72,8 @@ PlanResult solve_and_send(
     const std::string & group = PLANNING_GROUP,
     const std::string & eef_link = EEF_LINK,
     const std::string & base_frame = BASE_FRAME,
-    int decimate_k = IK_DECIMATE,
-    double ik_timeout_s = IK_TIMEOUT_S,
+    int decimate_k = tuning::params().ik_decimate,
+    double ik_timeout_s = tuning::params().ik_timeout_s,
     const std::function<bool()> & stop_check = nullptr,
     rclcpp::Logger logger = rclcpp::get_logger("arm_motion"),
     // 出参：成功时写入**末点的关节解**。上层用它做「只判臂 J1-3」的到位判据

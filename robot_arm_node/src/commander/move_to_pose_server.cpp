@@ -17,20 +17,15 @@
 
 #include "robot_arm_node/commander/motion_policy.hpp"
 #include "robot_arm_node/motion/constants.hpp"
+#include "robot_arm_node/tuning.hpp"
 
 namespace robot_arm_node::commander
 {
 
 using ArmStatus = robot_arm_interfaces::msg::ArmStatus;
 
-namespace
-{
-constexpr double DEFAULT_TIMEOUT_SEC = 30.0;
-constexpr double FEEDBACK_RATE_HZ    = 10.0;
-const std::vector<double> STOWED_JOINTS(6, 0.0);                            // 下发目标：全 6 轴回零
-const std::vector<double> STOWED_ARM_TARGET(motion::ARM_JOINT_COUNT, 0.0);  // 到位判据：仅臂 J1-3
-constexpr double STOWED_DURATION_SEC = 2.0;
-}  // namespace
+// 超时 / 反馈频率 / 收纳位与时长均来自 tuning::params()（arm_params.yaml），
+// 原先是本文件匿名 namespace 里的 constexpr —— 实机想改收纳位得重编。
 
 MoveToPoseServer::MoveToPoseServer(rclcpp::Node & node, MotionExecutor & motion,
                                    state::StatusAggregator & status, ExecutionMonitor & monitor,
@@ -89,18 +84,22 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute(const std::shared_ptr
 MoveToPoseServer::Action::Result MoveToPoseServer::execute_stowed(const std::shared_ptr<GoalHandle> & gh)
 {
   RCLCPP_INFO(logger_, "STOWED: 全关节回零");
-  motion_.go_to_joints(STOWED_JOINTS, STOWED_DURATION_SEC);
+  const auto & tp = tuning::params();
+  motion_.go_to_joints(tp.stowed_joints, tp.stowed_duration_sec);
+  // 到位判据只认臂 J1-3（云台回读不收敛不该拖累成败，见 motion_policy.hpp）
+  const std::vector<double> STOWED_ARM_TARGET(tp.stowed_joints.begin(),
+                                              tp.stowed_joints.begin() + motion::ARM_JOINT_COUNT);
 
   // 到位/进度只判臂 J1-3（STOWED_ARM_TARGET）：J4-6 云台命令仍随轨迹下发，
   // 但其转发回读在云台未上电时永不收敛，不应阻塞机械臂回收
   ExecutionMonitor::WaitParams p;
-  p.arrived = [this]() {
+  p.arrived = [this, STOWED_ARM_TARGET]() {
     auto cur = motion_.get_current_joints();
     cur.resize(STOWED_ARM_TARGET.size());
     return is_at_joints(cur, STOWED_ARM_TARGET);
   };
   p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
-  p.on_feedback = [this, gh](double /*elapsed*/) {
+  p.on_feedback = [this, gh, STOWED_ARM_TARGET](double /*elapsed*/) {
     // 反馈基于关节接近度（非 elapsed 比例）
     const auto current = motion_.get_current_joints();
     double max_err = 0.0;
@@ -112,8 +111,8 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute_stowed(const std::sha
     fb->current_pose     = status_.pose();
     gh->publish_feedback(fb);
   };
-  p.timeout_sec = DEFAULT_TIMEOUT_SEC;
-  p.feedback_hz = FEEDBACK_RATE_HZ;
+  p.timeout_sec = tuning::params().move_to_pose_timeout_sec;
+  p.feedback_hz = tuning::params().feedback_hz;
   p.label = "STOWED ";
   const auto outcome = monitor_.wait_until(p);
 
@@ -159,8 +158,8 @@ MoveToPoseServer::Action::Result MoveToPoseServer::wait_arrival(
     fb->current_pose     = status_.pose();
     gh->publish_feedback(fb);
   };
-  p.timeout_sec = DEFAULT_TIMEOUT_SEC;
-  p.feedback_hz = FEEDBACK_RATE_HZ;
+  p.timeout_sec = tuning::params().move_to_pose_timeout_sec;
+  p.feedback_hz = tuning::params().feedback_hz;
   p.label = "MoveToPose ";
   const auto outcome = monitor_.wait_until(p);
 

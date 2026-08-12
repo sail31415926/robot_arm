@@ -17,6 +17,7 @@
 #include <thread>
 
 #include "robot_arm_node/motion/constants.hpp"
+#include "robot_arm_node/tuning.hpp"
 
 namespace robot_arm_node::commander
 {
@@ -43,8 +44,6 @@ const char * ARM_NODE_RECOVER_SRV   = "/arm_node/recover";
 const char * VELOCITY_ESTOP_SRV     = "/robot_arm/velocity_estop";
 const char * SWITCH_MODE_SRV        = "/robot_arm/switch_control_mode";
 
-const std::vector<double> HOMING_JOINTS(6, 0.0);
-constexpr double HOMING_DURATION = 4.0;
 }  // namespace
 
 ArmCommanderNode::ArmCommanderNode()
@@ -52,6 +51,10 @@ ArmCommanderNode::ArmCommanderNode()
 {
   using rclcpp_action::GoalResponse;
   using rclcpp_action::CancelResponse;
+
+  // ⚠️ 必须在任何子系统构造之前：容差/档位/超时等由各 server 在自己的执行路径上
+  //    通过 tuning::params() 读取，这里晚一步它们就会拿到结构体默认值而非 YAML 值。
+  tuning::declare_and_load(*this);
 
   // ── 参数：OBSERVE 预定义位姿（可覆盖）─────────────────────────────────────────
   declare_parameter("pose_observe_x", 0.3);
@@ -586,7 +589,7 @@ void ArmCommanderNode::on_arm_homing(
     return;
   }
   transition(CommanderState::MOVING);
-  motion_->go_to_joints(HOMING_JOINTS, HOMING_DURATION);
+  motion_->go_to_joints(tuning::params().homing_joints, tuning::params().homing_duration_sec);
 
   // 回零无 goal_handle / 无 Feedback：仅等关节回零或急停
   // 只判臂 J1-3：云台 J4-6 转发回读在云台未上电时不收敛，不阻塞回零
@@ -598,7 +601,7 @@ void ArmCommanderNode::on_arm_homing(
       m = std::max(m, std::fabs(cur[i]));
     return m < 0.05;
   };
-  p.timeout_sec = HOMING_DURATION + 2.0;
+  p.timeout_sec = tuning::params().homing_duration_sec + 2.0;
   p.feedback_hz = 0.0;
   p.poll_dt = 0.05;
   p.label = "回零 ";

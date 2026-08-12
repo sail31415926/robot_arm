@@ -20,6 +20,7 @@
 
 #include "robot_arm_node/commander/motion_policy.hpp"
 #include "robot_arm_node/motion/geometry.hpp"
+#include "robot_arm_node/tuning.hpp"
 
 namespace robot_arm_node::commander
 {
@@ -28,9 +29,7 @@ using ArmStatus = robot_arm_interfaces::msg::ArmStatus;
 
 namespace
 {
-constexpr double DEFAULT_TIMEOUT_SEC = 60.0;
-constexpr double FEEDBACK_RATE_HZ    = 10.0;
-constexpr double DWELL_AT_START_SEC  = 1.0;
+// 超时 / 反馈频率 / 起点停留来自 tuning::params()（arm_params.yaml）
 constexpr double DEG2RAD = M_PI / 180.0;
 
 // WaitOutcome → exit_reason 字符串（success 情形外）
@@ -233,10 +232,11 @@ bool TrajectoryShotServer::dwell_at_start(const std::shared_ptr<GoalHandle> & gh
 {
   status_.set_at_pose_start(true);
   status_.set_camera_ready(true);
-  RCLCPP_INFO(logger_, "%s 已到达起始点，停顿 %.1fs 后执行运镜", label, DWELL_AT_START_SEC);
+  const double dwell = tuning::params().dwell_at_start_sec;
+  RCLCPP_INFO(logger_, "%s 已到达起始点，停顿 %.1fs 后执行运镜", label, dwell);
 
   using clock = std::chrono::steady_clock;
-  const auto t_end = clock::now() + std::chrono::duration<double>(DWELL_AT_START_SEC);
+  const auto t_end = clock::now() + std::chrono::duration<double>(dwell);
   bool cancelled = false;
   while (clock::now() < t_end) {
     if (is_stopped_ && is_stopped_()) {
@@ -290,8 +290,8 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::move_and_wait(
     fb->current_radius_m      = static_cast<float>(radius);
     gh->publish_feedback(fb);
   };
-  p.timeout_sec = DEFAULT_TIMEOUT_SEC;
-  p.feedback_hz = FEEDBACK_RATE_HZ;
+  p.timeout_sec = tuning::params().trajectory_shot_timeout_sec;
+  p.feedback_hz = tuning::params().feedback_hz;
   p.label = std::string(label) + " ";
   const auto outcome = monitor_.wait_until(p);
 
@@ -310,9 +310,11 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::wait_at_pose(
   ExecutionMonitor::WaitParams p;
   p.arrived = arm_arrived_fn(target_joints, target);
   p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
-  p.on_feedback = [this, gh, p_lo, p_hi, azimuth, elevation, radius](double elapsed) {
+  const double timeout_ref = tuning::params().trajectory_shot_timeout_sec;
+  p.on_feedback = [this, gh, p_lo, p_hi, azimuth, elevation, radius,
+                  timeout_ref](double elapsed) {
     // 轨迹已下发、无 dist 依据；沿用原实现的 0.1×timeout 归一化
-    const double ratio = std::min(elapsed / std::max(DEFAULT_TIMEOUT_SEC * 0.1, 1e-6), 0.999);
+    const double ratio = std::min(elapsed / std::max(timeout_ref * 0.1, 1e-6), 0.999);
     auto fb = std::make_shared<Action::Feedback>();
     fb->progress_percent      = static_cast<float>(p_lo + ratio * (p_hi - p_lo));
     fb->elapsed_sec           = static_cast<float>(elapsed);
@@ -322,8 +324,8 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::wait_at_pose(
     fb->current_radius_m      = static_cast<float>(radius);
     gh->publish_feedback(fb);
   };
-  p.timeout_sec = DEFAULT_TIMEOUT_SEC;
-  p.feedback_hz = FEEDBACK_RATE_HZ;
+  p.timeout_sec = tuning::params().trajectory_shot_timeout_sec;
+  p.feedback_hz = tuning::params().feedback_hz;
   p.label = std::string(label) + " ";
   const auto outcome = monitor_.wait_until(p);
 

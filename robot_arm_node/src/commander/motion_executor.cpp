@@ -24,6 +24,7 @@
 #include "robot_arm_node/motion/geometry.hpp"
 #include "robot_arm_node/motion/kinematics.hpp"
 #include "robot_arm_node/motion/trajectory.hpp"
+#include "robot_arm_node/tuning.hpp"
 
 namespace robot_arm_node::commander
 {
@@ -160,7 +161,7 @@ std::pair<std::optional<std::vector<double>>, int> MotionExecutor::ik_sync(
   const auto seed = status_.joint_position_list(motion::JOINT_NAMES);
   // 单点 IK：不设 ik_link_name（eef_link=""），与 Python ik_sync 一致
   auto res = motion::solve_ik(ik_client_, pose_stamped, seed, motion::JOINT_NAMES,
-                              motion::PLANNING_GROUP, "", motion::IK_TIMEOUT_S,
+                              motion::PLANNING_GROUP, "", tuning::params().ik_timeout_s,
                               /*wait_service=*/true, logger_);
   return {res.joints, res.error_code};
 }
@@ -176,7 +177,8 @@ motion::PlanResult MotionExecutor::solve_and_send(const std::vector<motion::Wayp
   };
   return motion::solve_and_send(node_, ik_client_, traj_pub_, all_pts, seed,
                                 motion::JOINT_NAMES, motion::PLANNING_GROUP, motion::EEF_LINK,
-                                motion::BASE_FRAME, motion::IK_DECIMATE, motion::IK_TIMEOUT_S,
+                                motion::BASE_FRAME, tuning::params().ik_decimate,
+                                tuning::params().ik_timeout_s,
                                 stop_check, logger_, final_joints);
 }
 

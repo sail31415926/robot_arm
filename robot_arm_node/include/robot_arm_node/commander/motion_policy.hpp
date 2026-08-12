@@ -19,35 +19,25 @@
 
 #include <robot_arm_interfaces/msg/arm_pose.hpp>
 
+#include "robot_arm_node/tuning.hpp"
+
 namespace robot_arm_node::commander
 {
 
 using ArmPose = robot_arm_interfaces::msg::ArmPose;
 
-// ── 到位容差 ────────────────────────────────────────────────────────────────
-constexpr double POSITION_TOLERANCE_M      = 0.01;   // 位置容差（米）
-constexpr double ORIENTATION_TOLERANCE_DEG = 2.0;    // 姿态容差（度）
-constexpr double JOINT_TOLERANCE_RAD       = 0.02;   // 关节容差（rad）
-
-// ── 速度档位限制（值单一来源）────────────────────────────────────────────────
-struct Speed
-{
-  double v_pos, a_pos, j_pos;   // 位置：速度/加速/加加速
-  double v_ori, a_ori, j_ori;   // 姿态：速度/加速/加加速
-};
-inline constexpr Speed SPEED_SLOW_LIMITS  {0.02, 0.05, 0.50, 0.05, 0.10, 1.00};
-inline constexpr Speed SPEED_NORMAL_LIMITS{0.05, 0.10, 1.00, 0.10, 0.20, 2.00};
-inline constexpr Speed SPEED_FAST_LIMITS  {0.10, 0.20, 2.00, 0.20, 0.40, 4.00};
+// ── 到位容差 / 速度档位「值」──────────────────────────────────────────────────
+// 2026-08-12：这些量从本文件的 constexpr 挪进了 tuning::params()，由
+// robot_arm_bringup/config/arm_params.yaml 配置（实机标定要动的就是它们，
+// 原来改一个数得重编）。本文件保留「判据与档位映射的唯一来源」这个职责，
+// 只是数值改为运行期读取 —— 下面所有函数的名字与签名都没变，调用点无需改。
+using Speed = tuning::Speed;
 
 // ArmMoveToPose / ArmTrajectoryShot 的 SPEED_SLOW/NORMAL/FAST 取值一致（0/1/2），
-// 故此处只按数值映射（对应 Python 各 server 的 SPEED_PROFILES）。
+// 故只按数值映射（非法值落 NORMAL）。
 inline const Speed & speed_profile(uint8_t k)
 {
-  switch (k) {
-    case 0:  return SPEED_SLOW_LIMITS;
-    case 2:  return SPEED_FAST_LIMITS;
-    default: return SPEED_NORMAL_LIMITS;   // 含 SPEED_NORMAL(1) 与非法值
-  }
+  return tuning::params().speed(k);
 }
 
 // ── 关节空间速度档位（rad/s，**平均**角速度）─────────────────────────────────
@@ -56,19 +46,10 @@ inline const Speed & speed_profile(uint8_t k)
 // 峰值角速度：两点 JointTrajectory 由 JTC 做五次多项式插值，峰值 ≈ 1.875 × 平均值，
 //   故 FAST 的峰值 ≈ 2.25 rad/s，仍低于 URDF 里 J1-3 的 velocity=3.14 rad/s 机械限。
 // 量级校准：FAST 走满行程（J1 的 ±2.618）约 2.2 s，与既有 STOWED 回零的固定 2.0 s 相当。
-inline constexpr double JOINT_SPEED_SLOW_RPS   = 0.30;
-inline constexpr double JOINT_SPEED_NORMAL_RPS = 0.60;
-inline constexpr double JOINT_SPEED_FAST_RPS   = 1.20;
-inline constexpr double JOINT_MIN_DURATION_SEC = 0.5;    // 短距离下限，避免除出极小时长
-inline constexpr double JOINT_MAX_DURATION_SEC = 30.0;   // 上限，兜住异常大位移
-
+// 档位角速度与时长上下限同样移入 tuning（joint_speed.* / posture.*）。
 inline double joint_speed_profile(uint8_t k)
 {
-  switch (k) {
-    case 0:  return JOINT_SPEED_SLOW_RPS;
-    case 2:  return JOINT_SPEED_FAST_RPS;
-    default: return JOINT_SPEED_NORMAL_RPS;   // 含 SPEED_NORMAL(1) 与非法值
-  }
+  return tuning::params().joint_speed_rps(k);
 }
 
 // 按档位计算关节空间点到点时长：max|Δq| / v_档位，夹在 [MIN, MAX] 内。
@@ -82,7 +63,8 @@ inline double joint_move_duration(const std::vector<double> & cur,
     max_delta = std::max(max_delta, std::fabs(tgt[i] - cur[i]));
   }
   const double dur = max_delta / joint_speed_profile(speed_key);
-  return std::min(std::max(dur, JOINT_MIN_DURATION_SEC), JOINT_MAX_DURATION_SEC);
+  const auto & tp = tuning::params();
+  return std::min(std::max(dur, tp.joint_min_duration_sec), tp.joint_max_duration_sec);
 }
 
 // ── 到位判定 ────────────────────────────────────────────────────────────────
@@ -95,8 +77,8 @@ inline double angular_diff(double a, double b)
 
 // 末端是否到达目标（位置 + 姿态双容差）
 inline bool is_at_pose(const ArmPose & c, const ArmPose & t,
-                       double pos_tol = POSITION_TOLERANCE_M,
-                       double ori_tol = ORIENTATION_TOLERANCE_DEG)
+                       double pos_tol = tuning::params().position_tolerance_m,
+                       double ori_tol = tuning::params().orientation_tolerance_deg)
 {
   const bool pos_ok = std::fabs(c.x - t.x) < pos_tol &&
                       std::fabs(c.y - t.y) < pos_tol &&
@@ -109,7 +91,7 @@ inline bool is_at_pose(const ArmPose & c, const ArmPose & t,
 
 // 所有关节是否到位（逐轴容差）
 inline bool is_at_joints(const std::vector<double> & c, const std::vector<double> & t,
-                         double tol = JOINT_TOLERANCE_RAD)
+                         double tol = tuning::params().joint_tolerance_rad)
 {
   if (c.size() != t.size()) return false;
   for (size_t i = 0; i < c.size(); ++i) {
@@ -127,7 +109,7 @@ inline bool is_at_joints(const std::vector<double> & c, const std::vector<double
 // 就永远不满足 → 动作全部走到 timeout 报错，哪怕机械臂本身早就到位了。
 // 规划/下发仍是 6 轴（云台跟着一起动），只是**判据只认臂**，这样云台不拖累成败。
 inline bool is_at_joints_prefix(const std::vector<double> & c, const std::vector<double> & t,
-                               size_t n, double tol = JOINT_TOLERANCE_RAD)
+                               size_t n, double tol = tuning::params().joint_tolerance_rad)
 {
   if (c.size() < n || t.size() < n) return false;
   for (size_t i = 0; i < n; ++i) {

@@ -30,6 +30,9 @@ backend 保留自己的时序编排，只调用这里的工厂拿「同一份节
 @copyright Copyright (c) 2026 eMeet
 """
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch.actions import ExecuteProcess
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
@@ -49,6 +52,20 @@ SERVO_MODES  = ['cartesian_velocity']
 SAFE_POSE_CMD = ('{joint_names: [Joint1,Joint2,Joint3,Joint4,Joint5,Joint6], '
                  'points: [{positions: [0.0, 1.0, -1.5, 0.0, 0.3, 0.0], '
                  'time_from_start: {sec: 3, nanosec: 0}}]}')
+
+
+# ── 可调参数文件（调参的唯一入口，见 config/arm_params.yaml 头部说明）──────────────
+# 分层：arm_params.yaml 写全量默认值（仿真直接用），实机再叠一层 arm_params_real.yaml
+# 只覆盖差异项。ROS 2 的 parameters 列表**后者赢**，所以顺序不能反。
+# 两个节点（arm_commander / mode_manager_node）共用同一份文件 —— YAML 里按节点名分段，
+# 节点只吃自己那段，互不干扰。
+def arm_param_files(real: bool = False):
+    """返回要挂给节点的参数文件路径列表（real=True 时追加实机覆盖层）。"""
+    cfg = os.path.join(get_package_share_directory('robot_arm_bringup'), 'config')
+    files = [os.path.join(cfg, 'arm_params.yaml')]
+    if real:
+        files.append(os.path.join(cfg, 'arm_params_real.yaml'))
+    return files
 
 
 # ── 日志工具 ────────────────────────────────────────────────────────────────────
@@ -148,7 +165,8 @@ def safe_pose_action(condition):
 
 
 # ── 控制模式仲裁器（基础设施，所有模式常驻）──────────────────────────────────────
-def mode_manager_node(use_sim_time, hold_controllers=None, effort_controller=None):
+def mode_manager_node(use_sim_time, hold_controllers=None, effort_controller=None,
+                      real=False):
     """语义控制模式的唯一权威（TRAJECTORY/JOINT_VELOCITY/...），后端无感。
 
     非模式相关基础设施，与 ctrl 无关、常驻启动：上层通过
@@ -171,15 +189,19 @@ def mode_manager_node(use_sim_time, hold_controllers=None, effort_controller=Non
         params['hold_controllers'] = list(hold_controllers)
     if effort_controller:
         params['effort_controller'] = effort_controller
+    # 顺序 = 优先级（后者赢）：YAML 默认 → 实机覆盖 → launch 按后端算出来的 kwargs。
+    # 所以 effort_controller 这类「后端决定」的项由 launch 兜底覆盖 YAML，
+    # 而容差/限幅这类「标定决定」的项归 YAML。
     return Node(package='robot_arm_node', executable='mode_manager_node', output='screen',
-                parameters=[params])
+                parameters=[*arm_param_files(real=real), params])
 
 
 # ── commander + test_gui ─────────────────────────────────────────────────────────
-def commander_nodes(ctrl, gui, use_sim_time):
+def commander_nodes(ctrl, gui, use_sim_time, real=False):
+    """real=True 时额外叠加 arm_params_real.yaml（实机覆盖层）。"""
     return [
         Node(package='robot_arm_node', executable='arm_commander_node', output='screen',
-             parameters=[{'use_sim_time': use_sim_time}],
+             parameters=[*arm_param_files(real=real), {'use_sim_time': use_sim_time}],
              condition=is_mode(ctrl, 'commander')),
         Node(package='robot_arm_debug', executable='commander_test_gui', output='screen',
              parameters=[{'use_sim_time': use_sim_time}],

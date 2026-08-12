@@ -186,7 +186,7 @@ def _setup(context, *args, **kwargs):
 
     # 控制模式仲裁器（常驻基础设施，实物无 /clock → use_sim_time=False）
     # hold_controllers 只在 PV 后端生效（默认 trajectory 后端不切控制器，也就不需要保持控制器）
-    mode_manager = common.mode_manager_node(use_sim_time=False,
+    mode_manager = common.mode_manager_node(real=True, use_sim_time=False,
                                             hold_controllers=['gimbal_controller'])
 
     # ── GUI controller nodes（复用共享工厂）─────────────────────────────────────
@@ -273,7 +273,7 @@ def _setup(context, *args, **kwargs):
     # t=10s：等 move_group planning scene 完全就绪后再启动
     commander_start = TimerAction(
         period=10.0,
-        actions=common.commander_nodes(ctrl, gui, use_sim_time=False),
+        actions=common.commander_nodes(ctrl, gui, use_sim_time=False, real=True),
         condition=is_commander,
     )
 

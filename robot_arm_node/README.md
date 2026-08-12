@@ -73,6 +73,51 @@ Director 通过 `/robot_chassis/motion_cmd` 中的 `arm` 子字段下发，由�
 
 ---
 
+## 可调参数（调参改这里，不用重编）
+
+所有能调的量都收在 **一个文件**里：
+
+```text
+robot_arm_bringup/config/arm_params.yaml        # 全量默认值，仿真直接用
+robot_arm_bringup/config/arm_params_real.yaml   # 实机覆盖层，只写偏离默认的项
+```
+
+`real.launch.py` 依次挂两份（**后者赢**），`gazebo/mujoco` 只挂第一份。涵盖：
+
+| 段 | 内容 |
+| --- | --- |
+| `tolerance.*` | 到位容差（位置 / 姿态 / 关节）—— 实机静差大，容差太紧会让动作走到 timeout |
+| `speed_profiles.*` | SLOW/NORMAL/FAST 三档笛卡尔限制，每档 `[v_pos a_pos j_pos v_ori a_ori j_ori]` |
+| `joint_speed.*` | 关节空间档位角速度与时长上下限（`ArmMoveToJoint` 按 max\|Δq\|/档位 反算时长） |
+| `ik.*` | 单次 IK 超时、采样步长（抽取比由采样步长推导，不单独配） |
+| `action.*` | 三个 action 的超时与 feedback 频率、自碰撞检查等待 |
+| `posture.*` | 收纳位 / 回零位关节角、收纳与回零时长、运镜起点停留 |
+| `velocity_stream.*` | 速度流频率、前瞻、限幅、奇异阈值等 18 项 |
+| `mode_manager_node:` | 限幅、看门狗、重力补偿、力矩节拍与阻尼、速度后端选择、控制器/话题名 |
+
+三条必须知道的规矩：
+
+1. **YAML 顶层键是节点名**：commander 的节点名是 `arm_commander`（可执行文件才叫
+   `arm_commander_node`）。写错**不报错、参数静默不生效**，全部跑 C++ 默认值。
+2. **只有 declare 过的参数才吃得进去**，YAML 里多写的键同样被静默忽略。新增参数要同时在
+   `src/tuning.cpp` 里 declare（那里是 `tuning::params()` 的唯一装配点）。
+3. **运行期不改**：没有 `on_set_parameters` 回调，`ros2 param set` 改不动已加载的值 ——
+   容差/档位在动作执行中途变会让到位判据与规划限制不自洽。改 YAML 重启节点。
+
+确认改动真的生效：
+
+```bash
+ros2 param get /arm_commander tolerance.joint_rad
+ros2 param get /arm_commander joint_speed.fast_rps
+# 启动日志里也会打一行汇总：
+# [arm_commander]: tuning 已加载：容差 0.010m/2.0°/0.020rad  IK 50ms(抽取 1/3) ...
+```
+
+C++ 侧的默认值（`include/robot_arm_node/tuning.hpp` 结构体初值）= 参数化之前各处
+`constexpr` 的原值，只作「没挂 YAML 也能跑」的兜底，**不要在那里调参**。
+
+---
+
 ## Arm Commander 接口参考
 
 Arm Commander 是机械臂的中间层状态机，对外暴露 **4 个 Action 接口**：

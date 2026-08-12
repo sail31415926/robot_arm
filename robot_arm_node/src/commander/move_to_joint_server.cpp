@@ -15,6 +15,7 @@
 
 #include "robot_arm_node/commander/motion_policy.hpp"
 #include "robot_arm_node/motion/constants.hpp"
+#include "robot_arm_node/tuning.hpp"
 
 namespace robot_arm_node::commander
 {
@@ -24,11 +25,8 @@ using namespace std::chrono_literals;
 
 namespace
 {
-constexpr double FEEDBACK_RATE_HZ      = 10.0;
-constexpr double TIMEOUT_MARGIN_SEC    = 5.0;    // 超时 = 计划时长 + 余量（下限 10s）
-constexpr double TIMEOUT_FLOOR_SEC     = 10.0;
-constexpr double VALIDITY_WAIT_SEC     = 0.3;    // 自碰撞检查等应答上限
-constexpr int    VALIDITY_WARN_THROTTLE_MS = 5000;
+// 超时余量/下限、反馈频率、自碰撞检查等待均来自 tuning::params()（arm_params.yaml）
+constexpr int VALIDITY_WARN_THROTTLE_MS = 5000;   // 纯日志节流，不值得开成参数
 }  // namespace
 
 MoveToJointServer::MoveToJointServer(rclcpp::Node & node, MotionExecutor & motion,
@@ -71,11 +69,12 @@ bool MoveToJointServer::collision_free(const std::vector<double> & full_target)
   req->robot_state.is_diff = false;
 
   auto future = validity_cli_->async_send_request(req);
-  if (future.wait_for(std::chrono::duration<double>(VALIDITY_WAIT_SEC)) !=
+  if (future.wait_for(std::chrono::duration<double>(tuning::params().validity_wait_sec)) !=
       std::future_status::ready)
   {
     validity_cli_->remove_pending_request(future);
-    RCLCPP_WARN(logger_, "自碰撞检查超时（%.1fs）— 本次放行（fail-open）", VALIDITY_WAIT_SEC);
+    RCLCPP_WARN(logger_, "自碰撞检查超时（%.1fs）— 本次放行（fail-open）",
+                tuning::params().validity_wait_sec);
     return true;
   }
   return future.get()->valid;
@@ -161,8 +160,9 @@ MoveToJointServer::Action::Result MoveToJointServer::execute(const std::shared_p
     fb->current_joints = cur;
     gh->publish_feedback(fb);
   };
-  p.timeout_sec = std::max(duration + TIMEOUT_MARGIN_SEC, TIMEOUT_FLOOR_SEC);
-  p.feedback_hz = FEEDBACK_RATE_HZ;
+  p.timeout_sec = std::max(duration + tuning::params().move_to_joint_timeout_margin_sec,
+                           tuning::params().move_to_joint_timeout_floor_sec);
+  p.feedback_hz = tuning::params().feedback_hz;
   p.label = "MoveToJoint ";
   const auto outcome = monitor_.wait_until(p);
 

@@ -25,6 +25,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "robot_arm_node/motion/constants.hpp"
+#include "robot_arm_node/tuning.hpp"
 
 namespace robot_arm_node::motion
 {
@@ -54,7 +55,7 @@ IkResult solve_ik(
     const std::vector<std::string> & joint_names = JOINT_NAMES,
     const std::string & group = PLANNING_GROUP,
     const std::string & eef_link = "",
-    double timeout_s = IK_TIMEOUT_S,
+    double timeout_s = tuning::params().ik_timeout_s,
     bool wait_service = true,
     rclcpp::Logger logger = rclcpp::get_logger("arm_motion"));
 

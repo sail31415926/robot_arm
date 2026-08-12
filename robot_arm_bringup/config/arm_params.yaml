@@ -1,0 +1,131 @@
+# arm_params.yaml — 机械臂可调参数总表（全后端默认值）
+#
+# 这是**调参的唯一入口**：想改到位容差、速度档位、超时、收纳位、速度流限幅等等，改这里，
+# 重启节点即生效，不需要重编。仿真（gazebo/mujoco）直接用这一份；实机在此基础上叠加
+# arm_params_real.yaml 覆盖差异项（launch 按顺序挂两份，后者赢）。
+#
+# ⚠️ 三条踩过的规矩，改之前先看：
+#   1. 顶层键是**节点名**，不是可执行文件名。commander 的节点名是 `arm_commander`
+#      （可执行文件叫 arm_commander_node，别混）。写错**不报错、参数静默不生效**，
+#      全部跑 C++ 默认值。核对：`ros2 param list /arm_commander`。
+#   2. 只有节点 declare_parameter 过的参数才吃得进去，YAML 里多写的键同样被静默忽略。
+#      新增参数要同时在 robot_arm_node/src/tuning.cpp（或对应节点）里 declare。
+#   3. 本文件的值 = 参数化之前源码里各处 constexpr 的原值，所以「什么都不改」的行为
+#      与历史完全一致。C++ 侧留着同样的默认值，只是为了没挂 YAML 时也能跑。
+#
+# 值改完想确认真的生效：`ros2 param get /arm_commander tolerance.joint_rad`
+
+arm_commander:
+  ros__parameters:
+
+    # ── OBSERVE 预定义位姿（末端在 arm_base_link 系，m / °）────────────────────
+    pose_observe_x: 0.3
+    pose_observe_y: 0.0
+    pose_observe_z: 0.65
+    # 云台 V2 起，画面水平所需的 EEF roll = 0°（见 motion/geometry.hpp 的推导）
+    pose_observe_roll: 0.0
+    pose_observe_pitch: 0.0
+    pose_observe_yaw: 0.0
+
+    # ── 到位容差 ──────────────────────────────────────────────────────────────
+    # 实机静差比仿真大得多（仿真位置接口是运动学瞬移、误差恒为 0）。容差给太紧的表现
+    # 不是"精度高"，而是所有动作走到 timeout 报错 —— 臂其实早就停在那儿了。
+    tolerance:
+      position_m: 0.01        # 末端位置（m）
+      orientation_deg: 2.0    # 末端姿态（°）
+      joint_rad: 0.02         # 关节（rad）；笛卡尔动作的到位判据也只认臂 J1-3 的这个值
+
+    # ── 笛卡尔速度档位（ArmMoveToPose / ArmTrajectoryShot 的 SLOW/NORMAL/FAST）─
+    # 每档 6 个数，顺序固定：[v_pos a_pos j_pos v_ori a_ori j_ori]
+    #   位置：m/s, m/s², m/s³      姿态：rad/s, rad/s², rad/s³
+    # 直接喂给 Ruckig；改大先在仿真看轨迹是否还平顺，再上实机。
+    speed_profiles:
+      slow:   [0.02, 0.05, 0.50, 0.05, 0.10, 1.00]
+      normal: [0.05, 0.10, 1.00, 0.10, 0.20, 2.00]
+      fast:   [0.10, 0.20, 2.00, 0.20, 0.40, 4.00]
+
+    # ── 关节空间档位（ArmMoveToJoint：按 max|Δq| / 档位角速度 反算时长）────────
+    # 是**平均**角速度。JTC 五次多项式插值的峰值 ≈ 1.875×平均，
+    # 所以 fast_rps=1.20 的峰值 ≈ 2.25 rad/s，仍低于 URDF 里 J1-3 的 velocity=3.14。
+    joint_speed:
+      slow_rps: 0.30
+      normal_rps: 0.60
+      fast_rps: 1.20
+      min_duration_sec: 0.5    # 短距离下限，避免除出极小时长
+      max_duration_sec: 30.0   # 上限，兜住异常大位移
+
+    # ── IK / 时序 ─────────────────────────────────────────────────────────────
+    ik:
+      timeout_s: 0.05    # 单次 /compute_ik 超时；实机 CPU 吃紧或场景复杂时要放大
+      sample_dt: 0.03    # IK 采样步长（s）。抽取比由 sample_dt / STREAM_DT(0.01) 自动推导，
+                         # 没有单独的 decimate 参数——两个都开必然出现互相矛盾的组合
+
+    # ── action 超时与反馈频率 ─────────────────────────────────────────────────
+    action:
+      feedback_hz: 10.0                      # 三个 action 共用
+      move_to_pose_timeout_sec: 30.0
+      trajectory_shot_timeout_sec: 60.0
+      move_to_joint_timeout_margin_sec: 5.0  # 超时 = 计划时长 + 余量
+      move_to_joint_timeout_floor_sec: 10.0  # 但不低于此下限
+      validity_wait_sec: 0.3                 # /check_state_validity 等应答上限（超时 fail-open）
+
+    # ── 固定动作与姿态 ────────────────────────────────────────────────────────
+    posture:
+      stowed_duration_sec: 2.0     # STOWED 收纳（关节空间直发）时长
+      homing_duration_sec: 4.0     # ArmHoming 回零时长
+      dwell_at_start_sec: 1.0      # 运镜正式开拍前在起点停留
+      # 6 轴，rad，顺序 Joint1..Joint6。样机的"该收到哪"未必就是机械零点，所以可调。
+      stowed_joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      homing_joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # ── 速度流（JOINT_VELOCITY / 笛卡尔速度点动 → 积分成位置流 → JTC）─────────
+    velocity_stream:
+      rate_hz: 50.0            # ⚠️ 别按主环频率发：JTC 每收一条新轨迹就丢弃旧的重新插值，
+                               #    100Hz 抢占会让它一直在"重启轨迹"而跟不动。实机另见 real 覆盖。
+      command_timeout: 0.3     # 上游断流判定
+      lookahead: 0.05          # 前瞻时长：下发"设定点 + q̇×lookahead"，斜率才对得上
+      stop_time: 0.15          # 松手停车用的时长（停在实测位置、零终端速度）
+      max_lag: 0.20            # 指令领先实测的上限；超了只冻结积分，绝不把实测写进指令
+      max_accel: 2.0           # q̇ 斜率限幅（rad/s²），把阶跃速度指令平滑成梯形
+      max_linear_speed: 0.20   # 末端线速度上限（m/s），与 ArmFollowCommand.msg 承诺一致
+      max_angular_speed: 1.0   # 末端角速度上限（rad/s）
+      max_joint_speed: 1.0     # 单轴角速度上限（rad/s）
+      max_gimbal_speed: 2.0    # 云台轴角速度上限（rad/s）
+      singularity_eps: 0.02    # 奇异判据阈值
+      damping_max: 0.05        # DLS 最大阻尼
+
+mode_manager_node:
+  ros__parameters:
+
+    # ── 限幅与安全 ────────────────────────────────────────────────────────────
+    max_joint_velocity: 1.0    # 速度总线单轴限幅（rad/s）
+    max_joint_effort: 0.0      # 力矩总线限幅（N·m）；0 = 用 URDF <limit effort>
+    limit_brake_zone: 0.15     # 距关节限位这么近（rad）时朝限位方向的速度被刹停
+    watchdog_timeout: 0.3      # 速度/力矩指令断流看门狗（s）
+    resync_time: 0.3           # 切模式后位置流重新对齐的时长（s）
+
+    # ── 力矩模式（JOINT_EFFORT，2026-08-11 仿真开通）────────────────────────
+    # ⚠️ 力矩模式下发 0 不是"停"而是"自由下垂"，所以是定时节拍持续发
+    #    g(q) + 用户增量 − d·q̇，不是"收到指令才发"。
+    gravity_compensation: true
+    effort_rate_hz: 100.0
+    effort_damping: 1.5        # d（N·m·s/rad）；纯重力补偿无耗散会单向漂
+
+    # ── 速度后端选择 ──────────────────────────────────────────────────────────
+    # trajectory        = 解算成位置流走 arm_controller（默认，不切控制器）
+    # velocity_controller = 切 arm_velocity_controller 走驱动器内部速度环 CiA402 PV(3)
+    #                       （切回来会有陈旧命令/云台失管等一串坑，见 CLAUDE.md）
+    velocity_backend: "trajectory"
+    default_mode: 0            # 0=TRAJECTORY 1=JOINT_VELOCITY 2=JOINT_EFFORT 3=ADMITTANCE
+
+    # ── 控制器名与话题（**必须**与 controllers.yaml 里一致，后端无感切换靠它们同名）──
+    controller_manager: "/controller_manager"
+    trajectory_controller: "arm_controller"
+    velocity_controller: "arm_velocity_controller"
+    effort_controller: ""      # 实机故意留空 = 拒绝切力矩模式（无重力补偿标定）；
+                               # 仿真由 launch 传 arm_effort_controller 覆盖
+    velocity_input_topic: "/robot_arm/cmd/joint_velocity"
+    velocity_command_topic: "/arm_velocity_controller/commands"
+    effort_input_topic: "/robot_arm/cmd/joint_effort"
+    effort_command_topic: "/arm_effort_controller/commands"
+    trajectory_command_topic: "/arm_controller/joint_trajectory"
