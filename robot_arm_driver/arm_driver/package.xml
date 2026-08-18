@@ -29,6 +29,12 @@
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
 
+  <!-- 单电机调试平台：motor_debug_backend（C++ 后端）+ scripts/motor_debug_gui.py（PyQt5） -->
+  <depend>std_msgs</depend>
+  <depend>canopen_interfaces</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>python3-pyqt5</exec_depend>
+
   <!-- 运行时硬件栈：master/402 驱动 -->
   <exec_depend>canopen_core</exec_depend>
   <exec_depend>canopen_master_driver</exec_depend>

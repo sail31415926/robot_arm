@@ -19,13 +19,22 @@ robot_arm_driver/               ← 容器目录（本身不是 ament 包，没�
 │   │   ├── motor_unit_converter.hpp ← 单位换算 rad↔pp（单一权威，524288 counts/rev）
 │   │   └── sdo_client.hpp      ← 极简 SDO 客户端 + 主站心跳（标定工具共用）
 │   ├── launch/
-│   │   └── test_arm.launch.py  ← 自测入口（mock / vcan 假从站 / 真机 三合一）
-│   └── src/
-│       ├── arm_driver_services.cpp ← 常驻伴生节点：/arm_node/{enable,disable,recover}
-│       └── tools/              ← 独立标定/调参工具（占总线，先停 ros2_control 栈再跑）
-│           ├── set_encoder_zero.cpp   ← 编码器零点标定（HM 方法 35，断电保持）
-│           ├── set_motor_limits.cpp   ← 限速/软限位/最大转矩 查看与设定（rad 输入）
-│           └── unit_convert.cpp       ← 命令行换算器 rad↔pp（改 bus.yml 时用）
+│   │   ├── test_arm.launch.py  ← 自测入口（mock / vcan 假从站 / 真机 三合一）
+│   │   └── motor_debug.launch.py   ← 单电机调试平台（后端+GUI，一个 launch 一个电机）
+│   ├── scripts/                ← Python 脚本（新增 .py 必须进 CMake install(PROGRAMS)）
+│   │   └── motor_debug_gui.py  ← 调试平台 PyQt5 前端（只做界面，不碰 CAN）
+│   └── src/                    ← 按角色分类（2026-08-17 整理）
+│       ├── hardware/           ← ros2_control 硬件插件
+│       │   └── unwrap_robot_system.cpp ← RobotSystem + 绝对编码器 2π 折算
+│       ├── nodes/              ← 常驻 ROS 节点
+│       │   ├── arm_driver_services.cpp ← /arm_node/{enable,disable,recover}
+│       │   └── motor_debug_backend.cpp ← ★ 调试平台总线后端（见下节）★
+│       ├── tools/              ← 一次性 CLI 工具（占总线，先停 ros2_control 栈再跑）
+│       │   ├── set_encoder_zero.cpp   ← 编码器零点标定（HM 方法 35，断电保持）
+│       │   ├── set_motor_limits.cpp   ← 限速/软限位/最大转矩 查看与设定（rad 输入）
+│       │   └── unit_convert.cpp       ← 命令行换算器 rad↔pp（改 bus.yml 时用）
+│       └── deprecated/         ← 停用但保留参考（不编译）
+│           └── gimbal_v2_bridge.cpp   ← 云台桥（2026-07-31 停用，缘由见 CMakeLists）
 └── ros2_canopen/               ← vendored 上游快照（humble 0.2.13 精简版，见其 VENDOR.md）
 ```
 
@@ -86,6 +95,43 @@ Joint1 三秒走到 0.1 rad 再回零。
 | `config/canopen/bus.yml` | 节点 1/2/3、模式注册、scale、PDO 映射、上线 SDO（含 `boot_timeout_ms: 2000`） | 构建时 dcfgen 校验并生成 master.dcf / joint_N.bin |
 | `config/canopen/RB200-CA.eds` | 从站对象字典 | 依据《RB200-CA 简版手册 V1.0》转写，非厂商官方；拿到官方 EDS 后替换比对 |
 | `config/test_controllers.yaml` | 自测栈 JTC 配置 | JTC 只 claim position（RobotSystem 一关节同时只允许一个命令接口） |
+
+## 单电机调试平台（motor_debug_backend + motor_debug_gui.py）
+
+单个电机的集中调试入口，**不依赖 ros2_control 栈**，一个 launch 拉一个电机：
+**C++ 总线后端**（`motor_debug_backend`，独占 SocketCAN + SDO + 主站心跳，402 状态机
+与单位换算权威都在这边）+ **PyQt5 前端**（`scripts/motor_debug_gui.py`，只做界面，
+经话题/服务交互、不碰 CAN，换算系数启动时从后端参数取）。接口全部复用
+`canopen_interfaces`（COTargetDouble / COReadID / COWriteID），无自定义消息。
+
+功能：402 使能/失能/故障复位/NMT 复位、**PP/PV/PT 三模式点动**（rad 系输入，自动
+换算 pp；PP 带 ±步进点动，PV 带按住即动/松开即停方向点动）、**一键回零**（任意
+模式下走 PP 回 0 rad）、**一键软限位**（jog 到边界后把当前位置写成 607D 下/上限，
+配固化按钮）、**编码器置零**（同
+set_encoder_zero 的 HM 方法 35 流程）、**限制参数**查看/设定（同 set_motor_limits
+对象表）、**SDO 裸读写**、EEPROM 固化、100ms 实时反馈（位置/速度/转矩/**电流
+6078**（配 6075 额定算负载率）/状态字/模式/故障码）+ 30s 滚动实时曲线（含电流）。
+三模式目标都带**滑杆**（滑杆↔数值框双向同步，拖动只改数值、**松手才发送一次**——
+与 joint_position_gui v1.1 同一教训：PP 拖动即发会触发驱动器不停重规划）。界面为仪表盘式布局（2026-08-17 v2）：左栏大字
+状态+伺服+工具弹窗，右栏模式分段切换、执行/停止固定位置；未使能时运动区置灰、
+后端断线整体置灰。
+
+```bash
+# ⚠️ 后端独占总线控制字：先停 ros2_control 栈（test_arm / real.launch）
+ros2 launch robot_arm_driver motor_debug.launch.py node_id:=1          # J1，CAN 口读 can.yaml
+ros2 launch robot_arm_driver motor_debug.launch.py node_id:=2 can_interface:=vcan0
+```
+
+- 只跟指定节点通信——**台架上总线挂几个电机都行**，不需要裁剪 bus.yml/URDF；
+  后端节点名带 node_id（`motor_debug_backend_<n>`），多开互不串
+- 任一进程退出（关窗 / 后端连不上 CAN / Ctrl-C）整个 launch 一起退；后端退出路径
+  无条件清零 PV/PT 目标并写 Shutdown 失能，不吃 ros2_control_node 那个 SIGABRT
+  不失能的坑（已知问题第 2 条）
+- ⚠️ 力矩模式下"0"不是"停"是自由下垂；失能/急停会让重力关节下沉，先确认下方无人
+- PP/PV/PT 都是驱动器内部闭环（SDO 写目标即可）；IP 模式需要 SYNC+PDO，
+  属于 ros2_control 栈，本工具不做
+- 后端服务也可脱离 GUI 用命令行调（`ros2 service call /motor_debug_backend_1/enable
+  std_srvs/srv/Trigger` 等），脚本化测试直接打服务即可
 
 ## 运行时接口
 

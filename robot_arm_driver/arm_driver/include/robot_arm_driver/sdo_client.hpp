@@ -75,6 +75,18 @@ public:
     SdoClient(const SdoClient &) = delete;
     SdoClient & operator=(const SdoClient &) = delete;
 
+    /** NMT 命令（0x000 广播帧，只发不收）：0x01 Start / 0x02 Stop / 0x80 Pre-Op /
+     *  0x81 Reset Node / 0x82 Reset Comm。目标为本客户端绑定的节点。 */
+    void nmt(uint8_t cs)
+    {
+        can_frame f{};
+        f.can_id  = 0x000u;
+        f.can_dlc = 2;
+        f.data[0] = cs;
+        f.data[1] = node_;
+        (void)::write(fd_, &f, sizeof(f));
+    }
+
     /** 主站心跳（Operational）。RB200 心跳超时会报 ER.E20/E21，长流程中要持续发。 */
     void heartbeat()
     {
