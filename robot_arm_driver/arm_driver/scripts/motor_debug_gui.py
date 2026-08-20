@@ -129,6 +129,7 @@ class GuiNode(Node):
 
         self.counts_per_rad = None
         self.rated_current_a = 0.0
+        self.rated_torque_nm = 0.0
         self.backend_desc = backend
         self._fetch_backend_info()
 
@@ -137,7 +138,8 @@ class GuiNode(Node):
             self._retry = self.create_timer(1.0, self._retry_fetch)
             return
         rq = GetParameters.Request(
-            names=['counts_per_rad', 'can_interface', 'node_id', 'rated_current_a'])
+            names=['counts_per_rad', 'can_interface', 'node_id',
+                   'rated_current_a', 'rated_torque_nm'])
         self.get_params.call_async(rq).add_done_callback(self._on_backend_info)
 
     def _retry_fetch(self):
@@ -150,6 +152,7 @@ class GuiNode(Node):
             self.counts_per_rad = vals[0].double_value
             self.backend_desc = f'{vals[1].string_value} 节点 {vals[2].integer_value}'
             self.rated_current_a = vals[3].double_value if len(vals) > 3 else 0.0
+            self.rated_torque_nm = vals[4].double_value if len(vals) > 4 else 0.0
             self.sig.log.emit(f'[ OK ] 已连接后端（{self.backend_desc}，'
                               f'counts_per_rad={self.counts_per_rad:.3f}）')
         except Exception as e:  # noqa: BLE001
@@ -490,9 +493,10 @@ class MainWindow(QWidget):
         self.pos_big = QLabel('--')
         self.pos_big.setStyleSheet('font-family:monospace; font-size:22pt; font-weight:bold;')
         self.pos_big.setAlignment(Qt.AlignCenter)
-        pos_cap = QLabel('位置 rad')
-        pos_cap.setAlignment(Qt.AlignCenter)
-        pos_cap.setStyleSheet(f'color:{GRAY};')
+        self.pos_cap = QLabel('位置 rad')
+        self.pos_cap.setAlignment(Qt.AlignCenter)
+        self.pos_cap.setStyleSheet(f'color:{GRAY};')
+        pos_cap = self.pos_cap
         self.vel_lbl = QLabel('速度  --')
         self.tq_lbl = QLabel('转矩  --')
         self.cur_lbl = QLabel('电流  --')
@@ -553,12 +557,16 @@ class MainWindow(QWidget):
         hi = QPushButton('设为上限')
         hi.setToolTip('607D:02 ← 当前实测位置')
         hi.clicked.connect(lambda: self._set_soft_limit(2, '上限'))
+        clr = QPushButton('清除限位')
+        clr.setToolTip('607D 写回默认满量程（±2³¹，手册口径 = 软限位不生效）')
+        clr.clicked.connect(self._clear_soft_limit)
         sv2 = QPushButton('固化 EEPROM')
         sv2.setToolTip('1010:02h "save"——软限位断电保持的正式配置方式')
         sv2.clicked.connect(lambda: self.node.call_trigger('save_eeprom'))
         sg2.addWidget(lo, 0, 0)
         sg2.addWidget(hi, 0, 1)
-        sg2.addWidget(sv2, 1, 0, 1, 2)
+        sg2.addWidget(clr, 1, 0)
+        sg2.addWidget(sv2, 1, 1)
         v.addWidget(soft)
         v.addStretch()
         self.left_col = col
@@ -683,7 +691,14 @@ class MainWindow(QWidget):
         w = QWidget()
         f = QFormLayout(w)
         self.pt_tq = self._spin(-100.0, 100.0, 0.5, 3.0, ' %')
-        f.addRow('目标转矩（额定 %）', self.pt_tq)
+        self.pt_nm = QLabel('')          # 目标的 N·m 等效值（额定力矩 6076 读到后显示）
+        self.pt_nm.setStyleSheet('font-family:monospace;')
+        row = QHBoxLayout()
+        row.addWidget(self.pt_tq)
+        row.addWidget(self.pt_nm)
+        row.addStretch()
+        f.addRow('目标转矩（额定 %）', row)
+        self.pt_tq.valueChanged.connect(self._update_pt_nm)
         f.addRow(self._slider_for(self.pt_tq, self._send_pt))
         warn = QLabel('⚠️ 力矩模式下「停止」= 力矩清零 = 自由下垂！\n带负载/重力关节要停请用急停或切位置 PP。')
         warn.setStyleSheet(f'color:{RED}; font-weight:bold;')
@@ -742,6 +757,10 @@ class MainWindow(QWidget):
     def _send_pt(self):
         self.node.call_target(self.node.run_pt, self.pt_tq.value(), 'PT 运动')
 
+    def _update_pt_nm(self, pct):
+        rated = self.node.rated_torque_nm
+        self.pt_nm.setText(f'= {pct / 100.0 * rated:+.2f} N·m' if rated > 0 else '')
+
     def _on_run(self):
         (self._send_pp, self._send_pv, self._send_pt)[self.mode_group.checkedId()]()
 
@@ -767,6 +786,18 @@ class MainWindow(QWidget):
         self._append_log(f'[ OK ] 软限位{label} ← 当前位置 {self.cur_pos:+.4f} rad（{pp} pp），'
                          '断电保持记得点「固化 EEPROM」')
 
+    def _clear_soft_limit(self):
+        r = QMessageBox.warning(
+            self, '清除软限位',
+            '把 607D 恢复为默认满量程（-2³¹ ~ +2³¹-1），软限位保护随之失效，\n'
+            '行程只剩机械限位挡着。确认清除？\n\n（断电保持需再点「固化 EEPROM」）',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if r != QMessageBox.Yes:
+            return
+        self.node.write_object(0x607D, 1, -2147483648, 4)
+        self.node.write_object(0x607D, 2, 2147483647, 4)
+        self._append_log('[ OK ] 软限位已清除（607D 满量程 = 不生效），断电保持记得「固化 EEPROM」')
+
     def _jog_pp(self, sign):
         self.node.set_pp_profile(self.pp_vel.value(), self.pp_acc.value())
         target = self.cur_pos + sign * self.pp_step.value()
@@ -788,10 +819,13 @@ class MainWindow(QWidget):
     def _on_state(self, pos, vel, tq):
         self.cur_pos = pos
         cpr = self.node.counts_per_rad
+        rated_nm = self.node.rated_torque_nm
         self.pos_big.setText(f'{pos:+.4f}')
+        if cpr:
+            self.pos_cap.setText(f'位置 rad（{int(round(pos * cpr))} pp）')
         self.vel_lbl.setText(f'速度  {vel:+8.4f} rad/s')
         self.tq_lbl.setText(f'转矩  {tq:+6.1f} %'
-                            + (f'   {int(round(pos * cpr))} pp' if cpr else ''))
+                            + (f' = {tq / 100.0 * rated_nm:+.2f} N·m' if rated_nm > 0 else ''))
         self.scope.add_sample(pos, vel, tq, self.cur_amps)
 
     def _on_drive_status(self, sw, mode, fault, cur):
@@ -800,6 +834,8 @@ class MainWindow(QWidget):
         rated = self.node.rated_current_a
         self.cur_lbl.setText(f'电流  {cur:+6.2f} A'
                              + (f'（{abs(cur) / rated * 100:3.0f}%额定）' if rated > 0 else ''))
+        if not self.pt_nm.text() and self.node.rated_torque_nm > 0:
+            self._update_pt_nm(self.pt_tq.value())   # 额定力矩异步到位后补显示
         self._set_online(True)
         self.enabled402 = (sw & 0x006F) == 0x0027
         arrived = '（到位）' if self.enabled402 and (sw & 0x0400) else ''

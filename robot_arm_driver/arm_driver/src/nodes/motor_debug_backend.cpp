@@ -93,16 +93,23 @@ public:
         RCLCPP_INFO(get_logger(), "已连接 %s 节点 %d（状态字 0x%04X）",
                     ifname.c_str(), node_id, sw);
 
-        {   // 额定电流（6075，mA）→ GUI 用来算负载率;对象缺失/Abort 不拦启动
-            double rated_a = 0.0;
+        {   // 额定电流（6075，mA）/额定力矩（6076，mNm）→ GUI 算负载率与实际 N·m;
+            // 对象缺失/Abort 只降级显示、不拦启动
+            double rated_a = 0.0, rated_nm = 0.0;
             try {
                 rated_a = bus_->sdoRead(0x6075u, 0) / 1000.0;
             } catch (const std::exception & e) {
                 RCLCPP_WARN(get_logger(), "读额定电流 6075 失败（%s），负载率显示不可用", e.what());
             }
+            try {
+                rated_nm = bus_->sdoRead(0x6076u, 0) / 1000.0;
+            } catch (const std::exception & e) {
+                RCLCPP_WARN(get_logger(), "读额定力矩 6076 失败（%s），N·m 显示不可用", e.what());
+            }
             rcl_interfaces::msg::ParameterDescriptor ro;
             ro.read_only = true;
             declare_parameter<double>("rated_current_a", rated_a, ro);
+            declare_parameter<double>("rated_torque_nm", rated_nm, ro);
         }
 
         state_pub_  = create_publisher<sensor_msgs::msg::JointState>("~/state", 10);
