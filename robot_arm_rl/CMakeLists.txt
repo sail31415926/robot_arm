@@ -23,6 +23,18 @@ install(PROGRAMS
 )
 
 install(PROGRAMS
+  scripts/train_ppo_orbit.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME train_ppo_orbit
+)
+
+install(PROGRAMS
+  scripts/eval_orbit.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME eval_orbit
+)
+
+install(PROGRAMS
   scripts/sim_to_sim_test.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME sim_to_sim_test
