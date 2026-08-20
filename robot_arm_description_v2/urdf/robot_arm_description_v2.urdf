@@ -1,0 +1,284 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com)
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<!-- 零位约定（2026-08-20 重定标，偏置已烘进 Joint2/Joint3 origin）：
+     q=0 ⇔ Link2 竖直 + Link3 水平朝前：Joint2 pitch=-π/2（精确）、Joint3 yaw=-π/2（精确）。
+     末端在 (0.292, 0.013, 0.60)，悬于基座前上方，姿态与 base_link 完全一致（Link3 水平朝前 ⇔ 末端姿态=I），
+     无任何网格干涉，物理可达（可作实机标定/收纳参考位）。
+     零位语义：q1=0 朝前；q2=0 大臂竖直，+前倾/-后倾；q3=0 小臂水平，-向伸直/后折，+继续前下弯。
+     关节限位为用户给定行程（2026-08-20）：J1 ±150°，J2 对称 ±1.62，J3 [-3.0, 0.15]，
+     均在网格干涉极限内（STL 检查：肘部平折(±180°)处两管共面，前弯/后折两侧 ±139° 处管间隙耗尽）。
+     SW 装配位形 = (0, 0.904, -0.935)。
+     effort/velocity 按模组型号推算：J1/J2=RB200-G8017-R1830-100（180W、3000rpm、100 速比→π rad/s），
+     J3=RB200-G5211-R0630-100（60W）。 -->
+<robot
+  name="robot_arm_description_v2">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="-2.9777E-06 1.8206E-05 0.022021"
+        rpy="0 0 0" />
+      <mass
+        value="1.8755" />
+      <inertia
+        ixx="0.0079177"
+        ixy="-2.9447E-07"
+        ixz="-1.7015E-08"
+        iyy="0.0055387"
+        iyz="6.8359E-09"
+        izz="0.0129" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://robot_arm_description_v2/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.89804 0.91765 0.92941 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://robot_arm_description_v2/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="Link1">
+    <inertial>
+      <origin
+        xyz="-1.5718E-05 -0.00073244 0.093753"
+        rpy="0 0 0" />
+      <mass
+        value="1.6386" />
+      <inertia
+        ixx="0.0072645"
+        ixy="-1.0236E-07"
+        ixz="-7.5726E-10"
+        iyy="0.0048828"
+        iyz="6.2071E-06"
+        izz="0.0048835" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://robot_arm_description_v2/meshes/Link1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.89804 0.91765 0.92941 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://robot_arm_description_v2/meshes/Link1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint1"
+    type="revolute">
+    <origin
+      xyz="0 0 0.1015"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="Link1" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.618"
+      upper="2.618"
+      effort="30"
+      velocity="3.14" />
+  </joint>
+  <link
+    name="Link2">
+    <inertial>
+      <origin
+        xyz="0.19809 -0.0004606 -0.0006753"
+        rpy="0 0 0" />
+      <mass
+        value="1.0826" />
+      <inertia
+        ixx="0.0009463"
+        ixy="9.2691E-06"
+        ixz="2.3452E-05"
+        iyy="0.0050526"
+        iyz="1.5989E-07"
+        izz="0.0049262" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://robot_arm_description_v2/meshes/Link2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.75294 0.75294 0.75294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://robot_arm_description_v2/meshes/Link2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint2"
+    type="revolute">
+    <origin
+      xyz="0 0.001 0.151"
+      rpy="1.5708 -1.5708 0" />
+    <parent
+      link="Link1" />
+    <child
+      link="Link2" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-1.62"
+      upper="1.62"
+      effort="30"
+      velocity="3.14" />
+  </joint>
+  <link
+    name="Link3">
+    <inertial>
+      <origin
+        xyz="0.16541 -3.4823E-05 -0.00063705"
+        rpy="0 0 0" />
+      <mass
+        value="0.3598" />
+      <inertia
+        ixx="0.00017068"
+        ixy="6.1016E-07"
+        ixz="1.0922E-05"
+        iyy="0.0021614"
+        iyz="6.3629E-08"
+        izz="0.0020906" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://robot_arm_description_v2/meshes/Link3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.89804 0.91765 0.92941 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://robot_arm_description_v2/meshes/Link3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint3"
+    type="revolute">
+    <origin
+      xyz="0.349 0 0.001"
+      rpy="0 0 -1.5708" />
+    <parent
+      link="Link2" />
+    <child
+      link="Link3" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.00"
+      upper="0.15"
+      effort="10"
+      velocity="3.14" />
+  </joint>
+  <link
+    name="arm_end_link">
+    <inertial>
+      <origin
+        xyz="0.0036664 0.019468 6.4393E-15"
+        rpy="0 0 0" />
+      <mass
+        value="0.0071735" />
+      <inertia
+        ixx="1.1466E-06"
+        ixy="-6.4497E-23"
+        ixz="-1.5111E-20"
+        iyy="1.2806E-06"
+        iyz="-2.0776E-21"
+        izz="1.5311E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://robot_arm_description_v2/meshes/arm_end_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.89804 0.91765 0.92941 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://robot_arm_description_v2/meshes/arm_end_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="end"
+    type="fixed">
+    <origin
+      xyz="0.292 0 -0.013032"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="Link3" />
+    <child
+      link="arm_end_link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+</robot>
