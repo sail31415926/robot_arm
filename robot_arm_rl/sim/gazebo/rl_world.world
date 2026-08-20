@@ -1,0 +1,83 @@
+<?xml version="1.0"?>
+<!-- robot_arm_rl 专用 Gazebo 世界：RL 构图跟拍 sim2sim 演示/验证。
+
+     与训练场景(rl_env.xml)几何对齐：矮台顶 0.45、红盒 0.06×0.04×0.04 悬浮
+     于 (0.90, 0, 0.47)，臂底座在世界原点。场景全部 visual-only（拍摄任务
+     无接触，不引入训练中不存在的碰撞失效模式）。
+
+     红盒由 planar_move 插件驱动：
+       订阅 /rl_subject/cmd_vel（subject_mover 发布路点游走速度）
+       发布 /rl_subject/odom（世界系位姿，subject_mover 转发给策略）  -->
+<sdf version="1.6">
+  <world name="rl_world">
+    <include><uri>model://sun</uri></include>
+
+    <!-- 地面 -->
+    <model name="ground">
+      <static>true</static>
+      <link name="link">
+        <collision name="col">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+        </collision>
+        <visual name="vis">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+          <material><ambient>0.42 0.44 0.46 1</ambient><diffuse>0.42 0.44 0.46 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 矮工作台（台面顶 z=0.45，与训练场景一致；visual-only） -->
+    <model name="rl_bench">
+      <static>true</static>
+      <link name="link">
+        <visual name="top">
+          <pose>0.90 0 0.43 0 0 0</pose>
+          <geometry><box><size>0.90 0.70 0.04</size></box></geometry>
+          <material><ambient>0.35 0.28 0.22 1</ambient><diffuse>0.35 0.28 0.22 1</diffuse></material>
+        </visual>
+        <visual name="leg1"><pose>0.55 -0.30 0.205 0 0 0</pose>
+          <geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.25 0.2 0.16 1</ambient><diffuse>0.25 0.2 0.16 1</diffuse></material></visual>
+        <visual name="leg2"><pose>1.25 -0.30 0.205 0 0 0</pose>
+          <geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.25 0.2 0.16 1</ambient><diffuse>0.25 0.2 0.16 1</diffuse></material></visual>
+        <visual name="leg3"><pose>0.55 0.30 0.205 0 0 0</pose>
+          <geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.25 0.2 0.16 1</ambient><diffuse>0.25 0.2 0.16 1</diffuse></material></visual>
+        <visual name="leg4"><pose>1.25 0.30 0.205 0 0 0</pose>
+          <geometry><box><size>0.05 0.05 0.41</size></box></geometry>
+          <material><ambient>0.25 0.2 0.16 1</ambient><diffuse>0.25 0.2 0.16 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- 可移动被摄主体（红盒，尺寸与训练一致） -->
+    <model name="rl_subject">
+      <pose>0.90 0 0.47 0 0 0</pose>
+      <link name="link">
+        <gravity>false</gravity>
+        <inertial>
+          <mass>0.1</mass>
+          <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz>
+                   <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <visual name="red_box">
+          <geometry><box><size>0.06 0.04 0.04</size></box></geometry>
+          <material><ambient>0.85 0.10 0.08 1</ambient><diffuse>0.85 0.10 0.08 1</diffuse></material>
+        </visual>
+      </link>
+      <plugin name="planar_move" filename="libgazebo_ros_planar_move.so">
+        <ros><namespace>/rl_subject</namespace></ros>
+        <command_topic>cmd_vel</command_topic>
+        <odometry_topic>odom</odometry_topic>
+        <odometry_frame>world</odometry_frame>
+        <robot_base_frame>link</robot_base_frame>
+        <odometry_rate>50.0</odometry_rate>
+      </plugin>
+    </model>
+
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+  </world>
+</sdf>

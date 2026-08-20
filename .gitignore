@@ -6,8 +6,10 @@ log/
 *.pyc
 *.pyo
 
-# 不参与 git（恢复时删除下面这行即可）
-robot_arm_rl/
+# RL 训练产物（模型权重/回放池/日志/视频等大二进制不进 git，代码正常入库）
+robot_arm_rl/models/*
+!robot_arm_rl/models/.gitkeep
+robot_arm_rl/scripts/logs/
 
 # 第三方 Robotics Toolbox 安装包（26MB，可自行下载，不进 git）
 robot_arm_matlab/RTB.mltbx
