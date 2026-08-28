@@ -1,0 +1,10 @@
+# DeleteTrajectory.srv  —— /robot_arm/teach/delete_trajectory
+# 删除磁盘上的一条轨迹。
+# 正在回放的那条拒绝删除（避免把脚下的地板抽掉）；内存缓冲区不受影响。
+# 名字做白名单校验后再拼路径，杜绝 "../" 之类越界删除。
+
+string name
+---
+bool   success
+string message
+string path      # 被删除的绝对路径（失败时为空）

@@ -63,8 +63,16 @@ public:
   /// 一直是 0x001F（Operation Enabled）直到总线静默，全程没有任何 halt 报文。
   /// 结论：这条 SIGABRT 路径上**任何进程内钩子都拿不到执行机会**，本文件这几个重写
   /// 只对「能正常走完 deactivate/shutdown」的路径有效（例如显式调 /arm_node/disable）。
-  /// 关停自动失能要靠进程外手段：独立 SocketCAN 工具写控制字 0x0006，或
-  /// NMT Reset Node 一帧（cansend can0 000#8100）作为崩溃后的兜底。TODO 未实现。
+  ///
+  /// 关停失能因此只能走进程外手段，**2026-08-21 已有工具**：`src/tools/disable_motors.cpp`
+  /// （独立 SocketCAN：Quick Stop 0x0002 按 6085 斜坡减速 → Shutdown 0x0006 → 读状态字
+  /// 确认 → 失败则 NMT Reset Node `000#8100` 兜底）。但 `real.launch.py` /
+  /// `test_arm.launch.py` 的关停钩子**默认不挂**（`auto_disable_on_shutdown:=false`）——
+  /// 产品决定：默认保持「Ctrl-C 后臂停在原地、保持力矩、不下沉」，代价是驱动器带电
+  /// 且无人控制（`1016` 消费者心跳默认禁用，不会自我保护，一直持续到断电）。
+  /// 取舍详见 real.launch.py 钩子处的注释。手动失能不受该开关影响。
+  /// 下面这几个重写保留 —— 正常 deactivate 路径下它们更早生效，且不依赖 launch
+  /// 或那个开关（例如直接调 controller_manager 服务停组件时）。
   hardware_interface::CallbackReturn on_activate(
     const rclcpp_lifecycle::State & previous_state) override;
 

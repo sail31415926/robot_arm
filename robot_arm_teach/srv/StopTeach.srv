@@ -1,0 +1,17 @@
+# StopTeach.srv  —— /robot_arm/teach/stop_teach
+# 结束示教录制：停采样器 → 关点动中继（机械臂随之停住）→ 按位置阈值压缩 →
+# 统计起点/终点/速度加速度包络 → 轨迹留在内存缓冲区。
+#
+# ★ 不自动落盘。要存文件另调 save_trajectory —— 分开是为了「录完先回放看看，
+#   满意再存」，也避免每次误触都在磁盘上堆垃圾文件。缓冲区只留一条，
+#   下次 start_teach 会覆盖，未保存就丢了。
+#
+# 结束时是否切回 TRAJECTORY 模式由参数 teach.restore_trajectory_mode_on_stop 决定
+#（默认 true）——留在 JOINT_VELOCITY 也不会动，但后续轨迹类动作会先自动切回来。
+---
+bool   success
+string message
+string trajectory_name
+uint32 point_count      # 压缩后的采样点数
+uint32 raw_point_count  # 压缩前的原始采样点数
+float64 duration_sec

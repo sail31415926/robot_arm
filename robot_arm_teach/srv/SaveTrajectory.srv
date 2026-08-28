@@ -1,0 +1,19 @@
+# SaveTrajectory.srv  —— /robot_arm/teach/save_trajectory
+# 把内存缓冲区里的轨迹（或 trajectory 字段显式给出的轨迹）写成 YAML 文件。
+# 落盘前跑一遍完整的静态校验（关节名/维度/NaN/单调性/限位/速度加速度），不合格拒绝写入 ——
+# 磁盘上不留一条自己都通不过校验的轨迹。
+# 写入用「临时文件 + rename」原子替换，中途断电不会留下半截文件。
+
+string name                # 目标轨迹名（可空 → 用缓冲区里的名字）
+bool   overwrite           # 同名文件已存在时是否覆盖
+MotionType motion_type     # 可选：覆盖录制时指定的运镜类型（motion_type_override=true 时生效）
+bool   motion_type_override
+MotionMeta motion_meta     # 可选：补齐/修正运镜元数据（meta_override=true 时生效）
+bool   meta_override
+TeachTrajectory trajectory # 可选：直接保存外部构造的轨迹（use_trajectory=true 时生效，忽略缓冲区）
+bool   use_trajectory
+---
+bool   success
+string message
+string path                # 实际写入的绝对路径
+uint32 point_count

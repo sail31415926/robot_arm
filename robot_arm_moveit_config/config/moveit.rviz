@@ -89,6 +89,20 @@ Visualization Manager:
         Interrupt Display: false
         Links:
           All Links Enabled: true
+          Cam0:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          Cam0_gazebo_frame:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          Cam1:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
           Expand Joint Details: false
           Expand Link Details: false
           Expand Tree: false
@@ -123,7 +137,26 @@ Visualization Manager:
             Show Axes: false
             Show Trail: false
             Value: true
-          base_link:
+          Tof:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          arm_base_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          camera_optical_frame:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          gimbal_base_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          gimbal_tool0:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -178,6 +211,20 @@ Visualization Manager:
         Attached Body Color: 150; 50; 150
         Links:
           All Links Enabled: true
+          Cam0:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          Cam0_gazebo_frame:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          Cam1:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
           Expand Joint Details: false
           Expand Link Details: false
           Expand Tree: false
@@ -212,7 +259,26 @@ Visualization Manager:
             Show Axes: false
             Show Trail: false
             Value: true
-          base_link:
+          Tof:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          arm_base_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          camera_optical_frame:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          gimbal_base_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          gimbal_tool0:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -233,10 +299,6 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    # world = URDF 根 / MoveIt planning frame（SRDF virtual_joint 的 parent_frame）。
-    # 原来写的是 base_link —— 那是机械臂基座改名成 arm_base_link 之前的旧名字，
-    # 这套栈里根本没有这个 frame，会让所有以 <Fixed Frame> 为基准的 display 报
-    # "base_link ... does not exist"（最吵的是 interactive_marker_display）。
     Fixed Frame: world
     Frame Rate: 25
   Name: root
@@ -286,16 +348,16 @@ Visualization Manager:
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 848
+  Height: 859
   Hide Left Dock: false
   Hide Right Dock: false
   MotionPlanning:
     collapsed: false
   MotionPlanning - Trajectory Slider:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd000000010000000000000213000002f6fc0200000004fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000004100fffffffb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e0067010000003d0000017d0000017d00fffffffb000000100044006900730070006c00610079007301000001c0000000c9000000c900fffffffb0000000a00560069006500770073010000028f000000a4000000a400ffffff000002ac000002f600000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000001000000000000021300000301fc0200000004fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000004100fffffffb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e0067010000003d000001880000017d00fffffffb000000100044006900730070006c00610079007301000001cb000000c9000000c900fffffffb0000000a00560069006500770073010000029a000000a4000000a400ffffff000002ac0000030100000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Views:
     collapsed: false
   Width: 1221
-  X: 18
-  Y: 202
+  X: 70
+  Y: 184

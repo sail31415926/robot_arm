@@ -73,13 +73,19 @@ install(TARGETS arm_driver_services DESTINATION lib/${PROJECT_NAME})
 # set_encoder_zero  编码器零点标定（HM 方法 35，断电保持）
 # set_motor_limits  速度/加速度上限、软限位、最大转矩 查看与设定（rad 单位输入）
 # unit_convert      命令行换算器 rad↔pp（改 bus.yml 时用）
+# disable_motors    关停失能（Quick Stop 减速 → Shutdown → NMT 兜底）。**例外：它就是
+#                   给「栈已经死了」用的** —— ros2_control_node 以 SIGABRT 挂掉时进程内
+#                   钩子全都拿不到执行机会，驱动器停在 Operation Enabled 带着力矩，只能
+#                   由进程外工具收拾。real.launch.py / test_arm.launch.py 已挂在关停钩子上。
 add_executable(set_encoder_zero src/tools/set_encoder_zero.cpp)
 add_executable(set_motor_limits src/tools/set_motor_limits.cpp)
 add_executable(unit_convert src/tools/unit_convert.cpp)
-foreach(tool set_encoder_zero set_motor_limits unit_convert)
+add_executable(disable_motors src/tools/disable_motors.cpp)
+foreach(tool set_encoder_zero set_motor_limits unit_convert disable_motors)
   target_include_directories(${tool} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 endforeach()
-install(TARGETS set_encoder_zero set_motor_limits unit_convert DESTINATION lib/${PROJECT_NAME})
+install(TARGETS set_encoder_zero set_motor_limits unit_convert disable_motors
+        DESTINATION lib/${PROJECT_NAME})
 
 # ── 单电机调试平台（launch/motor_debug.launch.py，一实例一电机）───────────────
 # motor_debug_backend  C++ 总线后端：独占 SocketCAN，402 状态机 + PP/PV/PT + 置零

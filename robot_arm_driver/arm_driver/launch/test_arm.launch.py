@@ -36,12 +36,12 @@ robot_arm_bringup，只测「驱动这一层」：
 import os
 
 import yaml
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription,
                             OpaqueFunction, RegisterEventHandler, TimerAction)
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessExit
+from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -104,6 +104,8 @@ def _setup(context, *args, **kwargs):
     fake_slaves   = LaunchConfiguration('fake_slaves')
     demo          = LaunchConfiguration('demo')
     with_slaves   = LaunchConfiguration('fake_slaves').perform(context).lower() == 'true'
+    auto_disable  = LaunchConfiguration('auto_disable_on_shutdown') \
+        .perform(context).lower() in ('true', '1')
 
     robot_description = _test_urdf(mock, can_interface, share)
     controllers_yaml  = os.path.join(share, 'config', 'test_controllers.yaml')
@@ -156,6 +158,38 @@ def _setup(context, *args, **kwargs):
         for node_id in (1, 2, 3)
     ]
 
+    # ── 关停自动失能：**默认关闭**（auto_disable_on_shutdown，与 real.launch.py 同一套）──
+    # 关闭（默认）= Ctrl-C 后臂停在原地、保持力矩、不下沉，但驱动器仍带电且无人控制
+    #   （RB200-CA 的 1016 消费者心跳默认禁用 → 不会自我保护，一直持续到断电），
+    #   且 master 没干净关闭会让下次 launch 报 SDO timed out / can0 NO-CARRIER。
+    # 开启 = Quick Stop 按 6085 斜坡减速停稳 → Shutdown 断力矩 → 读状态字确认 →
+    #   失败则 NMT 兜底。代价：J2/J3 失去支撑会下沉。取舍依据详见 real.launch.py 的注释。
+    # 随时可手动失能（不依赖本开关）：ros2 run robot_arm_driver disable_motors can0
+    #
+    # ★ 这条 launch 是**验证失能工具的推荐路径**（假从站，不用真机、无下沉风险）：
+    #     sudo modprobe vcan && sudo ip link add dev vcan0 type vcan && sudo ip link set vcan0 up
+    #     ros2 launch robot_arm_driver test_arm.launch.py can_interface:=vcan0 \
+    #         fake_slaves:=true auto_disable_on_shutdown:=true
+    #   起来后另开终端 candump vcan0 | grep -E '601|581|000'，回到 launch 按 Ctrl-C，
+    #   应看到工具写 6040=0x0002/0x0006 并读回状态字确认「已失能」。
+    # mock:=true 不碰 CAN，一并跳过。
+    disable_hooks = []
+    if auto_disable and not mock:
+        disable_cmd = [
+            os.path.join(get_package_prefix('robot_arm_driver'),
+                         'lib', 'robot_arm_driver', 'disable_motors'),
+            can_interface, '1', '2', '3',
+        ]
+        disable_hooks = [
+            RegisterEventHandler(OnProcessExit(
+                target_action=controller_manager,
+                on_exit=[ExecuteProcess(cmd=disable_cmd, output='screen')],
+            )),
+            RegisterEventHandler(OnShutdown(
+                on_shutdown=[ExecuteProcess(cmd=disable_cmd, output='screen')],
+            )),
+        ]
+
     # demo:=true：t=10s 发测试轨迹（0.1rad/3s），t=16s 回零
     def _traj(positions, sec):
         return ExecuteProcess(
@@ -171,8 +205,9 @@ def _setup(context, *args, **kwargs):
     demo_home = TimerAction(period=16.0, actions=[_traj('[0.0, 0.0, 0.0]', 3)],
                             condition=IfCondition(demo))
 
-    return slaves + [cm_start, jsb_spawner, arm_after_jsb,
-                     arm_driver_services, demo_move, demo_home]
+    # disable_hooks 必须排在 cm_start 之前：注册晚了会漏掉 OnProcessExit 事件
+    return slaves + disable_hooks + [cm_start, jsb_spawner, arm_after_jsb,
+                                     arm_driver_services, demo_move, demo_home]
 
 
 def generate_launch_description():
@@ -189,6 +224,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'fake_slaves', default_value='false',
             description='true=同时启动 3 个 CiA402 假从站（配合 vcan0 用）',
+        ),
+        DeclareLaunchArgument(
+            'auto_disable_on_shutdown', default_value='false',
+            description='关停时是否自动失能电机。false（默认）= 臂停在原地保持力矩、不下沉，'
+                        '但驱动器仍带电且无人控制；true = 减速停稳后断力矩（J2/J3 会下沉）。'
+                        '手动失能随时可用：ros2 run robot_arm_driver disable_motors can0',
         ),
         DeclareLaunchArgument(
             'demo', default_value='false',

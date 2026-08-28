@@ -1,0 +1,138 @@
+# teach_params.yaml — 示教模块可调参数总表
+#
+# ⚠️ 三条与 robot_arm_bringup/config/arm_params.yaml 同样的规矩，改之前先看：
+#   1. 顶层键是**节点名** `arm_teach`，不是可执行文件名 `arm_teach_node`。
+#      写错**不报错、参数静默不生效**，全部跑 C++ 默认值。
+#      核对：`ros2 param list /arm_teach`
+#   2. 只有节点 declare_parameter 过的键才吃得进去，多写的键同样被静默忽略。
+#      新增参数要同时改 src/teach_node.cpp 的 declare_params()。
+#   3. 这里的值 = C++ 里的默认值，所以「什么都不改」的行为与源码一致。
+#
+# 生效确认：`ros2 param get /arm_teach playback.max_joint_velocity`
+
+arm_teach:
+  ros__parameters:
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 录制
+    # ══════════════════════════════════════════════════════════════════════════
+    teach:
+      # 采样频率（Hz）。建议 50 或 100。
+      #   50  —— 与既有速度流下发频率同阶，文件小，噪声少（默认）
+      #   100 —— 更细，但文件大一倍，且把回读噪声一并录进去（回放时表现为轻微抖动）
+      # 采样间隔判定用 steady_clock，不受 Gazebo /clock 只有 10Hz 的影响。
+      sample_rate_hz: 50.0
+
+      # 位置阈值压缩（rad）。0 = 关闭压缩。
+      # 0.002rad ≈ 0.11°，小于实机回读噪声与静差量级，所以压掉的都是"没动"的帧。
+      # 压缩只做子集选取，不重排、不改时间戳 → 时间顺序与速度包络都不会被破坏
+      #（详见 include/robot_arm_teach/teach_recorder.hpp 的压缩规则）。
+      compress_position_eps: 0.002
+      # 两个保留点之间的最大间隔（s）。长时间静止也要留锚点，否则会出现跨十几秒的长弦，
+      # JTC 插值时把"静止"变成"缓慢漂移"。
+      compress_max_gap_sec: 0.5
+
+      # 单条轨迹的硬上限。到点自动停止录制并在状态里挂告警（忘了 stop_teach 时兜底）。
+      max_duration_sec: 600.0
+      max_points: 120000
+
+      # 手拖示教开关。**默认 false**：实机侧 real.launch.py 故意不配 effort_controller，
+      # 切 JOINT_EFFORT 会被 ModeManager 拒绝；开着只会让人误以为支持。
+      # 仿真里想试（gazebo 已开通 JOINT_EFFORT）再设 true —— 并且先确认
+      # mode_manager_node 的 gravity_compensation=true，否则一切进力矩模式就下垂。
+      # 详见 doc/实机能力限制说明.md。
+      allow_drag: false
+
+      # stop_teach 后是否自动切回 TRAJECTORY。留在 JOINT_VELOCITY 也不会动，
+      # 但主动切回去让交接干净，也避免误发的速度指令生效。
+      restore_trajectory_mode_on_stop: true
+
+      # 轨迹存储目录。默认 $HOME/.ros/robot_arm_teach（留空则用该默认值）。
+      # 格式见 doc/轨迹格式说明.md。
+      storage_directory: ""
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 点动示教（唯一在实机可用的示教方式）
+    # ══════════════════════════════════════════════════════════════════════════
+    jog:
+      # 点动中继：/robot_arm/teach/jog → /robot_arm/cmd/joint_velocity。
+      # 关掉的话上层可以自己直发产品总线（录制照样记得到），只是绕过了示教侧的
+      # 状态闸/限速/看门狗。
+      enable_relay: true
+      # 中继下发频率（Hz）。与 velocity_stream.rate_hz 同阶即可，没必要更高 ——
+      # 下游 VelocityStreamServer 本身就是 50Hz 节拍。
+      relay_rate_hz: 50.0
+      # 输入断流超时（s）。超过这么久没有新 JogCommand 就补一帧全 0 停住。
+      # 比 velocity_stream.command_timeout（0.3）不晚，让示教侧先停。
+      command_timeout: 0.3
+      # 示教限速（rad/s）。刻意比 velocity_stream.max_joint_speed（1.0）保守 ——
+      # 示教时人手在机械臂附近，且 0.4rad/s 在实机上已经是"看得清"的速度。
+      # ⚠️ 只对 J1-3 有效：产品总线 ArmJointVelocityCommand 固定 3 轴，云台 J4-6 不可点动。
+      max_joint_speed: 0.4
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 回放
+    # ══════════════════════════════════════════════════════════════════════════
+    playback:
+      # 分段下发频率（Hz）与每段视野（s）。
+      # ★ 改这两个前先读 include/robot_arm_teach/playback_planner.hpp 的取舍说明。
+      #   分段是为了让暂停/停止/变速能生效（一次发完整条轨迹的话，这些都无从下手）。
+      #   默认 5Hz / 1.0s：每段执行 20%，暂停在 200ms 内生效。
+      #   别把 republish_hz 往上调 —— JTC 每收新轨迹就丢弃旧的重新插值，高频抢占纯浪费
+      #  （robot_arm_node 的速度流为此从 100Hz 压到 50Hz，见其 CLAUDE.md 速度控制第 1 条）。
+      republish_hz: 5.0
+      # 视野以**原始时间轴**计（不随倍率变）：一段固定覆盖 1.0s 的录制内容，
+      # 其墙钟时长 = 1.0 / speed_scale。这样每段的点数恒定、消息大小可预期。
+      chunk_horizon_sec: 1.0
+
+      # 起点判据：当前 J1-3 与轨迹首点的最大偏差 ≤ 此值才算"在起点"。
+      # 只看 J1-3 —— 末端在云台之后，云台有静差就永远"到不了"（robot_arm/CLAUDE.md 记过）。
+      start_tolerance_rad: 0.05
+      # 不在起点时是否先自动慢速走到起点。false = 直接拒绝回放（exit_reason=not_at_start）。
+      auto_approach: true
+      approach_duration_sec: 3.0
+
+      # 暂停/停止时下发的保持轨迹时长（s）。requirement：**不能发空轨迹**——
+      # 空轨迹不会让 JTC 停下，它会把手上那条继续执行完。
+      hold_duration_sec: 0.2
+      # 播完后的收尾余量（s），给最后一段留出执行时间再判"完成"。
+      finish_margin_sec: 0.3
+
+      # 回放速度/加速度硬上限（逐轴）。0 = 不校验（不建议）。
+      # 1.0rad/s 与 velocity_stream.max_joint_speed 对齐；URDF 里 J1-3 的机械限是 3.14。
+      max_joint_velocity: 1.0
+      max_joint_acceleration: 4.0
+
+      # 允许的倍率区间。默认上限 1.0 = **只允许降速**（requirement 只要求降速）。
+      # 想允许提速就把 max_speed_scale 调大 —— 缩放后的速度/加速度仍要过上面那两道闸
+      #（速度 ×s、加速度 ×s²），过不了会被明确拒绝而不是静默限幅。
+      min_speed_scale: 0.1
+      max_speed_scale: 1.0
+
+      # 自碰撞抽样上限。逐点查一条 3000 点的轨迹要 3000 次跨进程往返，请求会卡几十秒。
+      # 示教轨迹本身是机械臂刚走过的路径（天然无碰撞），这道闸真正防的是手改过的 YAML
+      # 和跨机器复用的轨迹 —— 那种问题通常是整段偏移，抽样抓得到。
+      collision_check_max_samples: 20
+      # 单次 /check_state_validity 等应答上限（s）。超时 fail-open 并告警。
+      validity_wait_sec: 0.3
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 安全
+    # ══════════════════════════════════════════════════════════════════════════
+    safety:
+      # 是否要求收到 /robot_arm/arm_status 才允许示教/回放。
+      # **默认 true**：拿不到状态就无法确认"没有急停/故障"，而这是 requirement 明确要求的
+      # 前置条件。arm_commander 没跑（纯 JTC 调试场景）时会被拦，确认机械臂正常后可设 false。
+      require_arm_status: true
+      # arm_status 的最大陈旧时间（s）。超过即认为拿不到当前状态。
+      arm_status_timeout_sec: 2.0
+      # 等 /robot_arm/switch_control_mode 应答的上限（s）。
+      mode_switch_timeout_sec: 2.0
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 状态广播
+    # ══════════════════════════════════════════════════════════════════════════
+    state:
+      # /robot_arm/teach/state 的广播频率（Hz）。该话题是 latched，晚订阅也能拿到当前值。
+      # 回放进度另有 /robot_arm/teach/playback，按 playback.republish_hz 发。
+      publish_hz: 5.0

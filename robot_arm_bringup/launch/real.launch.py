@@ -19,6 +19,12 @@
        会解冻 FROZEN，等于让 JTC 的保持流能解冻 FREEZE，破坏仲裁优先级。现在转发插件直连板端。
        （桥的源码保留在 robot_arm_driver 里未删，其 absolute_mode 相对⇄绝对姿态换算日后若要
         重启用，须改成不与板端原生话题重叠的接法，见 docs/云台控制路径融合方案.md 第 0 节。）
+       v3.2（2026-08-21 关停失能开关）：新增 auto_disable_on_shutdown（**默认 false**）。
+       true 时挂 OnProcessExit(ros2_control_node) + OnShutdown 两个钩子调 robot_arm_driver
+       的 disable_motors（独立 SocketCAN 工具，减速停稳→断力矩→确认→NMT 兜底）。
+       默认 false 保持既有行为：Ctrl-C 后臂停在原地、保持力矩、不下沉 —— 代价是驱动器
+       仍带电且无人控制（RB200-CA 的 1016 消费者心跳默认禁用，不会自我保护，会一直
+       持续到断电）。两边风险与选择依据详见下方钩子处的注释。
 
 启动拓扑（单 arm_controller 管全 6 轴，与 Gazebo/MuJoCo 命令总线一致）：
   arm_controller（JTC，claim Joint1-6 position，跨两个硬件组件）
@@ -61,10 +67,12 @@ import os
 
 import xacro
 import yaml
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, TimerAction
+from launch.actions import (DeclareLaunchArgument, ExecuteProcess, OpaqueFunction,
+                            RegisterEventHandler, TimerAction)
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
@@ -102,6 +110,7 @@ def _setup(context, *args, **kwargs):
 
     arm_sim_mode  = LaunchConfiguration('arm_sim_mode').perform(context)
     can_interface = LaunchConfiguration('can_interface').perform(context)
+    auto_disable  = LaunchConfiguration('auto_disable_on_shutdown').perform(context)
 
     # 全 6 轴 URDF：J1-3 RobotSystem（CANopen）+ J4-6 GimbalForwardingInterface（转发）
     _xacro_path = os.path.join(desc_share, 'urdf', 'arm_sim.urdf.xacro')
@@ -283,6 +292,59 @@ def _setup(context, *args, **kwargs):
         actions=[jsb_spawner, arm_ctrl_spawner, vel_ctrl_loader, gimbal_ctrl_loader],
     )
 
+    # ── 关停自动失能：**默认关闭**（auto_disable_on_shutdown，2026-08-21）─────────
+    # 这是一个取舍，两边都有真实风险，默认选了「停在原地」：
+    #
+    #   关闭（默认）= Ctrl-C 后臂**停在原地、保持力矩、不下沉**，但驱动器停在
+    #     Operation Enabled 带着力矩而**没人在控制它**了（进程已死）。三个后果：
+    #       ① 你以为关了去手动搬臂时，它会顶回来（伤手 / 顶坏谐波减速器）
+    #       ② 臂若刚好压住东西，推不开且越推越用力
+    #       ③ CANopen master 没干净关闭 → 下次 launch 报 SDO timed out / can0 NO-CARRIER
+    #          （CLAUDE.md 高频坑第 1 条）。这条**与下沉无关**，手动跑一次
+    #          `ros2 run robot_arm_driver disable_motors can0` 就是它的解药。
+    #     ⚠️ 且 RB200-CA 不会自我保护：EDS 的 1016:01（消费者心跳，即驱动器监测**主站**
+    #        心跳的超时）默认 0 = 禁用，bus.yml 也没配 —— 驱动器不知道上位机死了，
+    #        这个带力矩状态会**一直持续到断电**。想加第二道防线就配 1016（未验证）。
+    #
+    #   开启 = Ctrl-C 后先 Quick Stop 按 6085 斜坡减速停稳，再 Shutdown 断力矩并读状态字
+    #     确认，失败则 NMT Reset Node 兜底。代价：断力矩那一刻 J2/J3 失去支撑**下沉**
+    #     （60FE 抱闸输出在 RB200-CA 上只读、驱动器自管，上位机控制不了）。
+    #     幅度未实机实测 —— 仿真是「J2 从 +0.500 砸到下限」，但那是 Gazebo 关节无摩擦的
+    #     最坏情况，真机谐波减速器摩擦大得多，可能只是慢慢垂下来。
+    #
+    # 要开启：ros2 launch robot_arm_bringup real.launch.py auto_disable_on_shutdown:=true
+    # 开启后要免下沉，得先把臂移到机械自稳的收纳位再关停（posture.stowed_joints 尚未
+    # 在实机标定，见 arm_params_real.yaml 候选④），那是上层逻辑，不是这两个钩子的事。
+    #
+    # 钩子机制（开启时）：ros2_control_node 关停时以 SIGABRT 挂掉（vendored 0.2.13
+    # DeviceContainer 析构 bug），这条路径上任何进程内钩子都拿不到执行机会（生命周期
+    # on_shutdown/on_cleanup 与 rclcpp::on_shutdown 均实测无效），所以只能进程外收拾。
+    #   主路径 OnProcessExit：ros2_control_node 一死就跑 —— 此刻总线空闲，没有主站
+    #                         200Hz 的 RPDO 抢控制字，SDO 通路最干净。
+    #   兜底 OnShutdown    ：覆盖 ros2_control_node 从未起来、或 launch 整体被 SIGTERM
+    #                         的情况；此时 master 可能还在写 0x001F，SDO 抢不过，
+    #                         工具会自动升级到 NMT 层（NMT 不是 402 控制字，抢得过）。
+    # 两条都触发是幂等的（第二次读状态字发现已无力矩就直接放过）。工具自己屏蔽
+    # SIGINT/SIGTERM/SIGHUP/SIGPIPE，否则会在写控制字之前被关停信号打死。
+    # arm_sim_mode 下臂不连 CAN（mock 回显），没有从站可失能，故一并跳过。
+    disable_motors_cmd = [
+        os.path.join(get_package_prefix('robot_arm_driver'),
+                     'lib', 'robot_arm_driver', 'disable_motors'),
+        can_interface, '1', '2', '3',   # bus.yml 的三个关节模组
+    ]
+    shutdown_disable = []
+    if (auto_disable.lower() in ('true', '1')
+            and arm_sim_mode.lower() not in ('true', '1')):
+        shutdown_disable = [
+            RegisterEventHandler(OnProcessExit(
+                target_action=ros2_control_node,
+                on_exit=[ExecuteProcess(cmd=disable_motors_cmd, output='screen')],
+            )),
+            RegisterEventHandler(OnShutdown(
+                on_shutdown=[ExecuteProcess(cmd=disable_motors_cmd, output='screen')],
+            )),
+        ]
+
     # ── 电机运行模式（402）按控制方式自动选择，经 /arm_node/set_mode_* 编排 ──────
     #   joint_position                → PP(1) 驱动器自规划（滑块点到点，6081 限速）
     #   轨迹/运镜/commander 等其余     → IP(7) 跟随上位机插补（bus.yml 默认，无需调用）
@@ -309,6 +371,7 @@ def _setup(context, *args, **kwargs):
     )
 
     return [
+        *shutdown_disable,         # 关停失能钩子（须早于 ros2_control_node 注册）
         robot_state_publisher,
         ros2_control_node,
         arm_driver_services,
@@ -344,6 +407,13 @@ def generate_launch_description():
             'can_interface', default_value=_default_can_interface(),
             description='SocketCAN 接口名，默认读 robot_arm_driver/config/can.yaml；'
                         '可临时覆盖：can0（真机）| vcan0（假从站联调）',
+        ),
+        DeclareLaunchArgument(
+            'auto_disable_on_shutdown', default_value='false',
+            description='关停时是否自动失能电机。false（默认）= Ctrl-C 后臂停在原地、'
+                        '保持力矩、不下沉，但驱动器仍带电且无人控制（且下次 launch 可能'
+                        '报 SDO timed out）；true = 减速停稳后断力矩，代价是 J2/J3 会下沉。'
+                        '手动失能随时可用：ros2 run robot_arm_driver disable_motors can0',
         ),
         DeclareLaunchArgument(
             'log_level', default_value='warn',

@@ -1,0 +1,10 @@
+# LoadTrajectory.srv  —— /robot_arm/teach/load_trajectory
+# 从磁盘读一条轨迹到内存缓冲区（回放的输入）。读入后立刻跑静态校验，
+# 不合格照样返回内容但 success=false 且 message 说明问题，便于人工检查坏文件。
+# 不做任何运动。
+
+string name
+---
+bool   success
+string message
+TeachTrajectory trajectory

@@ -1,0 +1,11 @@
+# SetPlaybackSpeed.srv  —— /robot_arm/teach/set_playback_speed
+# 回放**进行中**改速度倍率（requirement：支持降速）。
+# 只影响尚未下发的分段：已经交给 JTC 的那一段照原速走完，所以生效有一个分段的延迟
+#（约 playback.chunk_horizon_sec）——想立刻变速就先 pause 再改再 resume。
+# 新倍率同样要过速度/加速度闸；不过则拒绝并保持原倍率（不静默限幅）。
+
+float64 speed_scale
+---
+bool    success
+string  message
+float64 active_speed_scale   # 实际生效的倍率（失败时为原值）

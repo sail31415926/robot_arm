@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_arm_teach</name>
+  <version>0.1.0</version>
+  <description>eMeet 机械臂示教模块：示教记录 / 轨迹保存 / 轨迹回放 / DOLLY-TRUCK-ARC-CRANE 运镜类型管理。
+    独立包，只经既有接口（/joint_states、/arm_controller/joint_trajectory、
+    /robot_arm/cmd/joint_velocity、/robot_arm/switch_control_mode）与臂侧协作，
+    不修改 CANopen / ros2_control / ModeManager / ControlMode.msg。</description>
+  <maintainer email="qianhang.wang@emeet.com">qianhang.wang</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>             <!-- pause/resume/stop 类无参服务用 Trigger -->
+  <depend>builtin_interfaces</depend>
+  <depend>sensor_msgs</depend>          <!-- /joint_states -->
+  <depend>trajectory_msgs</depend>      <!-- /arm_controller/joint_trajectory -->
+  <depend>moveit_msgs</depend>          <!-- /check_state_validity（自碰撞闸） -->
+  <depend>urdf</depend>                 <!-- joint_limits_guard：解析 /robot_description -->
+  <depend>robot_arm_interfaces</depend> <!-- ControlMode / ArmStatus / ArmJointVelocityCommand -->
+  <depend>yaml-cpp</depend>             <!-- trajectory_store：轨迹 YAML 落盘 -->
+
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <!-- 示教面板 python/teach_gui.py 的运行期依赖。纯客户端（只调本包服务 +
+       发 JogCommand），不参与 C++ 编译，所以是 exec_depend 而不是 depend。 -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>python3-pyqt5</exec_depend>
+  <!-- 运行期还需要（不是编译依赖，故不写 depend，只在文档里点明）：
+       robot_arm_node 的 mode_manager_node（提供 /robot_arm/switch_control_mode）
+       robot_arm_node 的 arm_commander（提供 /robot_arm/arm_status + 速度流执行）
+       robot_state_publisher（提供 latched /robot_description）
+       move_group（可选，提供 /check_state_validity；不在则自碰撞闸 fail-open） -->
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

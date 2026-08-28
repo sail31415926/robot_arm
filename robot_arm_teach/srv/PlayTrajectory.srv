@@ -1,0 +1,31 @@
+# PlayTrajectory.srv  —— /robot_arm/teach/play_trajectory
+# 回放一条轨迹。执行前的**九道闸**（任一不过就不下发任何指令）：
+#   ① 关节名称与 /joint_states 逐字一致、维度均为 6
+#   ② 全字段 NaN / inf 检查，time_from_start 严格单调递增
+#   ③ 每点位置在 URDF 关节限位内（限位从 latched /robot_description 解析，
+#      未拿到 URDF 时 fail-open 并告警 —— 与 robot_arm_node 的既有策略一致）
+#   ④ 逐轴速度 ≤ playback.max_joint_velocity、加速度 ≤ playback.max_joint_acceleration
+#      （按 speed_scale 缩放后复核：速度 ×s、加速度 ×s²）
+#   ⑤ 自碰撞：逐点（按 playback.collision_check_stride 抽样）送 /check_state_validity
+#   ⑥ 当前关节位置与轨迹起点的距离 ≤ playback.start_tolerance_rad；
+#      超出时按 playback.auto_approach 决定：true → 在轨迹前插一段慢速接近段；
+#      false → 拒绝执行（返回 exit_reason="not_at_start"）
+#   ⑦ 机械臂无急停闩锁、无故障（读 /robot_arm/arm_status 的 error_code）
+#   ⑧ 经 /robot_arm/switch_control_mode 切到 TRAJECTORY（唯一入口，不碰 controller_manager）
+#   ⑨ 经既有轨迹总线 /arm_controller/joint_trajectory 分段下发
+#
+# dry_run=true 时只跑①~⑦并返回结论，不切模式、不下发 —— 上板前自检用。
+
+string  name          # 轨迹名（可空 → 用内存缓冲区里的那条）
+float64 speed_scale   # 速度倍率，(0, 1] 为降速；0 或负数视为 1.0。
+                      # >1.0 仅在缩放后仍通过闸④时接受，否则拒绝（不静默限幅）
+int32   loop_count    # 循环次数，<=0 视为 1；仅整条轨迹循环，不做首末衔接平滑
+bool    dry_run       # 只校验不执行
+---
+bool    success
+string  message
+string  exit_reason   # "accepted" | "busy" | "not_found" | "invalid_trajectory" |
+                      # "out_of_range" | "over_speed" | "collision" | "not_at_start" |
+                      # "no_joint_state" | "estopped" | "mode_switch_failed" | "dry_run_ok"
+uint32  point_count
+float64 duration_sec  # 按 speed_scale 折算后的预计时长

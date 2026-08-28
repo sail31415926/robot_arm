@@ -1,0 +1,22 @@
+# StartTeach.srv  —— /robot_arm/teach/start_teach
+# 开始示教录制。内部按序做：
+#   ① 闸：当前必须 IDLE（正在录/放时拒绝，不做隐式抢占）
+#   ② 闸：机械臂无急停、无故障（读 /robot_arm/arm_status）
+#   ③ 按 teach_mode 决定底层模式：
+#        TEACH_MODE_JOG  → 经 /robot_arm/switch_control_mode 切 JOINT_VELOCITY
+#        TEACH_MODE_DRAG → 实机没有 effort_controller，**直接拒绝**（不降级、不假装支持）；
+#                          要降级点动请显式传 TEACH_MODE_JOG。allow_jog_fallback=true 时
+#                          才自动降级为点动，并在 message 里说明。
+#   ④ 起采样器（steady_clock 定时，默认 50Hz），开点动中继闸
+# 失败时不改变任何状态、不切模式。
+
+string name                # 轨迹名（可空 → 自动生成 teach_<时间戳>）；重名不影响录制，保存时才查重
+MotionType motion_type     # 本条轨迹的运镜类型；不确定就填 FREEFORM
+uint8  teach_mode          # 取 TeachState.TEACH_MODE_* 常量
+bool   allow_jog_fallback  # DRAG 不可用时是否允许自动降级为 JOG（默认 false = 宁可失败）
+string description         # 备注（可空）
+---
+bool   success
+string message             # 失败原因，或降级/限制说明（如"云台 J4-6 不可点动"）
+string trajectory_name     # 实际使用的轨迹名（入参为空时为自动生成的名字）
+uint8  teach_mode          # 实际生效的示教方式（可能因降级与入参不同）

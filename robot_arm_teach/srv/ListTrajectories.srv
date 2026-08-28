@@ -1,0 +1,15 @@
+# ListTrajectories.srv  —— /robot_arm/teach/list_trajectories
+# 列出存储目录下的所有轨迹摘要。只读 YAML 的头部字段，不加载 points ——
+# 目录里有几十条长轨迹时不至于把整个进程的内存和一次服务应答撑爆。
+
+uint8 motion_type_filter   # 只列该运镜类型（取 MotionType 常量）
+bool  filter_by_motion_type   # false = 不过滤，列全部
+---
+bool     success
+string   message
+string[] names            # 轨迹名
+string[] created_at       # 与 names 同序
+uint8[]  motion_types     # 与 names 同序，取 MotionType 常量
+uint32[] point_counts     # 与 names 同序
+float64[] durations_sec   # 与 names 同序
+string[] invalid_names    # 解析失败/版本不支持的文件（文件名，不含扩展名），供人工排查
