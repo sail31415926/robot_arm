@@ -15,6 +15,9 @@
 
 arm_commander:
   ros__parameters:
+    # 占位：ros__parameters 不能是空映射，否则 rcl 会报 No value at line 17 并让节点 abort。
+    # 下面候选项全被注释时必须留一条无害的实项。实机无 /clock，本来就该是 false。
+    use_sim_time: false
 
     # ── 候选①：速度流发布频率 ────────────────────────────────────────────────
     # 实测（J1 @0.15 rad/s 匀速点动，2026-08-12 样机）：
