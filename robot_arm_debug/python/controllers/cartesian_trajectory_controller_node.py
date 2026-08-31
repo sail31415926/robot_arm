@@ -48,7 +48,18 @@ EEF_LINK       = 'gimbal_tool0'   # 2026-07-28 云台换 V2：MoveIt 规划组 t
 BASE_FRAME     = 'arm_base_link'
 
 STREAM_DT    = 0.01    # s，Ruckig 内部步长（100Hz）
-IK_TIMEOUT_S = 0.05    # 单次 IK 超时（100ms）
+IK_TIMEOUT_S = 0.05    # s，单次 IK 超时（50ms）
+
+# 连续 IK 无解的容忍跨度（s）。达到即判定路径成片驶出可达域 → 放弃整条，
+# 不再空跑完剩余无解点（每个无解点最坏要阻塞一次 IK 超时）。
+# 低于此跨度的零星漏解仍沿用上一帧的解容忍过去（求解器偶发抖动，不是真不可达）。
+#
+# ★ 按**时间跨度**而不是点数定义：产品路径（robot_arm_node 的 motion/trajectory.cpp）
+#   用 MAX_CONSEC_IK_FAIL=10 个点，但那是降采样之后（抽取 1/3，步长 0.03s）的粒度，
+#   等价于 0.3s。本节点是 100Hz 全点求解，直接照抄 10 会严格 3 倍，把求解器的偶发
+#   抖动误判成不可达。
+MAX_CONSEC_IK_FAIL_SEC = 0.3
+MAX_CONSEC_IK_FAIL     = max(1, int(round(MAX_CONSEC_IK_FAIL_SEC / STREAM_DT)))
 
 # 点到点默认限制
 DEFAULT_V_POS = 0.05;  DEFAULT_A_POS = 0.10;  DEFAULT_J_POS = 1.00
@@ -192,6 +203,15 @@ class CartesianTrajectoryControllerNode(Node):
         """
         all_pts: list of (t, x, y, z, qx, qy, qz, qw)
         对每个点求 IK，计算关节速度，下发完整 JointTrajectory。
+
+        IK 无解的三种处理（与产品路径 motion/trajectory.cpp 的判据对齐）：
+          · 首点无解（含零种子重试）        → 起点不可达，放弃，不下发
+          · 零星漏解（连续跨度 < 0.3s）      → 沿用上一帧的解继续，最后在状态栏报总数
+          · 成片无解（连续跨度 ≥ 0.3s）或末点无解 → 判定不可达，放弃，**不下发退化轨迹**
+
+        ★ 最后一条是关键：沿用上帧意味着末端在那几个点原地不动、然后跳到下一个有解点，
+          走出来的已经不是规划的那条笛卡尔曲线。零星漏解这样兜住尚可接受，成片无解还
+          硬发下去就是拿一条形状错了的轨迹去驱动机械臂；末点无解则整段根本到不了终点。
         """
         n_ik   = len(all_pts)
         t_traj = all_pts[-1][0]
@@ -200,6 +220,12 @@ class CartesianTrajectoryControllerNode(Node):
         seed      = list(self._joint_pos)
         joint_pos = []
         joint_t   = []
+
+        # 可达性统计：区分「零星漏解（沿用上帧容忍）」与「成片/末点无解（判定不可达）」
+        consec_fail    = 0      # 当前连续无解计数
+        first_fail_idx = 0      # 本段连续无解的起始 step
+        total_fail     = 0      # 整条累计漏解点数（成功下发时在状态栏报出）
+        last_pt_failed = False  # 最近处理的这一点是否无解
 
         for idx, (t_pt, wx, wy, wz, qx, qy, qz, qw) in enumerate(all_pts):
             if self._stop_req:
@@ -213,19 +239,42 @@ class CartesianTrajectoryControllerNode(Node):
                 sol, err = self._ik_sync(wx, wy, wz, qx, qy, qz, qw,
                                          [0.0] * 6)
 
-            if sol is None:
+            if sol is not None:
+                consec_fail    = 0
+                last_pt_failed = False
+            elif joint_pos:
+                # 零星漏解：沿用上一帧继续，累计计数；成片连续无解则在下面判不可达
                 err_name = self._IK_ERR.get(err, str(err))
-                if joint_pos:
-                    sol = joint_pos[-1]
-                    self.get_logger().warn(
-                        f'IK 失败 step={idx} err={err_name}  '
-                        f'pos=({wx:.3f},{wy:.3f},{wz:.3f})')
-                else:
+                sol = joint_pos[-1]
+                if consec_fail == 0:
+                    first_fail_idx = idx
+                consec_fail    += 1
+                total_fail     += 1
+                last_pt_failed = True
+                self.get_logger().warn(
+                    f'IK 失败 step={idx} err={err_name}  '
+                    f'pos=({wx:.3f},{wy:.3f},{wz:.3f})，沿用上帧')
+                if consec_fail >= MAX_CONSEC_IK_FAIL:
+                    fx, fy, fz = all_pts[first_fail_idx][1:4]
+                    span = consec_fail * STREAM_DT
+                    self.get_logger().error(
+                        f'连续 {consec_fail} 点（{span:.2f}s）IK 无解'
+                        f'（自 step={first_fail_idx} pos=({fx:.3f},{fy:.3f},{fz:.3f}) 起），'
+                        f'判定路径超出可达域，放弃本段')
                     self._q.put(('status',
-                                 f'✗ IK 失败（step=0 err={err_name}）'
-                                 f'  pos=({wx:.3f},{wy:.3f},{wz:.3f})'
-                                 f'  quat=({qx:.3f},{qy:.3f},{qz:.3f},{qw:.3f})'))
+                                 f'✗ 连续 {consec_fail} 点（{span:.2f}s）IK 无解'
+                                 f'  自 step={first_fail_idx}'
+                                 f'  pos=({fx:.3f},{fy:.3f},{fz:.3f})'
+                                 f'  → 路径超出可达域，已放弃（未下发）'))
                     return
+            else:
+                # 首帧（含零种子重试）即无解：起点不可达
+                err_name = self._IK_ERR.get(err, str(err))
+                self._q.put(('status',
+                             f'✗ IK 失败（step=0 err={err_name}）'
+                             f'  pos=({wx:.3f},{wy:.3f},{wz:.3f})'
+                             f'  quat=({qx:.3f},{qy:.3f},{qz:.3f},{qw:.3f})'))
+                return
 
             joint_pos.append(sol)
             joint_t.append(t_pt)
@@ -235,6 +284,17 @@ class CartesianTrajectoryControllerNode(Node):
                 self._q.put(('status', f'⚙ 规划中 {idx+1}/{n_ik}...'))
 
         if self._stop_req:
+            return
+
+        # 末点无解（哪怕连续数没到阈值）：整段走不到终点 → 不可达，不下发退化轨迹。
+        # 末点是唯一"必须精确到达"的点，沿用上帧在这里等于悄悄换了个终点。
+        if last_pt_failed:
+            lx, ly, lz = all_pts[-1][1:4]
+            self.get_logger().error(
+                f'末点 IK 无解 pos=({lx:.3f},{ly:.3f},{lz:.3f})，终点不可达，放弃本段')
+            self._q.put(('status',
+                         f'✗ 末点 IK 无解  pos=({lx:.3f},{ly:.3f},{lz:.3f})'
+                         f'  → 终点不可达，已放弃（未下发）'))
             return
 
         # 中央差分计算关节速度，端点为零
@@ -257,7 +317,12 @@ class CartesianTrajectoryControllerNode(Node):
                                           nanosec=ns % 1_000_000_000)
             msg.points.append(pt)
         self._traj_pub.publish(msg)
-        self._q.put(('status', f'● 执行中  {n} 个路点  时长 {t_traj:.2f}s  {desc}'))
+        # 漏解过的轨迹形状已与规划不完全一致，必须在界面上说出来 ——
+        # 只打终端 WARN 的话，状态栏一句"执行中"会让人以为轨迹是干净的。
+        degraded = (f'  ⚠ {total_fail} 点漏解已沿用上帧（轨迹略偏规划路径）'
+                    if total_fail else '')
+        self._q.put(('status',
+                     f'● 执行中  {n} 个路点  时长 {t_traj:.2f}s  {desc}{degraded}'))
 
     # ── 点到点 ────────────────────────────────────────────────────────────────
     def send_goal(self, x, y, z, roll_deg, pitch_deg, yaw_deg,
