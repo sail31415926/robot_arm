@@ -58,6 +58,27 @@ std::optional<std::vector<Waypoint>> plan_orbit_waypoints(
   const double d_phi   = phi1 - phi0;
   const double d_r     = r1 - r0;
 
+  // 归一化 s∈[0,1] 的限制（与 plan_line_waypoints 对齐）：传入的 s_vel/s_acc/s_jerk
+  // 实为物理量（execute_orbit 传的是 speed.v_ori/a_ori/j_ori，单位 rad/s、rad/s²、
+  // rad/s³），必须除以本段行程才能当无量纲的 ds/dt 用。原实现直接透传，导致环绕
+  // 时长恒为 1/v_ori（与跨度无关），而实际角速度与角加速度 ∝ 跨度 —— 跨度越大启动
+  // 越猛。2026-08-31 实测：SLOW 档跨度 30° 与 120° 的轨迹均为 points=689 /
+  // horizon=20.800s，而 J3 指令速度峰值差 4.94 倍。
+  constexpr double EPS = 1e-6;
+  const double d_ang = std::sqrt(d_theta * d_theta + d_phi * d_phi);   // 球面角跨度(rad)
+  const double r_avg = 0.5 * (r0 + r1);
+  const double arc   = std::sqrt(r_avg * d_ang * r_avg * d_ang + d_r * d_r);  // 路径长(m)
+  double n_vel = s_vel, n_acc = s_acc, n_jerk = s_jerk;
+  if (d_ang > EPS) {            // 相机始终朝球心 -> 姿态角变化 ≈ 球面角跨度
+    n_vel  = s_vel  / d_ang;
+    n_acc  = s_acc  / d_ang;
+    n_jerk = s_jerk / d_ang;
+  } else if (arc > EPS) {       // 纯径向（推拉）：d_ang≈0，退化为按弧长归一化
+    n_vel  = s_vel  / arc;
+    n_acc  = s_acc  / arc;
+    n_jerk = s_jerk / arc;
+  }
+
   ruckig::Ruckig<1> otg{STREAM_DT};
   ruckig::InputParameter<1> inp;
   ruckig::OutputParameter<1> out;
@@ -67,9 +88,9 @@ std::optional<std::vector<Waypoint>> plan_orbit_waypoints(
   inp.target_position      = {1.0};
   inp.target_velocity      = {0.0};
   inp.target_acceleration  = {0.0};
-  inp.max_velocity         = {s_vel};
-  inp.max_acceleration     = {s_acc};
-  inp.max_jerk             = {s_jerk};
+  inp.max_velocity         = {n_vel};
+  inp.max_acceleration     = {n_acc};
+  inp.max_jerk             = {n_jerk};
 
   std::vector<Waypoint> pts;
   double t_acc = 0.0;
