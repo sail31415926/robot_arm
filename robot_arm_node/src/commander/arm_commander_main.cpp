@@ -15,6 +15,16 @@
 
 #include "robot_arm_node/commander/arm_commander_node.hpp"
 
+/**
+ * @brief arm_commander_node 进程入口。
+ *
+ * 使用 MultiThreadedExecutor 而非单线程 spin：Action 执行线程会阻塞式跑 IK 与
+ * 等待到位，服务回调又要同步等 future，单线程会自锁。
+ *
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 进程退出码，正常退出为 0。
+ */
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);

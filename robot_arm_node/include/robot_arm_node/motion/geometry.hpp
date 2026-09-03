@@ -24,6 +24,17 @@ using Vec3 = std::array<double, 3>;   // (x, y, z)
 using Rpy  = std::array<double, 3>;   // (roll, pitch, yaw)  rad
 
 // RPY(rad) → (qx,qy,qz,qw)，ZYX 内旋 / XYZ 外旋
+/**
+ * @brief RPY 欧拉角转四元数（ZYX 内旋 / XYZ 外旋）。
+ *
+ * 分量序为 (x, y, z, w)，与 Python 侧 arm_utils 完全一致 —— 改约定会导致
+ * 运动方向变化，勿动。
+ *
+ * @param roll 绕 X 轴转角（rad）。
+ * @param pitch 绕 Y 轴转角（rad）。
+ * @param yaw 绕 Z 轴转角（rad）。
+ * @return 四元数 (qx, qy, qz, qw)。
+ */
 inline Quat rpy_to_quat(double roll, double pitch, double yaw)
 {
   const double cr = std::cos(roll * 0.5),  sr = std::sin(roll * 0.5);
@@ -36,6 +47,17 @@ inline Quat rpy_to_quat(double roll, double pitch, double yaw)
 }
 
 // (qx,qy,qz,qw) → (roll,pitch,yaw) rad
+/**
+ * @brief 四元数转 RPY 欧拉角。
+ *
+ * pitch 的 asin 参数做了 clamp，避免数值误差让 |sin|>1 时返回 NaN。
+ *
+ * @param x 四元数 x 分量。
+ * @param y 四元数 y 分量。
+ * @param z 四元数 z 分量。
+ * @param w 四元数 w 分量。
+ * @return (roll, pitch, yaw)，单位 rad。
+ */
 inline Rpy quat_to_rpy(double x, double y, double z, double w)
 {
   const double roll  = std::atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
@@ -46,9 +68,31 @@ inline Rpy quat_to_rpy(double x, double y, double z, double w)
 }
 
 // 主体→世界原点在 XY 平面的方位角，作 θ=0 参考方向（近侧）
+/**
+ * @brief 球坐标 θ=0 的参考方向：主体指向世界原点在 XY 平面的方位角。
+ *
+ * 取「近侧」为 θ=0，使运镜的角度参数与直觉一致（θ 增大 = 绕着转开）。
+ *
+ * @param ox 球心 x 坐标。
+ * @param oy 球心 y 坐标。
+ * @return 参考方位角（rad）。
+ */
 inline double theta_ref(double ox, double oy) { return std::atan2(-oy, -ox); }
 
 // Z-up 球坐标 → 世界系笛卡尔位置
+/**
+ * @brief Z-up 球坐标转世界系笛卡尔位置。
+ *
+ * θ 以 theta_ref 给出的近侧方向为 0，φ 为仰角（非极角），r 为半径。
+ *
+ * @param theta_rad 方位角（rad，相对近侧参考方向）。
+ * @param phi_rad 仰角（rad）。
+ * @param r 半径（m）。
+ * @param ox 球心 x 坐标（m）。
+ * @param oy 球心 y 坐标（m）。
+ * @param oz 球心 z 坐标（m）。
+ * @return 世界系位置 (x, y, z)。
+ */
 inline Vec3 sphere_to_cart(double theta_rad, double phi_rad, double r,
                            double ox, double oy, double oz)
 {
@@ -60,6 +104,19 @@ inline Vec3 sphere_to_cart(double theta_rad, double phi_rad, double r,
 }
 
 // 笛卡尔 → Z-up 球坐标（θ 以近侧为 0）
+/**
+ * @brief 世界系笛卡尔位置转 Z-up 球坐标（sphere_to_cart 的逆）。
+ *
+ * θ 归一化到 (-π, π]；点与球心重合（r < 1e-9）时返回全零而非 NaN。
+ *
+ * @param px 点 x 坐标（m）。
+ * @param py 点 y 坐标（m）。
+ * @param pz 点 z 坐标（m）。
+ * @param ox 球心 x 坐标（m）。
+ * @param oy 球心 y 坐标（m）。
+ * @param oz 球心 z 坐标（m）。
+ * @return (theta, phi, r)，角度单位 rad、半径单位 m。
+ */
 inline Vec3 cart_to_sphere(double px, double py, double pz,
                            double ox, double oy, double oz)
 {
@@ -89,6 +146,20 @@ inline Vec3 cart_to_sphere(double px, double py, double pz,
 inline constexpr double EEF_LEVEL_ROLL = 0.0;
 
 // EEF X 轴朝向目标（= 相机光轴指向目标），roll 取 EEF_LEVEL_ROLL 保证画面水平
+/**
+ * @brief 求让相机光轴（EEF 的 +X 轴）指向目标点的姿态四元数。
+ *
+ * roll 固定取 EEF_LEVEL_ROLL 以保证画面水平（该常量的推导见其上方注释）。
+ * 相机与目标重合（距离 < 1e-9）时退化为只给水平 roll 的零姿态。
+ *
+ * @param cam_x 相机位置 x（m）。
+ * @param cam_y 相机位置 y（m）。
+ * @param cam_z 相机位置 z（m）。
+ * @param tgt_x 目标位置 x（m）。
+ * @param tgt_y 目标位置 y（m）。
+ * @param tgt_z 目标位置 z（m）。
+ * @return 朝向目标的姿态四元数 (qx, qy, qz, qw)。
+ */
 inline Quat aim_quat(double cam_x, double cam_y, double cam_z,
                      double tgt_x, double tgt_y, double tgt_z)
 {

@@ -33,6 +33,12 @@ namespace
 constexpr double DEG2RAD = M_PI / 180.0;
 
 // WaitOutcome → exit_reason 字符串（success 情形外）
+/**
+ * @brief 把等待结果映射为 exit_reason 字符串。
+ *
+ * @param o 等待结果。
+ * @return 对应的 exit_reason（REACHED 之外都是失败原因）。
+ */
 const char * outcome_reason(WaitOutcome o)
 {
   switch (o) {
@@ -46,6 +52,17 @@ const char * outcome_reason(WaitOutcome o)
 // 规划期 PlanResult → exit_reason 字符串。Unreachable 映射为 "unreachable"，
 // 命中 commander 的干净分支（恢复 IDLE + ABORTED，秒回、不进 ERROR、不空等到位超时）；
 // Error 保留原行为：与并发取消竞态时仍按 cancelled 归类。
+/**
+ * @brief 把规划期的 PlanResult 映射为 exit_reason 字符串。
+ *
+ * Unreachable 单独映射成 "unreachable"，命中 commander 的干净分支
+ * （恢复 IDLE + ABORTED，秒回，不进 ERROR 也不空等到位超时）。Error 保留
+ * 原行为：与并发取消存在竞态时仍按 cancelled 归类，避免把用户取消报成故障。
+ *
+ * @param pr 规划结果。
+ * @param cancelled 当前是否处于取消/急停态（用于 Error 的归类）。
+ * @return 对应的 exit_reason。
+ */
 const char * plan_exit_reason(motion::PlanResult pr, bool cancelled)
 {
   switch (pr) {
@@ -56,6 +73,15 @@ const char * plan_exit_reason(motion::PlanResult pr, bool cancelled)
 }
 }  // namespace
 
+/**
+ * @brief 构造运镜 Action 服务端。
+ *
+ * @param node 宿主节点，用于取日志器。
+ * @param motion 运动执行器，负责 IK、Ruckig 规划与轨迹下发。
+ * @param status 状态聚合器，用于读位姿与上报起点就位/相机就绪标志。
+ * @param monitor 执行监视器，负责等待到位与反馈上报。
+ * @param is_stopped 急停判据回调。
+ */
 TrajectoryShotServer::TrajectoryShotServer(rclcpp::Node & node, MotionExecutor & motion,
                                            state::StatusAggregator & status,
                                            ExecutionMonitor & monitor,
@@ -65,6 +91,12 @@ TrajectoryShotServer::TrajectoryShotServer(rclcpp::Node & node, MotionExecutor &
 {
 }
 
+/**
+ * @brief 执行 TrajectoryShot 动作，按 motion_type 分派到直线或球面轨道。
+ *
+ * @param gh Action 目标句柄。
+ * @return Action 结果；motion_type 非法时返回 error。
+ */
 TrajectoryShotServer::Action::Result TrajectoryShotServer::execute(
     const std::shared_ptr<GoalHandle> & gh)
 {
@@ -84,6 +116,23 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute(
 }
 
 // ── MOTION_LINEAR ────────────────────────────────────────────────────────────────
+/**
+ * @brief 执行 MOTION_LINEAR 运镜：PTP 到起点 → 停顿 → 笛卡尔直线 → 可选原路返回。
+ *
+ * 步骤 0 的 can_plan_line 预判是关键：纯几何检查（不做 IK、不下发），规划注定
+ * 失败时立刻拒绝，避免先花几十秒把机械臂搬到起点、再发现直线段走不通。
+ *
+ * 步骤 2 的直线以**指令起点**为基准而非实测位姿 —— 与 ORBIT 用指令球坐标一致；
+ * 步骤 1 的到位等待已经把实测与指令的偏差压进到位容差内，用指令值能保证
+ * 往返两次走的是同一条几何路径。
+ *
+ * 进度分配：无返回时 0→50→100，有返回时 0→33→67→100。
+ *
+ * @param gh Action 目标句柄。
+ * @param goal Action 目标（起止位姿、是否返回）。
+ * @param speed 速度档位。
+ * @return Action 结果。
+ */
 TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
     const std::shared_ptr<GoalHandle> & gh, const Action::Goal & goal, const Speed & speed)
 {
@@ -157,6 +206,20 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
 }
 
 // ── MOTION_ORBIT ─────────────────────────────────────────────────────────────────
+/**
+ * @brief 执行 MOTION_ORBIT 运镜：PTP 到起始球坐标 → 停顿 → 球面轨道 → 可选原路返回。
+ *
+ * 球坐标（方位角/俯仰角/半径）在此处从度换算成弧度后下传，相机全程朝向球心。
+ * 与 LINEAR 不同，这里没有 can_plan_line 那样的预判 —— 球面轨道的可达性依赖
+ * 整条路径上的 IK，无法用纯几何提前判定，只能靠规划过程中的 Unreachable 返回。
+ *
+ * 进度分配：无返回时 0→20→100，有返回时 0→30→60→90→100。
+ *
+ * @param gh Action 目标句柄。
+ * @param goal Action 目标（球心、起止球坐标、是否返回）。
+ * @param speed 速度档位（位置与姿态两组约束都会用到）。
+ * @return Action 结果。
+ */
 TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
     const std::shared_ptr<GoalHandle> & gh, const Action::Goal & goal, const Speed & speed)
 {
@@ -228,6 +291,17 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
 }
 
 // ── 到达起始点后的停顿 ─────────────────────────────────────────────────────────────
+/**
+ * @brief 在起始点停顿指定时长，期间保持对急停与取消的响应。
+ *
+ * 停顿的作用是让机械臂静定、相机稳定曝光后再开始运镜（否则起手那几帧会带
+ * 残余振动）。停顿期间置 at_pose_start / camera_ready 标志供外部感知。
+ * 用 20ms 轮询而非一次性 sleep，保证急停能在一拍内响应。
+ *
+ * @param gh Action 目标句柄。
+ * @param label 日志前缀（"LINEAR" / "ORBIT"）。
+ * @return 完整停顿结束返回 true；被急停或取消打断返回 false。
+ */
 bool TrajectoryShotServer::dwell_at_start(const std::shared_ptr<GoalHandle> & gh, const char * label)
 {
   status_.set_at_pose_start(true);
@@ -255,6 +329,22 @@ bool TrajectoryShotServer::dwell_at_start(const std::shared_ptr<GoalHandle> & gh
 }
 
 // ── 共用：IK 移动 + 等待到位 ────────────────────────────────────────────────────────
+/**
+ * @brief PTP 移动到目标位姿并等待到位（IK + 单点轨迹）。
+ *
+ * 用于运镜前的「搬到起点」，不要求路径形状，只要求终点到位。
+ *
+ * @param gh Action 目标句柄。
+ * @param target 目标位姿。
+ * @param speed 速度档位。
+ * @param label 日志前缀。
+ * @param p_lo 本段进度下界（%）。
+ * @param p_hi 本段进度上界（%）。
+ * @param azimuth 反馈里回填的方位角（度），仅 ORBIT 用。
+ * @param elevation 反馈里回填的俯仰角（度），仅 ORBIT 用。
+ * @param radius 反馈里回填的半径（m），仅 ORBIT 用。
+ * @return Action 结果。
+ */
 TrajectoryShotServer::Action::Result TrajectoryShotServer::move_and_wait(
     const std::shared_ptr<GoalHandle> & gh, const ArmPose & target, const Speed & speed,
     const char * label, double p_lo, double p_hi, double azimuth, double elevation, double radius)
@@ -302,6 +392,24 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::move_and_wait(
 }
 
 // ── 等待已下发轨迹执行完毕（只轮询到位）────────────────────────────────────────────
+/**
+ * @brief 等待已下发的轨迹执行完毕（只轮询到位，不再下发指令）。
+ *
+ * 与 move_and_wait 的区别：轨迹已由 plan_line_ruckig / plan_orbit_ruckig 一次性
+ * 下发完毕，这里没有「距离/速度」可以估时长，故进度分母沿用 0.1×timeout 这个
+ * 经验归一化 —— 它只影响进度条读数，不影响实际等待与判定。
+ *
+ * @param gh Action 目标句柄。
+ * @param target 目标位姿（退化判据用）。
+ * @param target_joints 本段轨迹末点关节解。
+ * @param label 日志前缀。
+ * @param p_lo 本段进度下界（%）。
+ * @param p_hi 本段进度上界（%）。
+ * @param azimuth 反馈里回填的方位角（度）。
+ * @param elevation 反馈里回填的俯仰角（度）。
+ * @param radius 反馈里回填的半径（m）。
+ * @return Action 结果。
+ */
 TrajectoryShotServer::Action::Result TrajectoryShotServer::wait_at_pose(
     const std::shared_ptr<GoalHandle> & gh, const ArmPose & target,
     const std::vector<double> & target_joints,
@@ -337,6 +445,16 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::wait_at_pose(
 }
 
 // ── 到位判据构造：只判臂 J1-3 ──────────────────────────────────────────────────────
+/**
+ * @brief 构造到位判据闭包：优先只判臂 J1-3，拿不到关节解时退化为笛卡尔判据。
+ *
+ * 末端 gimbal_tool0 在云台 J4-6 之后，云台回读不收敛会让笛卡尔判据永不满足，
+ * 因此正常路径一律用关节前缀判据（见 CLAUDE.md）。退化分支带 WARN。
+ *
+ * @param target_joints 轨迹末点关节解，长度 ≥ 3 时走关节判据。
+ * @param target 目标位姿，退化分支用。
+ * @return 到位判据闭包。
+ */
 std::function<bool()> TrajectoryShotServer::arm_arrived_fn(
     const std::vector<double> & target_joints, const ArmPose & target)
 {
@@ -351,6 +469,19 @@ std::function<bool()> TrajectoryShotServer::arm_arrived_fn(
 }
 
 // ── 球坐标 → Cartesian 位姿 ────────────────────────────────────────────────────────
+/**
+ * @brief 球坐标转末端位姿：位置取球面点，姿态取朝向球心的方向。
+ *
+ * 输入输出都用「度」（与 Action 接口一致），内部换成弧度调 motion 几何函数。
+ *
+ * @param azimuth_deg 方位角（度）。
+ * @param elevation_deg 俯仰角（度）。
+ * @param radius_m 半径（m）。
+ * @param ox 球心 x（m）。
+ * @param oy 球心 y（m）。
+ * @param oz 球心 z（m）。
+ * @return 对应的末端位姿（位置 m，姿态角为度）。
+ */
 ArmPose TrajectoryShotServer::sphere_to_pose(double azimuth_deg, double elevation_deg,
                                              double radius_m, double ox, double oy, double oz)
 {

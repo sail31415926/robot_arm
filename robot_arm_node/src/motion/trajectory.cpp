@@ -38,6 +38,16 @@ constexpr double START_BLEND_SEC = 0.2;
 constexpr int MAX_CONSEC_IK_FAIL = 10;
 }  // namespace
 
+/**
+ * @brief 按固定步长对路点序列进行降采样。
+ *
+ * 以 k 为步长从头开始保留路点，确保末端点不会丢失，从而保持原始轨迹的
+ * 起止位姿与总时长不变。
+ *
+ * @param pts 原始路点序列。
+ * @param k 降采样步长；当 k <= 1 或路点数过少时不做降采样。
+ * @return 降采样后的路点序列。
+ */
 std::vector<Waypoint> decimate(const std::vector<Waypoint> & pts, int k)
 {
   if (k <= 1 || pts.size() <= 2) return pts;
@@ -52,6 +62,19 @@ std::vector<Waypoint> decimate(const std::vector<Waypoint> & pts, int k)
   return out;
 }
 
+/**
+ * @brief 根据关节位置与时间戳构建 JointTrajectory 消息。
+ *
+ * 采用中央差分法计算每个路点的关节速度，端点速度强制为 0，以便让
+ * Ruckig 等轨迹控制器按静止起止生成平滑轨迹；与速度/加速度耦合的
+ * 五次样条方案相比，此处刻意只输出位置和速度，避免放大 IK 噪声。
+ *
+ * @param joint_pos 每个路点的关节位置，形状为 [N][DOF]。
+ * @param joint_t 每个路点对应的时间戳（秒）。
+ * @param joint_names 关节名称列表。
+ * @param stamp 轨迹消息头的时间戳。
+ * @return 组装好的 JointTrajectory 消息。
+ */
 trajectory_msgs::msg::JointTrajectory build_joint_trajectory(
     const std::vector<std::vector<double>> & joint_pos,
     const std::vector<double> & joint_t,
@@ -93,6 +116,33 @@ trajectory_msgs::msg::JointTrajectory build_joint_trajectory(
   return msg;
 }
 
+/**
+ * @brief 逐点求解 IK，并在满足可达性条件后一次性发布整条 JointTrajectory。
+ *
+ * 过程包括：
+ * - 按 decimate_k 降采样原始运动路径；
+ * - 逐点调用 IK，并使用上一解作为种子；
+ * - 首帧失败时尝试零种子重试；
+ * - 连续多点无解判定为不可达，零星漏解沿用上一帧；
+ * - 最终时间轴整体后移 START_BLEND_SEC 预留起步融合时间；
+ * - 仅在全部成功后发布一条完整轨迹。
+ *
+ * @param node ROS 节点对象，用于获取时钟与构建消息。
+ * @param ik_client IK 求解服务客户端。
+ * @param traj_pub 轨迹发布器。
+ * @param all_pts_in 原始路径点集合。
+ * @param seed 初始 IK 种子（用于首帧求解）。
+ * @param joint_names 关节名称列表。
+ * @param group MoveIt 规划组名称。
+ * @param eef_link 末端执行器链接名称。
+ * @param base_frame 参考坐标系。
+ * @param decimate_k 路径降采样步长。
+ * @param ik_timeout_s 每次 IK 求解超时时间（秒）。
+ * @param stop_check 中止检测回调，返回 true 表示取消当前运镜。
+ * @param logger 日志记录器。
+ * @param final_joints 输出最终关节解，用于上层到位判定。
+ * @return 规划结果枚举，表示成功、取消、不可达或错误。
+ */
 PlanResult solve_and_send(
     rclcpp::Node & node,
     const rclcpp::Client<GetPositionIK>::SharedPtr & ik_client,
@@ -226,7 +276,7 @@ PlanResult solve_and_send(
   }
   traj_pub->publish(msg);
 
-  // 末点关节解带给上层做到位判据（joint_pos 首元素是插入的起点，末元素才是终点）
+  // 末点关节解带给上层做到位判据
   if (final_joints) *final_joints = joint_pos.back();
 
   const double plan_ms =

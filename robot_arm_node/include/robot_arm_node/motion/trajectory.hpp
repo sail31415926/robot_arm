@@ -8,7 +8,7 @@
  *   build_joint_trajectory 关节序列 + 时间序列 → JointTrajectory（中央差分算速度，端点零；
  *                          刻意不补加速度，五次样条经验证劣于三次，见 .cpp 注释）
  *   solve_and_send         路点批量 IK（种子延续 / 首帧零种子重试 / 失败沿用上帧）
- *                          → 首点前插入当前关节作起步融合段 → 发布
+ *                          → 时间轴后移 START_BLEND_SEC 留起步融合段 → 发布
  * 依赖注入（seed / stop_check），无 StatusAggregator / is_stopped 硬耦合。
  *
  * @version 1.0
@@ -56,8 +56,10 @@ enum class PlanResult
 
 // 批量 IK + JointTrajectory 下发（对应 Python solve_and_send）。
 //   路点降采样 → 逐点 IK（种子延续，首帧失败零种子重试，零星漏解沿用上帧）
-//   → 中央差分算关节速度 → 构建并发布 JointTrajectory。
+//   → 中央差分算关节速度 → 时间轴整体后移 START_BLEND_SEC → 构建并发布 JointTrajectory。
 // 依赖注入、无状态：seed 由调用方提供，stop_check 由调用方注入（急停 / 取消合成一个判据）。
+//   seed 只作 IK 种子（保证首帧解与当前位形同分支），**不**兼任下发轨迹的物理起点 ——
+//   起步融合由 JTC 从它自己的当前状态插值完成，见 .cpp 末尾注释。
 //   node    仅用于 get_clock()（时间戳），不读其它状态。
 //   逐点 IK 阻塞等 future，须由 MultiThreadedExecutor 的执行线程调用（见 kinematics.hpp）。
 // 可达性判定（规划期即知，不下发退化轨迹）：首帧无解 / 末帧无解 / 连续无解达阈值

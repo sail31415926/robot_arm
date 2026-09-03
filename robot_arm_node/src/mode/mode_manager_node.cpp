@@ -733,6 +733,16 @@ private:
 
 }  // namespace robot_arm_node::mode
 
+/**
+ * @brief mode_manager_node 进程入口。
+ *
+ * 必须用 MultiThreadedExecutor：切换模式的服务回调内部要同步等
+ * controller_manager 的 client future，单线程会自锁。
+ *
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 进程退出码，正常退出为 0。
+ */
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);

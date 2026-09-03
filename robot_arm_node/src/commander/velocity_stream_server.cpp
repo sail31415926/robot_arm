@@ -27,8 +27,23 @@ const char * TOPIC_JOINT_VELOCITY = "/robot_arm/cmd/joint_velocity";
 constexpr double ZERO_EPS = 1e-6;   // 小于此值视为「停」
 constexpr double DEG2RAD  = M_PI / 180.0;
 
+/**
+ * @brief 把数值限制在对称区间 [-lim, lim] 内。
+ *
+ * @param v 待限制的值。
+ * @param lim 对称上限（应为正）。
+ * @return 限制后的值。
+ */
 double clamp(double v, double lim) { return std::max(-lim, std::min(lim, v)); }
 
+/**
+ * @brief 取单调时钟的当前秒数。
+ *
+ * 速度流的积分步长必须用 steady_clock：本类是 wall timer 驱动，而 Gazebo 的
+ * /clock 只有 10Hz，用 ROS 时钟求 dt 会系统性丢步（见 CLAUDE.md）。
+ *
+ * @return 自 steady_clock 纪元起的秒数。
+ */
 double steady_now()
 {
   return std::chrono::duration<double>(
@@ -36,6 +51,20 @@ double steady_now()
 }
 }  // namespace
 
+/**
+ * @brief 构造速度流服务端：声明全部可调参数，订阅两条速度总线，起固定周期定时器。
+ *
+ * 两条输入总线：TOPIC_JOINT_VELOCITY（关节速度，直给臂 J1-3）与
+ * TOPIC_FOLLOW_COMMAND（末端 6 维 twist，经 Jacobian 解算）。输出统一是
+ * **位置流**发到 JTC 的轨迹话题 —— 与位置模式同一条总线，切模式不切控制器。
+ *
+ * 参数默认值里藏着若干实机结论（rate_hz / max_lag / max_accel 各自的注释），
+ * 改动前请连同注释一起读。
+ *
+ * @param node 宿主节点，用于声明参数、建订阅/发布与定时器。
+ * @param status 状态聚合器，提供关节回读、TF buffer 与当前控制模式。
+ * @param is_stopped 急停判据回调。
+ */
 VelocityStreamServer::VelocityStreamServer(rclcpp::Node & node,
                                            state::StatusAggregator & status,
                                            std::function<bool()> is_stopped)
@@ -126,12 +155,26 @@ VelocityStreamServer::VelocityStreamServer(rclcpp::Node & node,
               command_timeout_ * 1000.0);
 }
 
+/**
+ * @brief 查询当前是否正在下发速度流。
+ *
+ * @return 正在流式下发返回 true。
+ */
 bool VelocityStreamServer::is_streaming() const
 {
   return streaming_.load();
 }
 
 // ── 指令订阅：只缓存，换算与下发都在定时器里做 ────────────────────────────────
+/**
+ * @brief 末端 twist 指令回调：限幅后缓存，不在回调里做解算或下发。
+ *
+ * 回调只负责缓存 + 打时间戳，实际换算与下发都在 on_tick 里按固定周期做 ——
+ * 输入频率不可控，跟着回调发轨迹会让 JTC 不停重启插值（见 CLAUDE.md 速度控制坑 1）。
+ * 注意 ArmTwist 的角速度单位是**度/秒**，这里换成 rad/s 再进 Jacobian。
+ *
+ * @param msg 末端 6 维速度指令。
+ */
 void VelocityStreamServer::on_follow_command(const FollowCommand & msg)
 {
   const auto & t = msg.twist;
@@ -148,6 +191,13 @@ void VelocityStreamServer::on_follow_command(const FollowCommand & msg)
   has_cmd_     = true;
 }
 
+/**
+ * @brief 关节速度指令回调：长度校验 + 限幅后缓存。
+ *
+ * 长度不符直接丢弃并节流告警 —— 补零或截断都会让某个关节收到非预期的速度。
+ *
+ * @param msg 关节速度指令（长度须等于臂关节数）。
+ */
 void VelocityStreamServer::on_joint_command(const JointVelCommand & msg)
 {
   if (msg.velocities.size() != arm_joints_.size()) {
@@ -167,6 +217,19 @@ void VelocityStreamServer::on_joint_command(const JointVelCommand & msg)
 }
 
 // ── 指令 → 6 关节速度 ────────────────────────────────────────────────────────
+/**
+ * @brief 把缓存的速度指令换算成 6 关节速度 q̇。
+ *
+ * 关节源直接透传给臂那几轴，云台给 0（积分后角度不变，即保持）。
+ * 笛卡尔源走 6×6 几何 Jacobian + DLS 阻尼伪逆；**算不出必须返回 false 让上层停车**，
+ * 不能 fail-open —— 拿一个错的 q̇ 去积分等于让机械臂朝错误方向持续运动。
+ * 接近奇异位形时 DLS 会自动加阻尼并告警（末端跟踪有偏差但不会发散）。
+ *
+ * @param src 指令来源（Joint / Cartesian）。
+ * @param cmd 6 元指令数组（关节源为各轴速度，笛卡尔源为 twist）。
+ * @param qdot 出参，全关节速度（rad/s）。
+ * @return 解算成功返回 true；Jacobian 不可用返回 false。
+ */
 bool VelocityStreamServer::solve_joint_velocity(Source src, const double * cmd,
                                                 std::vector<double> * qdot)
 {
@@ -205,6 +268,14 @@ bool VelocityStreamServer::solve_joint_velocity(Source src, const double * cmd,
 }
 
 // 整体等比缩放：臂与云台各有上限，取最紧的比例统一缩放 —— 分开缩放会扭曲运动方向
+/**
+ * @brief 按臂/云台各自的速度上限，对 q̇ 做**整体等比**缩放。
+ *
+ * 必须整体等比而不是逐轴 clamp：逐轴削会改变各轴速度的比例关系，
+ * 末端实际运动方向随之扭曲，笛卡尔源下尤其明显。
+ *
+ * @param qdot 入出参，待缩放的关节速度向量。
+ */
 void VelocityStreamServer::scale_to_limits(std::vector<double> * qdot) const
 {
   const size_t n_arm = arm_joints_.size();
@@ -222,6 +293,18 @@ void VelocityStreamServer::scale_to_limits(std::vector<double> * qdot) const
 }
 
 // ── 固定周期下发 ──────────────────────────────────────────────────────────────
+/**
+ * @brief 固定周期回调：三道闸 → 解算 q̇ → 斜率限幅 → 积分 → 下发单点轨迹。
+ *
+ * 三道闸依次是模式闸（非 JOINT_VELOCITY 直接 halt，本类不自动切模式）、
+ * 急停闸、断流看门狗（超过 command_timeout_ 未收到新指令即 halt）。
+ * 零速度指令也走 halt —— 停流让 JTC 保持当前点，比继续刷同一点更干净。
+ *
+ * 起步（或断流后重新起步）时用当前回读播种积分器，避免从陈旧目标跳变；
+ * 积分步长用 steady_clock；速度斜率限幅给阶跃指令加梯形加减速；
+ * 最后有一道「防跑飞闸」限制设定点领先实测位置的幅度。
+ * 这几段各自的注释里都记着实机排查结论，改动前务必先读。
+ */
 void VelocityStreamServer::on_tick()
 {
   double cmd[6];
@@ -343,6 +426,16 @@ void VelocityStreamServer::on_tick()
   status_.set_moving(true);
 }
 
+/**
+ * @brief 下发单点 JointTrajectory。
+ *
+ * JTC 会在当前实际状态与该点之间做插值，因此 time_from_start 必须与位置差
+ * 匹配成正确斜率，否则执行速度会被稀释（见 CLAUDE.md 速度控制坑 1）。
+ *
+ * @param positions 目标位置（流期间是前伸点 lead，停止时是实测位置）。
+ * @param velocities 目标速度（流期间是 q̇，停止时全 0）。
+ * @param duration_s 该点的 time_from_start；≤0 时用 lookahead_。
+ */
 void VelocityStreamServer::publish_trajectory(const std::vector<double> & positions,
                                               const std::vector<double> & velocities,
                                               double duration_s)
@@ -359,6 +452,12 @@ void VelocityStreamServer::publish_trajectory(const std::vector<double> & positi
   traj_pub_->publish(traj);
 }
 
+/**
+ * @brief 急停：清空指令缓存并强制走一次停止流程。
+ *
+ * has_cmd_ 一并清掉，避免 ArmResetError 之后残留指令自己接着跑。
+ * streaming_ 先强置 true 是为了让随后的 halt 一定执行（halt 自身幂等）。
+ */
 void VelocityStreamServer::emergency_stop()
 {
   {
@@ -371,6 +470,17 @@ void VelocityStreamServer::emergency_stop()
   halt("急停");
 }
 
+/**
+ * @brief 停止速度流：复位积分器，并显式下发一条「停在实测位置」的零速轨迹。
+ *
+ * 关键是**不能**靠 JTC 自己保持最后一点：流期间最后发出的是前伸点
+ * lead = target_ + q̇·lookahead 且终端速度非零，什么都不发的话伺服会继续朝它冲
+ * （实机 2026-08-12 实测的「松手猛冲」）。停止点取**实测位置**而非 target_ ——
+ * 后者是开环积分量，含累积滞后，拿它当目标仍会往前走一段。
+ * 拿不到回读时退化为按设定点停（至少去掉前伸与非零终端速度）并告警。
+ *
+ * @param reason 停止原因，用于日志。
+ */
 void VelocityStreamServer::halt(const char * reason)
 {
   seeded_ = false;   // 积分器复位，下次起步重新用回读播种

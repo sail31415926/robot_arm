@@ -32,11 +32,26 @@ constexpr double DEFAULT_DEPTH   = 0.3;     // 未指定 desired_depth 时的默
 const char * IBVS_NODE     = "visp_ibvs_node";
 const char * FEATURE_TOPIC = "/red_detector/feature";
 
+/**
+ * @brief 取单调时钟的当前秒数。
+ *
+ * 用 steady_clock 而非 ROS 时钟：本循环是 wall timer 驱动，且仿真下
+ * /clock 频率很低，用 ROS 时钟求时间差会系统性丢步（见 CLAUDE.md）。
+ *
+ * @return 自 steady_clock 纪元起的秒数。
+ */
 double now_s()
 {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+/**
+ * @brief 构造一个 bool 类型的 ROS 参数消息。
+ *
+ * @param name 参数名。
+ * @param v 参数值。
+ * @return 填好类型与值的 Parameter 消息。
+ */
 rcl_interfaces::msg::Parameter bool_param(const std::string & name, bool v)
 {
   rcl_interfaces::msg::Parameter p;
@@ -45,6 +60,13 @@ rcl_interfaces::msg::Parameter bool_param(const std::string & name, bool v)
   p.value.bool_value = v;
   return p;
 }
+/**
+ * @brief 构造一个 double 类型的 ROS 参数消息。
+ *
+ * @param name 参数名。
+ * @param v 参数值。
+ * @return 填好类型与值的 Parameter 消息。
+ */
 rcl_interfaces::msg::Parameter double_param(const std::string & name, double v)
 {
   rcl_interfaces::msg::Parameter p;
@@ -55,6 +77,15 @@ rcl_interfaces::msg::Parameter double_param(const std::string & name, double v)
 }
 }  // namespace
 
+/**
+ * @brief 构造目标跟随 Action 服务端，订阅特征话题并建立 IBVS 参数客户端。
+ *
+ * 深度初值给 DEFAULT_DEPTH 而非 0：0 会让首帧的深度误差算出 log(0) = -inf。
+ *
+ * @param node 宿主节点。
+ * @param status 状态聚合器，用于上报跟随状态与读当前位姿。
+ * @param is_stopped 急停判据回调。
+ */
 TrackTargetServer::TrackTargetServer(rclcpp::Node & node, state::StatusAggregator & status,
                                      std::function<bool()> is_stopped)
 : node_(node), logger_(node.get_logger()), status_(status), is_stopped_(std::move(is_stopped))
@@ -66,6 +97,14 @@ TrackTargetServer::TrackTargetServer(rclcpp::Node & node, state::StatusAggregato
   param_cli_ = node_.create_client<SetParameters>(std::string("/") + IBVS_NODE + "/set_parameters");
 }
 
+/**
+ * @brief 特征话题回调：缓存目标在图像上的归一化坐标与深度。
+ *
+ * 丢弃非有限值与非正深度 —— 检测器在目标丢失时可能发 NaN/0，
+ * 混进缓存会让误差计算和收敛判定失效。
+ *
+ * @param msg 特征点消息（x/y 为归一化图像坐标，z 为深度 m）。
+ */
 void TrackTargetServer::on_feature(const geometry_msgs::msg::PointStamped & msg)
 {
   if (!std::isfinite(msg.point.z) || msg.point.z <= 0.0) return;
@@ -75,6 +114,15 @@ void TrackTargetServer::on_feature(const geometry_msgs::msg::PointStamped & msg)
   has_feat_ = true;
 }
 
+/**
+ * @brief 批量设置 IBVS 节点的参数。
+ *
+ * 参数服务不可用时返回 true（视为成功）—— 仿真或未起 visp_ibvs_node 的场景
+ * 下不应因此让整个动作失败，只打一条 INFO。
+ *
+ * @param params 待设置的参数列表。
+ * @return 全部设置成功（或服务不存在）返回 true，任一失败/超时返回 false。
+ */
 bool TrackTargetServer::set_params(const std::vector<rcl_interfaces::msg::Parameter> & params)
 {
   if (!param_cli_->wait_for_service(1s)) {
@@ -96,16 +144,41 @@ bool TrackTargetServer::set_params(const std::vector<rcl_interfaces::msg::Parame
   return true;
 }
 
+/**
+ * @brief 挂起或恢复 IBVS 视觉伺服。
+ *
+ * @param paused true 挂起（停止发速度指令），false 恢复。
+ * @return 设置成功返回 true。
+ */
 bool TrackTargetServer::set_paused(bool paused)
 {
   return set_params({bool_param("paused", paused)});
 }
 
+/**
+ * @brief 请求中止当前跟随（线程安全，供外部调用）。
+ *
+ * 只置标志位，由主循环下一拍检测并退出，不直接操作 Action 句柄。
+ */
 void TrackTargetServer::cancel()
 {
   cancel_flag_.store(true);
 }
 
+/**
+ * @brief 执行 TrackTarget 动作：启动 IBVS → 10Hz 监控循环 → 退出时挂起 IBVS。
+ *
+ * 本服务端自己不算控制量，速度指令由 visp_ibvs_node 直接发出；这里只负责
+ * 启停 IBVS、监控误差与各种退出条件、上报 Feedback。循环内检查顺序为
+ * 急停 → 取消 → 总超时 → 特征丢失 → 误差与收敛 → Feedback。
+ *
+ * hold_on_converge 为 true 时收敛也不退出（持续保持对准），此时只能靠取消、
+ * 超时、特征丢失或急停结束动作。无论从哪条路径退出，都必须走到函数末尾的
+ * 清理段把 IBVS 挂起 —— 否则视觉伺服会在动作结束后继续驱动机械臂。
+ *
+ * @param gh Action 目标句柄。
+ * @return Action 结果（含 exit_code、最终误差与位姿）。
+ */
 TrackTargetServer::Action::Result TrackTargetServer::execute(const std::shared_ptr<GoalHandle> & gh)
 {
   const auto goal = gh->get_goal();
@@ -214,6 +287,7 @@ TrackTargetServer::Action::Result TrackTargetServer::execute(const std::shared_p
     std::this_thread::sleep_for(20ms);
   }
 
+  // 退出清理：无论何种退出路径都必须挂起 IBVS，否则它会继续驱动机械臂
   // 退出清理
   set_paused(true);
   status_.set_tracking(false, 0.0, 0.0);
@@ -222,6 +296,7 @@ TrackTargetServer::Action::Result TrackTargetServer::execute(const std::shared_p
   result.final_depth_err_m = static_cast<float>(depth_err);
   result.final_pose        = status_.pose();
 
+  // 按退出原因调对应的终态方法：取消走 canceled，其余按成败 succeed/abort
   auto result_ptr = std::make_shared<Action::Result>(result);
   if (result.exit_code == Action::Goal::EXIT_CANCELLED) {
     gh->canceled(result_ptr);

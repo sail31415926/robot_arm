@@ -29,6 +29,14 @@ namespace
 constexpr int VALIDITY_WARN_THROTTLE_MS = 5000;   // 纯日志节流，不值得开成参数
 }  // namespace
 
+/**
+ * @brief 构造关节空间运动 Action 服务端。
+ *
+ * @param node 宿主节点，用于创建服务客户端与取日志器/时钟。
+ * @param motion 运动执行器，负责下发关节轨迹。
+ * @param status 状态聚合器（当前由 motion 间接使用，保留以备后续扩展）。
+ * @param monitor 执行监视器，负责等待到位与反馈上报。
+ */
 MoveToJointServer::MoveToJointServer(rclcpp::Node & node, MotionExecutor & motion,
                                      state::StatusAggregator & status, ExecutionMonitor & monitor)
 : node_(node), logger_(node.get_logger()), motion_(motion), status_(status), monitor_(monitor),
@@ -37,6 +45,13 @@ MoveToJointServer::MoveToJointServer(rclcpp::Node & node, MotionExecutor & motio
   validity_cli_ = node.create_client<moveit_msgs::srv::GetStateValidity>("/check_state_validity");
 }
 
+/**
+ * @brief 解析目标关节角：校验个数，并把相对量换算成绝对量。
+ *
+ * @param goal Action 目标（target_joints 为 J1-3，relative 决定语义）。
+ * @param current_arm 当前臂 J1-3 关节角（rad），relative 模式下作为基准。
+ * @return 绝对目标关节角（rad）；个数不符时返回 std::nullopt。
+ */
 std::optional<std::vector<double>> MoveToJointServer::resolve_target(
     const Action::Goal & goal, const std::vector<double> & current_arm) const
 {
@@ -53,6 +68,17 @@ std::optional<std::vector<double>> MoveToJointServer::resolve_target(
   return target;
 }
 
+/**
+ * @brief 用 MoveIt /check_state_validity 检查目标位形是否自碰撞。
+ *
+ * **fail-open 设计**：服务不可用（无 MoveIt 的场景）或调用超时都返回 true 放行。
+ * 这里与重力补偿的 fail-closed 取向相反 —— 自碰撞检查缺失只是少了一道保护，
+ * 而拦死会让无 MoveIt 部署完全动不了。注意检查的是 **6 轴组合位形**：云台
+ * J4-6 停在大角度时，臂目标本身合法也可能被判 collision（见 CLAUDE.md）。
+ *
+ * @param full_target 6 轴目标位形（J1-3 为目标，J4-6 为云台当前回读）。
+ * @return 无自碰撞或无法检查时返回 true，明确判定 invalid 时返回 false。
+ */
 bool MoveToJointServer::collision_free(const std::vector<double> & full_target)
 {
   if (!validity_cli_->service_is_ready()) {
@@ -80,6 +106,18 @@ bool MoveToJointServer::collision_free(const std::vector<double> & full_target)
   return future.get()->valid;
 }
 
+/**
+ * @brief 执行 MoveToJoint 动作：三道闸校验 → 下发两点轨迹 → 等待到位。
+ *
+ * 三道闸依次是个数校验、关节限位（URDF 单一来源）、自碰撞检查，任一不过都
+ * **不下发任何指令**就返回，避免把臂搬到一半才发现目标非法。下发的是 6 轴
+ * 轨迹（J4-6 保持云台当前回读，否则云台会被 JTC 拉到 0），但到位判据只看
+ * 臂 J1-3 —— 末端在云台之后，云台回读不收敛会让笛卡尔判据永不满足
+ * （见 CLAUDE.md「笛卡尔动作的到位判据不能用末端位姿」）。
+ *
+ * @param gh Action 目标句柄，用于取 goal、发反馈、查取消。
+ * @return Action 结果（success / exit_reason / error_code / actual_joints）。
+ */
 MoveToJointServer::Action::Result MoveToJointServer::execute(const std::shared_ptr<GoalHandle> & gh)
 {
   const auto goal = gh->get_goal();
@@ -89,6 +127,7 @@ MoveToJointServer::Action::Result MoveToJointServer::execute(const std::shared_p
   const std::vector<double> current_full = motion_.get_current_joints();
   const std::vector<double> current_arm(current_full.begin(),
                                         current_full.begin() + motion::ARM_JOINT_COUNT);
+  // 结果里的 actual_joints 统一取「此刻」的回读，成功失败都要填
   auto fill_result_joints = [this]() {
     auto cur = motion_.get_current_joints();
     cur.resize(motion::ARM_JOINT_COUNT);
@@ -131,6 +170,7 @@ MoveToJointServer::Action::Result MoveToJointServer::execute(const std::shared_p
     return r;
   }
 
+  // 时长决定轨迹速度：JTC 在两点间做五次多项式插值，时长越短峰值速度越高
   // ── 时长：goal 显式指定优先，否则按档位算 ──────────────────────────────────
   const double duration = goal->duration_sec > 0.0
       ? goal->duration_sec
@@ -144,6 +184,7 @@ MoveToJointServer::Action::Result MoveToJointServer::execute(const std::shared_p
   motion_.go_to_joints(full_target, duration);
 
   // ── 等待到位（判据只看臂 J1-3）──────────────────────────────────────────────
+  // 等待参数：超时 = 时长 + 余量，再取一个下限（短距离动作也留足静差收敛时间）
   ExecutionMonitor::WaitParams p;
   p.arrived = [this, target_arm]() {
     auto cur = motion_.get_current_joints();
