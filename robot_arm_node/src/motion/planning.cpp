@@ -51,32 +51,47 @@ std::optional<std::vector<Waypoint>> plan_orbit_waypoints(
     double ox, double oy, double oz,
     double theta0, double phi0, double r0,
     double theta1, double phi1, double r1,
-    double s_vel, double s_acc, double s_jerk,
+    double v_pos, double a_pos, double j_pos,
+    double v_ori, double a_ori, double j_ori,
     const std::function<bool()> & stop_check)
 {
   const double d_theta = theta1 - theta0;
   const double d_phi   = phi1 - phi0;
   const double d_r     = r1 - r0;
 
-  // 归一化 s∈[0,1] 的限制（与 plan_line_waypoints 对齐）：传入的 s_vel/s_acc/s_jerk
-  // 实为物理量（execute_orbit 传的是 speed.v_ori/a_ori/j_ori，单位 rad/s、rad/s²、
-  // rad/s³），必须除以本段行程才能当无量纲的 ds/dt 用。原实现直接透传，导致环绕
-  // 时长恒为 1/v_ori（与跨度无关），而实际角速度与角加速度 ∝ 跨度 —— 跨度越大启动
-  // 越猛。2026-08-31 实测：SLOW 档跨度 30° 与 120° 的轨迹均为 points=689 /
-  // horizon=20.800s，而 J3 指令速度峰值差 4.94 倍。
+  // 归一化 s∈[0,1] 的限制（与 plan_line_waypoints 同一套做法）：位置约束除以位置行程
+  // (m)、姿态约束除以姿态角跨度 (rad)，各自得到无量纲的 ds/dt 上限后取更严者。
+  // 两组约束必须分别用**同量纲**的行程归一化 —— 两次实机踩坑：
+  //  1) 原实现直接透传物理量（execute_orbit 传的是 speed.v_ori/a_ori/j_ori，单位
+  //     rad/s、rad/s²、rad/s³），Ruckig 把它们当无量纲 ds/dt 用 → 环绕时长恒为
+  //     1/v_ori（与跨度无关），实际角速度与角加速度 ∝ 跨度，跨度越大启动越猛。
+  //     2026-08-31 实测：SLOW 档跨度 30° 与 120° 的轨迹均为 points=689 /
+  //     horizon=20.800s，而 J3 指令速度峰值差 4.94 倍。
+  //  2) 只按 d_ang 归一化、仍只喂姿态一组：纯径向推拉（d_ang≈0）退化为拿
+  //     v_ori(rad/s) 去除弧长(m)，量纲不一致；带径向分量的环绕也只受姿态约束，
+  //     末端线速度可超 v_pos 数倍（SLOW 档纯径向推拉实为 0.05m/s，限值 0.02）。
   constexpr double EPS = 1e-6;
-  const double d_ang = std::sqrt(d_theta * d_theta + d_phi * d_phi);   // 球面角跨度(rad)
-  const double r_avg = 0.5 * (r0 + r1);
-  const double arc   = std::sqrt(r_avg * d_ang * r_avg * d_ang + d_r * d_r);  // 路径长(m)
-  double n_vel = s_vel, n_acc = s_acc, n_jerk = s_jerk;
-  if (d_ang > EPS) {            // 相机始终朝球心 -> 姿态角变化 ≈ 球面角跨度
-    n_vel  = s_vel  / d_ang;
-    n_acc  = s_acc  / d_ang;
-    n_jerk = s_jerk / d_ang;
-  } else if (arc > EPS) {       // 纯径向（推拉）：d_ang≈0，退化为按弧长归一化
-    n_vel  = s_vel  / arc;
-    n_acc  = s_acc  / arc;
-    n_jerk = s_jerk / arc;
+  const double d_ang = std::sqrt(d_theta * d_theta + d_phi * d_phi);   // 姿态角跨度(rad)
+  const double r_avg = 0.5 * (r0 + r1);                                // 相机始终朝球心 ->
+  const double arc   = std::sqrt(r_avg * d_ang * r_avg * d_ang + d_r * d_r);  // 位置行程(m)
+
+  if (arc < EPS && d_ang < EPS) {   // 起止重合：单路点直接收尾（与 plan_line 一致）
+    const Vec3 p = sphere_to_cart(theta1, phi1, r1, ox, oy, oz);
+    const Quat q = aim_quat(p[0], p[1], p[2], ox, oy, oz);
+    return std::vector<Waypoint>{
+        Waypoint{STREAM_DT, p[0], p[1], p[2], q[0], q[1], q[2], q[3]}};
+  }
+
+  double n_vel = 1e9, n_acc = 1e9, n_jerk = 1e9;
+  if (arc > EPS) {              // 位置：m/s ÷ m -> 1/s
+    n_vel  = std::min(n_vel,  v_pos / arc);
+    n_acc  = std::min(n_acc,  a_pos / arc);
+    n_jerk = std::min(n_jerk, j_pos / arc);
+  }
+  if (d_ang > EPS) {            // 姿态：rad/s ÷ rad -> 1/s
+    n_vel  = std::min(n_vel,  v_ori / d_ang);
+    n_acc  = std::min(n_acc,  a_ori / d_ang);
+    n_jerk = std::min(n_jerk, j_ori / d_ang);
   }
 
   ruckig::Ruckig<1> otg{STREAM_DT};

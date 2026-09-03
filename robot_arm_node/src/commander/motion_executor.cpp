@@ -189,7 +189,7 @@ motion::PlanResult MotionExecutor::solve_and_send(const std::vector<motion::Wayp
 motion::PlanResult MotionExecutor::plan_orbit_ruckig(double ox, double oy, double oz,
                                                      double theta0, double phi0, double r0,
                                                      double theta1, double phi1, double r1,
-                                                     double s_vel, double s_acc, double s_jerk,
+                                                     const Speed & speed,
                                                      std::function<bool()> cancel_check,
                                                      std::vector<double> * final_joints)
 {
@@ -197,7 +197,9 @@ motion::PlanResult MotionExecutor::plan_orbit_ruckig(double ox, double oy, doubl
     return (is_stopped_ && is_stopped_()) || (cancel_check && cancel_check());
   };
   auto pts = motion::plan_orbit_waypoints(ox, oy, oz, theta0, phi0, r0,
-                                          theta1, phi1, r1, s_vel, s_acc, s_jerk, stop_check);
+                                          theta1, phi1, r1,
+                                          speed.v_pos, speed.a_pos, speed.j_pos,
+                                          speed.v_ori, speed.a_ori, speed.j_ori, stop_check);
   // Ruckig 规划失败（含被 stop_check 中止）：上层按 cancelled/error 归类
   if (!pts) return motion::PlanResult::Error;
   return solve_and_send(*pts, cancel_check, final_joints);

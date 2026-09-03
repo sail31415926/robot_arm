@@ -96,10 +96,12 @@ public:
                                     std::vector<double> * final_joints = nullptr);
 
   // 球面轨道运镜：plan_orbit_waypoints + solve_and_send（相机始终朝向球心）
+  // 限制取 speed 位置/姿态分量的更严者（同 plan_line_ruckig）：环绕段既有姿态转动
+  // 也有位置行程，纯径向推拉更是只有位置行程，只喂姿态一组会超 v_pos 限制
   motion::PlanResult plan_orbit_ruckig(double ox, double oy, double oz,
                                        double theta0, double phi0, double r0,
                                        double theta1, double phi1, double r1,
-                                       double s_vel, double s_acc, double s_jerk,
+                                       const Speed & speed,
                                        std::function<bool()> cancel_check = nullptr,
                                        std::vector<double> * final_joints = nullptr);
 

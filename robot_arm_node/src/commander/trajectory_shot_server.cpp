@@ -170,8 +170,8 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
               ox, oy, oz, goal.azimuth_start_deg, goal.elevation_start_deg, r0,
               goal.azimuth_end_deg, goal.elevation_end_deg, r1);
 
-  // 球面轨道归一化 Ruckig 参数取自 speed 的姿态分量
-  const double s_vel = speed.v_ori, s_acc = speed.a_ori, s_jerk = speed.j_ori;
+  // 归一化 Ruckig 参数在 plan_orbit_waypoints 内按位置/姿态两组行程分别算，取更严者，
+  // 故整个 speed 直接下传（此前只传姿态分量，纯径向推拉会拿 rad/s 当 m/s 用）
 
   // 用户取消或急停均视为应中止
   auto cancelled = [this, gh]() { return gh->is_canceling() || (is_stopped_ && is_stopped_()); };
@@ -192,7 +192,7 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
   std::vector<double> seg_joints;   // 该段轨迹末点的关节解（到位判据用）
   {
     const auto pr = motion_.plan_orbit_ruckig(ox, oy, oz, az0, el0, r0, az1, el1, r1,
-                                              s_vel, s_acc, s_jerk, cancelled, &seg_joints);
+                                              speed, cancelled, &seg_joints);
     if (pr != motion::PlanResult::Success) {
       result.success = false;
       result.exit_reason = plan_exit_reason(pr, cancelled());
@@ -214,7 +214,7 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
   std::vector<double> back_joints;
   {
     const auto pr = motion_.plan_orbit_ruckig(ox, oy, oz, az1, el1, r1, az0, el0, r0,
-                                              s_vel, s_acc, s_jerk, cancelled, &back_joints);
+                                              speed, cancelled, &back_joints);
     if (pr != motion::PlanResult::Success) {
       result.success = false;
       result.exit_reason = plan_exit_reason(pr, cancelled());

@@ -31,13 +31,17 @@ struct Waypoint
 };
 
 // 球面环绕运镜路点：Ruckig 1-DOF(s∈[0,1]) → 球坐标插值 → Cartesian + 朝向球心。
+// 归一化限制取位置/姿态两组约束的更严者：位置组除以位置行程 arc(m)，姿态组除以
+// 姿态角跨度 d_ang(rad)（相机恒朝球心，故 d_ang = 球面角跨度）；两者同时≈0 时返回
+// 单路点。**勿只传姿态一组** —— 纯径向推拉 d_ang≈0，拿 rad/s 去除弧长(m) 量纲不符。
 //   stop_check: 可选，返回 true 时中途放弃（急停/取消）。
 //   返回 std::nullopt 表示 Ruckig 求解失败或被中止。
 std::optional<std::vector<Waypoint>> plan_orbit_waypoints(
     double ox, double oy, double oz,
     double theta0, double phi0, double r0,
     double theta1, double phi1, double r1,
-    double s_vel, double s_acc, double s_jerk,
+    double v_pos, double a_pos, double j_pos,
+    double v_ori, double a_ori, double j_ori,
     const std::function<bool()> & stop_check = nullptr);
 
 // 笛卡尔直线运镜路点：Ruckig 1-DOF(s∈[0,1]) → 位置沿线插值 + 姿态 slerp（末端严格走直线）。
