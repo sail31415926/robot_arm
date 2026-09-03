@@ -2,8 +2,8 @@
  * @file motion_executor.cpp
  * @brief MotionExecutor 实现 —— 委托 motion 库 + 持有共享 ROS 资源
  *
- * 内部工具（匿名命名空间）：to_duration（秒→Duration）、two_point_traj（当前→目标
- * 两点 JointTrajectory）。plan_and_execute/go_to_joints 复用 two_point_traj，
+ * 内部工具（匿名命名空间）：to_duration（秒→Duration）、single_point_traj（只给目标点的
+ * 单点 JointTrajectory）。plan_and_execute/go_to_joints 复用 single_point_traj，
  * solve_and_send/plan_orbit_ruckig 转调 motion 库，急停判据 is_stopped 与传入的
  * cancel_check 合成后注入。
  *
@@ -40,26 +40,30 @@ builtin_interfaces::msg::Duration to_duration(double sec)
   return d;
 }
 
-// 构建「当前关节 → 目标关节」两点 JointTrajectory（JTC 在两点间插值）
-trajectory_msgs::msg::JointTrajectory two_point_traj(
-    const std::vector<double> & from, const std::vector<double> & to,
-    double duration, const builtin_interfaces::msg::Time & stamp)
+// 构建只含目标点的单点 JointTrajectory。
+//
+// ★ 为什么不把当前关节当首点发（2026-09-01 修，实机「起步抖一下」的根因）★
+// 曾经的写法是两点轨迹 [当前实测关节@0s, 目标@duration]。首点 time_from_start=0 让
+// JTC 的融合窗口宽度为 0（Trajectory::sample 只在 sample_time < 首点时刻时才用
+// state_before_traj_msg_ 插值），轨迹一起跑，指令位置就**阶跃**到实测关节 —— 而 JTC
+// 此刻保持的指令是上一段动作的终点，于是起步瞬间往回跳一个到位残差。
+// 现在只发目标点，由 JTC 用自身的 state_before_traj_msg_（open_loop_control=false →
+// 实测位置+实测速度）到目标点之间插三次样条，起点由它自己决定 ——
+// 实测量不写进指令流。
+trajectory_msgs::msg::JointTrajectory single_point_traj(
+    const std::vector<double> & to, double duration,
+    const builtin_interfaces::msg::Time & stamp)
 {
   trajectory_msgs::msg::JointTrajectory msg;
   msg.header.stamp = stamp;
   msg.joint_names  = motion::JOINT_NAMES;
 
-  trajectory_msgs::msg::JointTrajectoryPoint pt0;
-  pt0.positions       = from;
-  pt0.velocities.assign(motion::JOINT_NAMES.size(), 0.0);
-  pt0.time_from_start = to_duration(0.0);
+  trajectory_msgs::msg::JointTrajectoryPoint pt;
+  pt.positions       = to;
+  pt.velocities.assign(to.size(), 0.0);
+  pt.time_from_start = to_duration(duration);
 
-  trajectory_msgs::msg::JointTrajectoryPoint pt1;
-  pt1.positions       = to;
-  pt1.velocities.assign(to.size(), 0.0);
-  pt1.time_from_start = to_duration(duration);
-
-  msg.points = {std::move(pt0), std::move(pt1)};
+  msg.points = {std::move(pt)};
   return msg;
 }
 }  // namespace
@@ -104,8 +108,8 @@ ExecResult MotionExecutor::plan_and_execute(const ArmPose & target, const Speed 
       std::pow(target.z - start.z, 2));
   const double duration = std::max(dist / std::max(speed.v_pos, 1e-6) * 1.5, 0.5);
 
-  // 4. 下发两点 JointTrajectory（起点=当前关节，终点=IK 解）
-  auto msg = two_point_traj(get_current_joints(), *joints, duration, node_.get_clock()->now());
+  // 4. 下发单点 JointTrajectory（终点=IK 解；起点交给 JTC 从实测状态自己插值）
+  auto msg = single_point_traj(*joints, duration, node_.get_clock()->now());
 
   // 急停在 IK 期间发生时，绝不再下发轨迹（否则会把已停住的机械臂重新开动）
   if (is_stopped_ && is_stopped_()) {
@@ -137,8 +141,8 @@ void MotionExecutor::stop()
 ExecResult MotionExecutor::go_to_joints(const std::vector<double> & target_joints,
                                         double duration_sec)
 {
-  auto msg = two_point_traj(get_current_joints(), target_joints, duration_sec,
-                            node_.get_clock()->now());
+  auto msg = single_point_traj(target_joints, duration_sec,
+                               node_.get_clock()->now());
   traj_pub_->publish(msg);
   return {true, "sent", 0, target_joints};
 }

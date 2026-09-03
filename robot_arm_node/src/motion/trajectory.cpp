@@ -4,8 +4,8 @@
  *
  * decimate 降采样；build_joint_trajectory 中央差分算关节速度构建消息（刻意不补加速度，
  * 见函数内注释）；solve_and_send 逐点 IK（种子延续 / 首帧零种子重试 / 失败沿用上帧）后，
- * 首点前插入当前关节作起步融合段（消化指令起点与实际位姿的到位容差偏差，
- * 避免起步速度尖峰——实机运镜段起步抖动的主因），一次性发布整条 JointTrajectory。
+ * 整条轨迹时间轴后移 START_BLEND_SEC 留出起步融合段（消化指令起点与实际位姿的到位容差
+ * 偏差，避免起步速度尖峰——实机运镜段起步抖动的主因），一次性发布整条 JointTrajectory。
  *
  * @version 1.1
  * @date 2026-07-01
@@ -25,9 +25,10 @@ using namespace std::chrono_literals;
 
 namespace
 {
-// 起步融合段时长：首点（当前关节）→ 首个规划路点之间留出的过渡时间。
+// 起步融合段时长：轨迹起点（JTC 侧的当前状态）→ 首个规划路点之间留出的过渡时间。
 // JTC 用它柔性消化「实际位姿 ↔ 指令起点」的到位容差偏差（≤1cm/2°），避免压缩在
 // 首个 10ms 段里造成起步速度尖峰。
+// ★ 只后移时间轴，**不**自己插入「实测关节」当首点，见 solve_and_send 末尾注释。
 constexpr double START_BLEND_SEC = 0.2;
 
 // 连续 IK 无解阈值：达到即判定路径成片驶出可达域，提前放弃（不再空跑完剩余无解点，
@@ -195,11 +196,25 @@ PlanResult solve_and_send(
     return PlanResult::Unreachable;
   }
 
-  // 起步融合：首点插入当前关节（IK 种子 = 规划时刻的实测关节），其余整体后移
-  // START_BLEND_SEC，由 JTC 在融合段内柔性对齐指令起点，消除起步速度尖峰
-  joint_pos.insert(joint_pos.begin(), seed);
-  joint_t.insert(joint_t.begin(), 0.0);
-  for (size_t i = 1; i < joint_t.size(); ++i) joint_t[i] += START_BLEND_SEC;
+  // 起步融合：整条时间轴后移 START_BLEND_SEC，把融合交给 JTC 自己做。
+  //
+  // ★ 为什么**不**在首点插入实测关节（2026-09-01 修，实机「起步抖两下」的根因）★
+  // 曾经的写法是 joint_pos.insert(begin, seed) + joint_t.insert(begin, 0.0)，两个坑：
+  //  1) time_from_start=0 的首点让 JTC 的「首点之前」融合窗口宽度为 0
+  //     （Trajectory::sample 只在 sample_time < 首点时刻时才用 state_before_traj_msg_
+  //     插值），轨迹一起跑指令位置就**阶跃**到 seed —— 而 JTC 此刻保持的指令是上一段
+  //     PTP 的终点 IK(指令起点)，于是起步瞬间往回跳一个到位残差 Δ（J1-3 上限
+  //     tolerance.joint_rad=0.02rad；J4-6 是云台滞后回读，没有上限）。这是第一抖。
+  //  2) 该点参与 build_joint_trajectory 的中央差分，把「Ruckig 静止起点」（真实速度
+  //     严格为 0）的速度算成 Δ/(2×START_BLEND_SEC 量级)：ik.sample_dt=0.03 时
+  //     jvel[1]=Δ/0.24，Δ=0.02 → 0.083rad/s。0.2s 融合段把速度拉到这个值后，紧接着
+  //     30ms 的路点段位移≈0（Ruckig 起步 s∝j·t³/6），三次样条只能急停+反向过冲。
+  //     这是第二抖。0.2s 的融合段与 30ms 的路点间距本就不该进同一个差分。
+  // 现在首点就是 Ruckig 的静止起点（build_joint_trajectory 给端点零速），JTC 用
+  // state_before_traj_msg_（open_loop_control=false → 实测位置+实测速度）到它之间插
+  // 三次样条：零速起、零速到，既无阶跃也无速度尖峰。seed 因此只作 IK 种子用，不再
+  // 兼任下发的物理起点 —— 实测量绝不写进指令流。
+  for (auto & t : joint_t) t += START_BLEND_SEC;
 
   auto msg = build_joint_trajectory(joint_pos, joint_t, joint_names,
                                     node.get_clock()->now());
