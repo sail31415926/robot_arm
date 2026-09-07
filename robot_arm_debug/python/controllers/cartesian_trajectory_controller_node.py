@@ -21,15 +21,18 @@
 import math
 import queue
 import threading
+import xml.etree.ElementTree as ET
 
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
-from moveit_msgs.srv import GetPositionIK
+from moveit_msgs.srv import GetPositionIK, GetPositionFK
 from moveit_msgs.msg import MoveItErrorCodes, RobotState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState
+from std_msgs.msg import String
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
 from builtin_interfaces.msg import Duration
 from tf2_ros import TransformListener, Buffer
 
@@ -50,16 +53,43 @@ BASE_FRAME     = 'arm_base_link'
 STREAM_DT    = 0.01    # s，Ruckig 内部步长（100Hz）
 IK_TIMEOUT_S = 0.05    # s，单次 IK 超时（50ms）
 
-# 连续 IK 无解的容忍跨度（s）。达到即判定路径成片驶出可达域 → 放弃整条，
-# 不再空跑完剩余无解点（每个无解点最坏要阻塞一次 IK 超时）。
-# 低于此跨度的零星漏解仍沿用上一帧的解容忍过去（求解器偶发抖动，不是真不可达）。
+# ── 轨迹保真度（2026-08-31）──────────────────────────────────────────────────
+# 需求：下发的每个路点，其 FK 末端都必须落在规划笛卡尔轨迹的邻域内。
 #
-# ★ 按**时间跨度**而不是点数定义：产品路径（robot_arm_node 的 motion/trajectory.cpp）
-#   用 MAX_CONSEC_IK_FAIL=10 个点，但那是降采样之后（抽取 1/3，步长 0.03s）的粒度，
-#   等价于 0.3s。本节点是 100Hz 全点求解，直接照抄 10 会严格 3 倍，把求解器的偶发
-#   抖动误判成不可达。
-MAX_CONSEC_IK_FAIL_SEC = 0.3
-MAX_CONSEC_IK_FAIL     = max(1, int(round(MAX_CONSEC_IK_FAIL_SEC / STREAM_DT)))
+# ★ 因此 IK 求不出解时**剔除该点**，不再「沿用上一帧」——
+#   沿用上帧是把末端钉在上一点、再跳到下一个有解点，位置序列明确偏离规划曲线；
+#   剔除后前后两个保留点本身都在规划轨迹上，JTC 只在这两点间抄一段近路，偏差是
+#   弦弧差 L²/(8R)（L=v·Δt）：50ms 间隔、0.3m/s、R=0.3m 时 L=15mm，偏差约 0.09mm。
+#
+#   老的 MAX_CONSEC_IK_FAIL（连续 0.3s 才放弃）已被 MAX_GAP_SEC 取代：那个阈值
+#   是为「沿用上帧」配的容忍度，剔点方案下保留点间隔才是真正决定偏差的量。
+MAX_GAP_SEC  = 0.05    # s，保留点之间允许的最大间隔
+MAX_DROP_RUN = max(1, int(round(MAX_GAP_SEC / STREAM_DT)) - 1)   # → 允许连续剔 4 点
+
+# IK 是数值解，返回 SUCCESS 不等于精确命中目标位姿 —— 每个解回代 FK 校验，
+# 超差点按「无解」处理（走换种子重试 → 剔除 → 放弃的同一条流程）。
+FK_VERIFY      = True   # 关掉可省约一半规划耗时，但失去邻域保证
+FK_POS_TOL     = 0.002  # m，末端位置容差
+FK_ORI_TOL_DEG = 1.0    # °，末端姿态容差
+
+# ── 云台摄像机拍摄专项（2026-08-31）──────────────────────────────────────────
+# 末端是相机（gimbal_tool0 挂在云台 J4-6 之后），拍摄场景对**画面连续性**的要求
+# 比几何精度更苛刻：关节速度突变直接变成画面抖动，IK 解族跳变就是画面天旋地转。
+#
+# ① 跳变判据 per-joint、以 URDF 的速度上限为准（不再用一个全局常量）：
+#    相邻保留点的关节增量不得超过「该关节速度上限 × Δt × JUMP_MARGIN」。
+#    这样云台 J4-6（限速 1.0 rad/s，远低于臂 J1-3 的 3.14）自动拿到更严的朝向
+#    连续性约束 —— 正是相机需要的；而超过速度上限的增量本来也执行不了。
+JUMP_MARGIN = 1.0       # 1.0 = 严格按 URDF 速度上限，放宽可调大
+
+# ② 开拍瞬间不许甩：轨迹首点解与机械臂当前位形的关节距离超过 RAMP_IN_TOL_RAD 时，
+#    先用 Ruckig 在关节空间生成一段平顺过渡（ramp-in）接到首点，再接拍摄段。
+#    过渡段是**额外**时长，拍摄段本身时长不变；状态栏把两段分开报，成片只取拍摄段。
+#    （orbit 这类首点不等于当前位姿的路径，不做这一步就会在开拍瞬间高速甩过去：
+#      Gazebo 里表现为瞬移，实机上是一次没人预期的大幅运动。）
+RAMP_IN_ENABLE    = True
+RAMP_IN_TOL_RAD   = 0.02    # rad，首点与当前位形的容许差（≈1.1°）
+RAMP_IN_VEL_SCALE = 0.30    # 过渡段速度取 URDF 上限的这个比例（保守、平顺）
 
 # 点到点默认限制
 DEFAULT_V_POS = 0.05;  DEFAULT_A_POS = 0.10;  DEFAULT_J_POS = 1.00
@@ -98,6 +128,16 @@ class CartesianTrajectoryControllerNode(Node):
         self._traj_pub = self.create_publisher(
             JointTrajectory, '/arm_controller/joint_trajectory', 10)
         self._ik_cli = self.create_client(GetPositionIK, '/compute_ik')
+        self._fk_cli = self.create_client(GetPositionFK, '/compute_fk')
+        self._fk_warned = False   # /compute_fk 不可用只告警一次，见 _solve_point
+
+        # 关节限位（位置 + 速度上限），从 /robot_description 解析，见 _on_robot_description
+        self._jlim = None
+        self.create_subscription(
+            String, '/robot_description', self._on_robot_description,
+            QoSProfile(depth=1,
+                       durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                       reliability=QoSReliabilityPolicy.RELIABLE))
 
         self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -185,6 +225,183 @@ class CartesianTrajectoryControllerNode(Node):
                        resp.solution.joint_state.position))
         return [n2p.get(n, 0.0) for n in JOINT_NAMES], MoveItErrorCodes.SUCCESS
 
+    def _on_robot_description(self, msg):
+        """解析 /robot_description，取各关节的位置与速度上限。
+
+        两个用途：
+          · 把 IK 种子夹进合法范围 —— pick_ik 拿到超限的种子会直接丢弃它、改用
+            **随机**位形重新搜索（move_group 日志 'Initial guess exceeds joint
+            limits. Regenerating a random valid configuration.'），解族就完全不
+            可控了。而机械臂停在限位上时，实测关节角本身就可能因浮点误差略微越界，
+            这条路径很容易踩到。
+          · per-joint 的跳变判据（见 JUMP_MARGIN）。
+        """
+        try:
+            root = ET.fromstring(msg.data)
+        except ET.ParseError as e:
+            self.get_logger().error(f'/robot_description 解析失败：{e}')
+            return
+        lim = {}
+        for j in root.findall('joint'):
+            name = j.get('name')
+            if name not in JOINT_NAMES:
+                continue
+            node = j.find('limit')
+            if node is None:
+                continue
+            lim[name] = dict(lower=float(node.get('lower', '-3.14')),
+                             upper=float(node.get('upper', '3.14')),
+                             vel=float(node.get('velocity', '1.0')))
+        if len(lim) != len(JOINT_NAMES):
+            self.get_logger().warn(
+                f'/robot_description 只解析到 {len(lim)}/{len(JOINT_NAMES)} 个关节限位，'
+                f'种子 clamp 与 per-joint 跳变判据退化为保守默认值')
+            return
+        self._jlim = [lim[n] for n in JOINT_NAMES]
+        self.get_logger().info(
+            '关节限位已载入  ' + '  '.join(
+                f'{n}[{lim[n]["lower"]:+.2f},{lim[n]["upper"]:+.2f}]'
+                f'v≤{lim[n]["vel"]:.2f}' for n in JOINT_NAMES))
+
+    def _clamp_seed(self, seed):
+        """把 IK 种子夹进关节限位内（留 1e-3 余量，避开边界浮点越界）。
+
+        限位未就绪时原样返回 —— 宁可不夹，也不要用猜的限位把种子改错。
+        """
+        if not self._jlim:
+            return list(seed)
+        out = []
+        for v, lm in zip(seed, self._jlim):
+            lo, hi = lm['lower'] + 1e-3, lm['upper'] - 1e-3
+            out.append(lo if v < lo else (hi if v > hi else v))
+        return out
+
+    def _jump_limit(self, dt):
+        """相邻保留点各关节允许的最大增量（rad），per-joint。"""
+        if not self._jlim:
+            return [3.14 * dt * JUMP_MARGIN] * len(JOINT_NAMES)
+        return [lm['vel'] * dt * JUMP_MARGIN for lm in self._jlim]
+
+    def _plan_ramp_in(self, q_from, q_to):
+        """关节空间平顺过渡（Ruckig 6-DOF），返回 [(t, q6), ...]，失败返回 None。
+
+        速度取 URDF 上限的 RAMP_IN_VEL_SCALE —— 这一段也会被相机拍到，
+        宁可慢一点也不要甩。
+        """
+        n = len(JOINT_NAMES)
+        vmax = ([lm['vel'] * RAMP_IN_VEL_SCALE for lm in self._jlim]
+                if self._jlim else [1.0 * RAMP_IN_VEL_SCALE] * n)
+        otg = Ruckig(n, STREAM_DT)
+        inp = InputParameter(n);  out = OutputParameter(n)
+        inp.current_position     = list(q_from)
+        inp.current_velocity     = [0.0] * n
+        inp.current_acceleration = [0.0] * n
+        inp.target_position      = list(q_to)
+        inp.target_velocity      = [0.0] * n
+        inp.target_acceleration  = [0.0] * n
+        inp.max_velocity     = vmax
+        inp.max_acceleration = [v * 2.0  for v in vmax]
+        inp.max_jerk         = [v * 10.0 for v in vmax]
+        pts = [];  t = 0.0
+        while True:
+            res = otg.update(inp, out)
+            t += STREAM_DT
+            pts.append((t, list(out.new_position)))
+            out.pass_to_input(inp)
+            if res == Result.Finished:
+                return pts
+            if res == Result.Error or t > 30.0:
+                return None
+
+    def _fk_sync(self, joints):
+        """关节解回代 FK，返回末端 (x,y,z,qx,qy,qz,qw)；服务不可用或失败返回 None。
+
+        用途是校验 IK 数值解有没有真的命中目标位姿 —— 求解器返回 SUCCESS 只说明
+        它自己收敛了，不保证落在我们要求的容差内。
+        """
+        if not self._fk_cli.service_is_ready():
+            return None
+        req = GetPositionFK.Request()
+        req.header.frame_id = BASE_FRAME
+        req.fk_link_names   = [EEF_LINK]
+        req.robot_state.joint_state.name     = JOINT_NAMES
+        req.robot_state.joint_state.position = list(joints)
+        ev = threading.Event(); box = [None]
+        def _cb(f): box[0] = f; ev.set()
+        self._fk_cli.call_async(req).add_done_callback(_cb)
+        ev.wait(timeout=IK_TIMEOUT_S + 0.05)
+        if box[0] is None:
+            return None
+        try:
+            resp = box[0].result()
+        except Exception:
+            return None
+        if resp.error_code.val != MoveItErrorCodes.SUCCESS or not resp.pose_stamped:
+            return None
+        p = resp.pose_stamped[0].pose
+        return (p.position.x, p.position.y, p.position.z,
+                p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w)
+
+    @staticmethod
+    def _pose_err(fk, wx, wy, wz, qx, qy, qz, qw):
+        """FK 结果与规划位姿的偏差，返回 (位置 m, 姿态 rad)。
+
+        姿态取四元数夹角，abs(dot) 消去 q 与 -q 表示同一旋转的歧义。
+        """
+        dpos = math.sqrt((fk[0] - wx) ** 2 + (fk[1] - wy) ** 2 + (fk[2] - wz) ** 2)
+        d    = abs(quat_dot((fk[3], fk[4], fk[5], fk[6]), (qx, qy, qz, qw)))
+        return dpos, 2.0 * math.acos(min(1.0, d))
+
+    def _solve_point(self, wx, wy, wz, qx, qy, qz, qw, seeds,
+                     prev_sol=None, dt=None):
+        """求单点 IK：多种子重试 + 解族跳变校验 + FK 回代校验。
+
+        返回 (sol, why, dpos, dori)。成功时 why=None；失败时 sol=None、why 是最后
+        一次失败的原因（供日志和状态栏定位）。dpos/dori 是该解的 FK 偏差，
+        FK_VERIFY 关闭或 /compute_fk 不可用时为 None。
+        """
+        why = 'NO_IK_SOLUTION'
+        for sd in seeds:
+            # 种子必须先夹进限位：超限种子会让 pick_ik 丢弃它并随机重启（见 _clamp_seed）
+            sol, err = self._ik_sync(wx, wy, wz, qx, qy, qz, qw,
+                                     self._clamp_seed(sd))
+            if sol is None:
+                why = self._IK_ERR.get(err, str(err))
+                continue
+
+            # ① 解族跳变校验。放在 FK 之前：跳变解的 FK 往往是"正确"的
+            #    （末端位姿确实对得上），只有关节空间才看得出它换了解族。
+            if prev_sol is not None and dt:
+                lims = self._jump_limit(dt)
+                over = [(i, abs(a - b) - lims[i], abs(a - b), lims[i])
+                        for i, (a, b) in enumerate(zip(sol, prev_sol))
+                        if abs(a - b) > lims[i]]
+                if over:
+                    i, _, dq, lm = max(over, key=lambda t: t[1])
+                    why = (f'{JOINT_NAMES[i]} 解族跳变 Δq={dq:.3f}rad > {lm:.3f}rad'
+                           f'（限速 {lm/dt/JUMP_MARGIN:.2f}rad/s × {dt*1000:.0f}ms）')
+                    continue
+
+            # ② FK 回代校验：确认这个解真把末端放在了规划点的邻域内
+            if not FK_VERIFY:
+                return sol, None, None, None
+            fk = self._fk_sync(sol)
+            if fk is None:
+                # FK 服务不可用时不阻断规划，退化为"不校验"，但留下痕迹。
+                # 只警告一次：本节点 100Hz 全点求解，按点打会把日志淹掉。
+                if not self._fk_warned:
+                    self._fk_warned = True
+                    self.get_logger().warn(
+                        'FK 校验不可用（/compute_fk 无响应），本段退化为不校验邻域'
+                        '（后续同类点不再重复告警，状态栏会标注"FK 未校验"）')
+                return sol, None, None, None
+            dpos, dori = self._pose_err(fk, wx, wy, wz, qx, qy, qz, qw)
+            if dpos <= FK_POS_TOL and dori <= math.radians(FK_ORI_TOL_DEG):
+                return sol, None, dpos, dori
+            why = (f'FK 超差 {dpos*1000:.1f}mm/{math.degrees(dori):.2f}°'
+                   f'（容差 {FK_POS_TOL*1000:.0f}mm/{FK_ORI_TOL_DEG:.1f}°）')
+        return None, why, None, None
+
     # ── 停止 ──────────────────────────────────────────────────────────────────
     def stop_motion(self):
         self._stop_req = True
@@ -204,14 +421,22 @@ class CartesianTrajectoryControllerNode(Node):
         all_pts: list of (t, x, y, z, qx, qy, qz, qw)
         对每个点求 IK，计算关节速度，下发完整 JointTrajectory。
 
-        IK 无解的三种处理（与产品路径 motion/trajectory.cpp 的判据对齐）：
-          · 首点无解（含零种子重试）        → 起点不可达，放弃，不下发
-          · 零星漏解（连续跨度 < 0.3s）      → 沿用上一帧的解继续，最后在状态栏报总数
-          · 成片无解（连续跨度 ≥ 0.3s）或末点无解 → 判定不可达，放弃，**不下发退化轨迹**
+        ★ 核心约定：下发的每个路点，其 FK 末端必须落在规划笛卡尔轨迹的邻域内
+          （FK_POS_TOL / FK_ORI_TOL_DEG）。围绕这条，求不出解时的处理是
+          「剔除该点」而不是「沿用上一帧」：
 
-        ★ 最后一条是关键：沿用上帧意味着末端在那几个点原地不动、然后跳到下一个有解点，
-          走出来的已经不是规划的那条笛卡尔曲线。零星漏解这样兜住尚可接受，成片无解还
-          硬发下去就是拿一条形状错了的轨迹去驱动机械臂；末点无解则整段根本到不了终点。
+          · 首点求解失败                  → 起点不可达，放弃，不下发
+          · 末点求解失败                  → 终点不可达，放弃，不下发
+          · 中间点求解失败                → 换种子重试；仍失败则把该点从点列里剔除，
+                                            由 JTC 在前后两个保留点之间插值走过去
+          · 连续剔除 > MAX_DROP_RUN 点      → 成片不可达，放弃，不下发
+          · 解族跳变 / FK 超差             → 同样算「求解失败」，走上面同一条流程
+
+          首末两点不允许剔除：末点是唯一必须精确到达的点，首点决定整段起姿。
+
+        为什么剔除优于沿用上一帧：沿用上帧把末端钉在上一点、再跳到下一个有解点，
+        位置序列明确偏离规划曲线；剔除后前后两个保留点本身都在规划轨迹上，JTC 的
+        插值只在两点之间抄一段近路，偏差是弦弧差量级（见 MAX_GAP_SEC 处的估算）。
         """
         n_ik   = len(all_pts)
         t_traj = all_pts[-1][0]
@@ -221,61 +446,89 @@ class CartesianTrajectoryControllerNode(Node):
         joint_pos = []
         joint_t   = []
 
-        # 可达性统计：区分「零星漏解（沿用上帧容忍）」与「成片/末点无解（判定不可达）」
-        consec_fail    = 0      # 当前连续无解计数
-        first_fail_idx = 0      # 本段连续无解的起始 step
-        total_fail     = 0      # 整条累计漏解点数（成功下发时在状态栏报出）
-        last_pt_failed = False  # 最近处理的这一点是否无解
+        # 轨迹保真度统计：成功下发时在状态栏报出，作为「末端确实贴着规划路径」的凭据
+        dropped     = 0     # 累计剔除的点数
+        consec_drop = 0     # 当前连续剔除计数（限制保留点之间的间隔）
+        first_drop  = 0     # 当前连续剔除段的起始 step（报错定位用）
+        max_gap     = 0.0   # s，保留点之间的最大间隔
+        max_pos_err = 0.0   # m，FK 回代的最大位置偏差
+        max_ori_err = 0.0   # rad，FK 回代的最大姿态偏差
+        fk_checked  = 0     # 真正做过 FK 回代的点数（区分"校验通过"与"没校验"）
 
         for idx, (t_pt, wx, wy, wz, qx, qy, qz, qw) in enumerate(all_pts):
             if self._stop_req:
                 self._q.put(('status', '■ 规划中止'))
                 return
 
-            sol, err = self._ik_sync(wx, wy, wz, qx, qy, qz, qw, seed)
+            is_first = (idx == 0)
+            is_last  = (idx == n_ik - 1)
 
-            # 第一步失败时用零种子重试一次（种子可能离解太远）
-            if sol is None and idx == 0:
-                sol, err = self._ik_sync(wx, wy, wz, qx, qy, qz, qw,
-                                         [0.0] * 6)
+            # 种子顺序 = 连续性优先：上一个保留点的解 → 当前实测位形 → 零位。
+            # 后两个是「种子离解太远」时的兜底，它们容易跳到别的解族，
+            # 所以 _solve_point 内部对每个候选解都做跳变校验。
+            seeds    = [seed, list(self._joint_pos), [0.0] * 6]
+            prev_sol = joint_pos[-1] if joint_pos else None
+            dt_prev  = (t_pt - joint_t[-1]) if joint_t else STREAM_DT
 
-            if sol is not None:
-                consec_fail    = 0
-                last_pt_failed = False
-            elif joint_pos:
-                # 零星漏解：沿用上一帧继续，累计计数；成片连续无解则在下面判不可达
-                err_name = self._IK_ERR.get(err, str(err))
-                sol = joint_pos[-1]
-                if consec_fail == 0:
-                    first_fail_idx = idx
-                consec_fail    += 1
-                total_fail     += 1
-                last_pt_failed = True
-                self.get_logger().warn(
-                    f'IK 失败 step={idx} err={err_name}  '
-                    f'pos=({wx:.3f},{wy:.3f},{wz:.3f})，沿用上帧')
-                if consec_fail >= MAX_CONSEC_IK_FAIL:
-                    fx, fy, fz = all_pts[first_fail_idx][1:4]
-                    span = consec_fail * STREAM_DT
+            sol, why, dp, do = self._solve_point(
+                wx, wy, wz, qx, qy, qz, qw, seeds,
+                prev_sol=prev_sol, dt=dt_prev)
+
+            if sol is None:
+                # 首点与末点必须精确命中，不允许剔除
+                if is_first:
                     self.get_logger().error(
-                        f'连续 {consec_fail} 点（{span:.2f}s）IK 无解'
-                        f'（自 step={first_fail_idx} pos=({fx:.3f},{fy:.3f},{fz:.3f}) 起），'
-                        f'判定路径超出可达域，放弃本段')
+                        f'首点求解失败（{why}）pos=({wx:.3f},{wy:.3f},{wz:.3f})，'
+                        f'起点不可达，放弃本段')
                     self._q.put(('status',
-                                 f'✗ 连续 {consec_fail} 点（{span:.2f}s）IK 无解'
-                                 f'  自 step={first_fail_idx}'
+                                 f'✗ 首点求解失败（{why}）'
+                                 f'  pos=({wx:.3f},{wy:.3f},{wz:.3f})'
+                                 f'  quat=({qx:.3f},{qy:.3f},{qz:.3f},{qw:.3f})'
+                                 f'  → 起点不可达，已放弃（未下发）'))
+                    return
+                if is_last:
+                    self.get_logger().error(
+                        f'末点求解失败（{why}）pos=({wx:.3f},{wy:.3f},{wz:.3f})，'
+                        f'终点不可达，放弃本段')
+                    self._q.put(('status',
+                                 f'✗ 末点求解失败（{why}）'
+                                 f'  pos=({wx:.3f},{wy:.3f},{wz:.3f})'
+                                 f'  → 终点不可达，已放弃（未下发）'))
+                    return
+
+                # 中间点：剔除，交给 JTC 在前后两个保留点之间插值
+                if consec_drop == 0:
+                    first_drop = idx
+                consec_drop += 1
+                dropped     += 1
+                gap = t_pt - joint_t[-1] + STREAM_DT
+                self.get_logger().warn(
+                    f'step={idx} 求解失败（{why}）pos=({wx:.3f},{wy:.3f},{wz:.3f})'
+                    f' → 剔除该点（连续第 {consec_drop} 个）')
+                if consec_drop > MAX_DROP_RUN:
+                    fx, fy, fz = all_pts[first_drop][1:4]
+                    self.get_logger().error(
+                        f'连续 {consec_drop} 点求不出解（保留点间隔已达 '
+                        f'{gap*1000:.0f}ms > {MAX_GAP_SEC*1000:.0f}ms，'
+                        f'自 step={first_drop} pos=({fx:.3f},{fy:.3f},{fz:.3f}) 起），'
+                        f'判定成片不可达，放弃本段')
+                    self._q.put(('status',
+                                 f'✗ 连续 {consec_drop} 点求不出解'
+                                 f'（间隔 {gap*1000:.0f}ms > {MAX_GAP_SEC*1000:.0f}ms）'
+                                 f'  自 step={first_drop}'
                                  f'  pos=({fx:.3f},{fy:.3f},{fz:.3f})'
                                  f'  → 路径超出可达域，已放弃（未下发）'))
                     return
-            else:
-                # 首帧（含零种子重试）即无解：起点不可达
-                err_name = self._IK_ERR.get(err, str(err))
-                self._q.put(('status',
-                             f'✗ IK 失败（step=0 err={err_name}）'
-                             f'  pos=({wx:.3f},{wy:.3f},{wz:.3f})'
-                             f'  quat=({qx:.3f},{qy:.3f},{qz:.3f},{qw:.3f})'))
-                return
+                continue
 
+            # 该点保留
+            if joint_t:
+                max_gap = max(max_gap, t_pt - joint_t[-1])
+            if dp is not None:
+                fk_checked += 1
+                max_pos_err = max(max_pos_err, dp)
+                max_ori_err = max(max_ori_err, do)
+            consec_drop = 0
             joint_pos.append(sol)
             joint_t.append(t_pt)
             seed = sol
@@ -286,16 +539,30 @@ class CartesianTrajectoryControllerNode(Node):
         if self._stop_req:
             return
 
-        # 末点无解（哪怕连续数没到阈值）：整段走不到终点 → 不可达，不下发退化轨迹。
-        # 末点是唯一"必须精确到达"的点，沿用上帧在这里等于悄悄换了个终点。
-        if last_pt_failed:
-            lx, ly, lz = all_pts[-1][1:4]
-            self.get_logger().error(
-                f'末点 IK 无解 pos=({lx:.3f},{ly:.3f},{lz:.3f})，终点不可达，放弃本段')
-            self._q.put(('status',
-                         f'✗ 末点 IK 无解  pos=({lx:.3f},{ly:.3f},{lz:.3f})'
-                         f'  → 终点不可达，已放弃（未下发）'))
-            return
+        # ── 开拍不许甩：首点解离当前位形太远时，前面接一段关节空间平顺过渡 ──────
+        # 相机挂在末端，开拍瞬间的高速甩动会直接毁掉这一段素材，实机上还可能撞。
+        # 过渡段是额外时长，拍摄段本身时长不变（状态栏分开报，成片只取拍摄段）。
+        ramp_t = 0.0
+        if RAMP_IN_ENABLE and joint_pos:
+            q_now = self._clamp_seed(self._joint_pos)
+            d0    = max(abs(a - b) for a, b in zip(joint_pos[0], q_now))
+            if d0 > RAMP_IN_TOL_RAD:
+                ramp = self._plan_ramp_in(q_now, joint_pos[0])
+                if ramp is None:
+                    self.get_logger().error(
+                        f'开拍过渡段规划失败（首点离当前位形 {d0:.3f}rad），放弃本段')
+                    self._q.put(('status',
+                                 f'✗ 开拍过渡段规划失败'
+                                 f'（首点离当前位形 {d0:.3f}rad）  → 已放弃（未下发）'))
+                    return
+                ramp_t = ramp[-1][0]
+                ramp   = ramp[:-1]      # 过渡末点与拍摄段首点重合，去掉避免零间隔
+                joint_t   = [t + ramp_t for t in joint_t]
+                joint_pos = [p for _, p in ramp] + joint_pos
+                joint_t   = [t for t, _ in ramp] + joint_t
+                self.get_logger().info(
+                    f'首点离当前位形 {d0:.3f}rad > {RAMP_IN_TOL_RAD}rad，'
+                    f'插入 {ramp_t:.2f}s 过渡段（{len(ramp)} 点）后再接拍摄段')
 
         # 中央差分计算关节速度，端点为零
         n    = len(joint_pos)
@@ -317,12 +584,22 @@ class CartesianTrajectoryControllerNode(Node):
                                           nanosec=ns % 1_000_000_000)
             msg.points.append(pt)
         self._traj_pub.publish(msg)
-        # 漏解过的轨迹形状已与规划不完全一致，必须在界面上说出来 ——
+        # 轨迹保真度必须写在界面上：剔了几点、保留点最大间隔、FK 回代最大偏差。
         # 只打终端 WARN 的话，状态栏一句"执行中"会让人以为轨迹是干净的。
-        degraded = (f'  ⚠ {total_fail} 点漏解已沿用上帧（轨迹略偏规划路径）'
-                    if total_fail else '')
+        note = ''
+        if dropped:
+            note += (f'  ⚠ 剔除 {dropped} 点（最大间隔 {max_gap*1000:.0f}ms，'
+                     f'JTC 在保留点间插值）')
+        if FK_VERIFY and fk_checked:
+            note += (f'  FK 校验 {fk_checked} 点 ≤{max_pos_err*1000:.2f}mm/'
+                     f'{math.degrees(max_ori_err):.2f}°')
+        elif FK_VERIFY:
+            # 一个点都没校验成功：不能印 ≤0.00mm/0.00°，那会被读成"校验完美通过"
+            note += '  ⚠ FK 未校验（/compute_fk 无响应，末端邻域无凭据）'
+        seg = (f'（过渡 {ramp_t:.2f}s + 拍摄 {t_traj:.2f}s）' if ramp_t > 0 else '')
         self._q.put(('status',
-                     f'● 执行中  {n} 个路点  时长 {t_traj:.2f}s  {desc}{degraded}'))
+                     f'● 执行中  {n} 个路点  时长 {joint_t[-1]:.2f}s{seg}'
+                     f'  {desc}{note}'))
 
     # ── 点到点 ────────────────────────────────────────────────────────────────
     def send_goal(self, x, y, z, roll_deg, pitch_deg, yaw_deg,
