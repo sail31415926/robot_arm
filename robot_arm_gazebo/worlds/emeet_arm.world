@@ -424,7 +424,7 @@
     </model>
 
     <!-- ── 坐在桌子对面的人（Gazebo Classic actor + 自带 sitting.dae 骨骼皮肤）──
-         与 robot_bringup 的 person_tracking / filming_studio 用法一致：actor 是
+         与 robot_wholebody_gazebo 的 person_tracking / filming_studio 用法一致：actor 是
          kinematic 无碰撞的带贴图人体网格，HOG/YOLO 能识别，位姿可复现、不会被撞倒。
          ⚠️ **waypoint 的 z 必须是 0，不要试图用它把人「放到椅子上」**（踩过）：
          actor 的最终位姿 = waypoint ⊕ 动画根节点(Hips)平移，sitting.dae 的 Hips
