@@ -184,4 +184,38 @@ inline bool is_at_joints_prefix(const std::vector<double> & c, const std::vector
   return true;
 }
 
+// ── 超时兜底判据（settle）─────────────────────────────────────────────────────
+// 等待走到 timeout 那一刻才问一次：前 n 轴是否「已经静止、且停在放宽容差之内」。
+// 是 → 臂其实早就到位，只是静差比 joint_rad 大一点，按到位收尾；
+// 否 → 臂还在动 / 停得远（J1 卡死、驱动器 Fault、跟踪丢失），照旧 timeout 进 ERROR。
+// 放宽倍数与静止阈值来自 tuning（tolerance.settle_factor / settle_velocity_rad_s），
+// settle_factor = 0 时恒返回 false（兜底关闭）。
+/**
+ * @brief 超时兜底判据：前 n 轴已静止且残差在放宽容差内。
+ *
+ * @param c 当前关节角（rad），长度须 ≥ n。
+ * @param v 当前关节速度（rad/s），长度须 ≥ n。
+ * @param t 目标关节角（rad），长度须 ≥ n。
+ * @param n 参与判定的关节个数（前缀长度）。
+ * @param max_err 可选输出：前 n 轴最大残差（rad），供日志标定容差用。
+ * @param max_vel 可选输出：前 n 轴最大 |速度|（rad/s）。
+ * @return 兜底成立返回 true；兜底关闭或任一输入长度不足返回 false。
+ */
+inline bool is_settled_near_prefix(const std::vector<double> & c, const std::vector<double> & v,
+                                   const std::vector<double> & t, size_t n,
+                                   double * max_err = nullptr, double * max_vel = nullptr)
+{
+  const auto & tp = tuning::params();
+  if (tp.settle_factor <= 0.0) return false;
+  if (c.size() < n || v.size() < n || t.size() < n) return false;
+  double e = 0.0, w = 0.0;
+  for (size_t i = 0; i < n; ++i) {
+    e = std::max(e, std::fabs(c[i] - t[i]));
+    w = std::max(w, std::fabs(v[i]));
+  }
+  if (max_err) *max_err = e;
+  if (max_vel) *max_vel = w;
+  return w < tp.settle_velocity_rad_s && e <= tp.settle_factor * tp.joint_tolerance_rad;
+}
+
 }  // namespace robot_arm_node::commander

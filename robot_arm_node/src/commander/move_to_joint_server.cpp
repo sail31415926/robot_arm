@@ -191,6 +191,9 @@ MoveToJointServer::Action::Result MoveToJointServer::execute(const std::shared_p
     cur.resize(motion::ARM_JOINT_COUNT);
     return is_at_joints(cur, target_arm);
   };
+  p.settled = monitor_.make_settled([this]() { return motion_.get_current_joints(); },
+                                    [this]() { return status_.joint_velocity_list(); },
+                                    target_arm, motion::ARM_JOINT_COUNT, "MoveToJoint ");
   p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
   p.on_feedback = [this, gh, duration](double elapsed) {
     auto fb = std::make_shared<Action::Feedback>();

@@ -82,6 +82,23 @@ double load_positive(rclcpp::Node& node, const std::string& name, double def) {
 }
 
 /**
+ * @brief 声明并读取超时兜底的容差放宽倍数。
+ * @param node 用于声明参数和输出警告的 ROS 2 节点。
+ * @param name 参数名称。
+ * @param def 参数默认值。
+ * @return 配置值；0 表示关闭兜底；(0,1) 比严格容差还紧、没有意义，退回默认值。
+ */
+double load_settle_factor(rclcpp::Node& node, const std::string& name,
+                          double def) {
+    const double v = node.declare_parameter(name, def);
+    if (v == 0.0 || v >= 1.0) return v;
+    RCLCPP_WARN(node.get_logger(),
+                "参数 %s = %.4f 须为 0（关闭）或 ≥1，已退回默认值 %.4f",
+                name.c_str(), v, def);
+    return def;
+}
+
+/**
  * @brief 声明并读取一组速度档位参数。
  * @param node 用于声明参数和输出警告的 ROS 2 节点。
  * @param name 参数名称。
@@ -151,6 +168,10 @@ void declare_and_load(rclcpp::Node& node) {
         node, "tolerance.orientation_deg", p.orientation_tolerance_deg);
     p.joint_tolerance_rad =
         load_positive(node, "tolerance.joint_rad", p.joint_tolerance_rad);
+    p.settle_factor =
+        load_settle_factor(node, "tolerance.settle_factor", p.settle_factor);
+    p.settle_velocity_rad_s = load_positive(
+        node, "tolerance.settle_velocity_rad_s", p.settle_velocity_rad_s);
 
     // ── 笛卡尔速度档位
     // ──────────────────────────────────────────────────────────
@@ -218,10 +239,11 @@ void declare_and_load(rclcpp::Node& node) {
 
     RCLCPP_INFO(
         node.get_logger(),
-        "tuning 已加载：容差 %.3fm/%.1f°/%.3frad  IK %.0fms(抽取 1/%d)  "
-        "关节档位 %.2f/%.2f/%.2f rad/s  feedback %.0fHz",
+        "tuning 已加载：容差 %.3fm/%.1f°/%.3frad  超时兜底 ×%.1f@%.3frad/s  "
+        "IK %.0fms(抽取 1/%d)  关节档位 %.2f/%.2f/%.2f rad/s  feedback %.0fHz",
         p.position_tolerance_m, p.orientation_tolerance_deg,
-        p.joint_tolerance_rad, p.ik_timeout_s * 1e3, p.ik_decimate,
+        p.joint_tolerance_rad, p.settle_factor, p.settle_velocity_rad_s,
+        p.ik_timeout_s * 1e3, p.ik_decimate,
         p.joint_speed_slow_rps, p.joint_speed_normal_rps,
         p.joint_speed_fast_rps, p.feedback_hz);
 }

@@ -13,6 +13,9 @@
 
 #include <chrono>
 #include <thread>
+#include <utility>
+
+#include "robot_arm_node/commander/motion_policy.hpp"
 
 namespace robot_arm_node::commander
 {
@@ -34,7 +37,7 @@ ExecutionMonitor::ExecutionMonitor(rclcpp::Logger logger,
 }
 
 /**
- * @brief 轮询等待动作完成，直到到位、取消、急停或超时。
+ * @brief 轮询等待动作完成，直到到位、取消、急停或超时（超时前先问一次 settled 兜底）。
  *
  * 循环内的检查顺序是有意为之（与 Python 版一致）：急停 → 用户取消 → 反馈上报
  * → 到位判据 → sleep。急停优先于取消，因为急停时运动已被 ArmStop 停下，不需要
@@ -42,7 +45,7 @@ ExecutionMonitor::ExecutionMonitor(rclcpp::Logger logger,
  * 计时统一用 steady_clock，不受系统时间跳变影响。
  *
  * @param p 等待参数（超时、轮询间隔、反馈频率与各回调）。
- * @return 等待结果：REACHED / CANCELLED / STOPPED / TIMEOUT。
+ * @return 等待结果：REACHED / CANCELLED / STOPPED / SETTLED / TIMEOUT。
  */
 WaitOutcome ExecutionMonitor::wait_until(const WaitParams & p)
 {
@@ -86,9 +89,53 @@ WaitOutcome ExecutionMonitor::wait_until(const WaitParams & p)
     std::this_thread::sleep_for(std::chrono::duration<double>(p.poll_dt));
   }
 
+  // 超时兜底：严格判据一直没满足，但臂若已静止在放宽容差内，就不是故障而是容差偏紧
+  // —— 按到位收尾，避免上层进 ERROR 逼用户 reset_error。判据只在这一刻问一次，
+  // 不参与循环内的到位判定（正常路径仍以 arrived 的严格容差为准）。
+  if (p.settled && p.settled()) {
+    RCLCPP_WARN(logger_, "%s严格容差 %.0fs 未满足，但臂已静止在放宽容差内，按到位收尾"
+                "（残差见上一行；持续出现请按它放宽 tolerance.joint_rad）",
+                p.label.c_str(), p.timeout_sec);
+    return WaitOutcome::SETTLED;
+  }
+
   // 超时补一条 warn（对应 Python：原实现静默，这里不再无声）
   RCLCPP_WARN(logger_, "%s等待超时（%.0fs）", p.label.c_str(), p.timeout_sec);
   return WaitOutcome::TIMEOUT;
+}
+
+/**
+ * @brief 构造超时兜底判据（WaitParams::settled）。
+ *
+ * 闭包内调 is_settled_near_prefix；无论成立与否都把前 n 轴的最大残差与最大速度
+ * 打成 WARN —— 这一行就是标定 tolerance.joint_rad 的依据：兜底成立说明容差偏紧，
+ * 不成立则说明臂真没到位（残差远超放宽值或仍在动）。
+ *
+ * @param get_pos 取当前关节位置（motion::JOINT_NAMES 顺序）。
+ * @param get_vel 取当前关节速度（同顺序，rad/s）。
+ * @param target 目标关节角，长度 ≥ n。
+ * @param n 参与判定的关节个数（前缀长度）。
+ * @param label 日志前缀。
+ * @return 可直接赋给 WaitParams::settled 的闭包。
+ */
+std::function<bool()> ExecutionMonitor::make_settled(
+    std::function<std::vector<double>()> get_pos,
+    std::function<std::vector<double>()> get_vel,
+    std::vector<double> target, size_t n, std::string label) const
+{
+  return [logger = logger_, get_pos = std::move(get_pos), get_vel = std::move(get_vel),
+          target = std::move(target), n, label = std::move(label)]() {
+    double max_err = 0.0, max_vel = 0.0;
+    const bool ok = is_settled_near_prefix(get_pos(), get_vel(), target, n, &max_err, &max_vel);
+    const auto & tp = tuning::params();
+    RCLCPP_WARN(logger,
+                "%s超时时刻：前 %zu 轴最大残差 %.4f rad（严格容差 %.4f，放宽 ×%.1f=%.4f）"
+                "最大速度 %.4f rad/s（静止阈值 %.4f）→ 兜底%s",
+                label.c_str(), n, max_err, tp.joint_tolerance_rad, tp.settle_factor,
+                tp.settle_factor * tp.joint_tolerance_rad, max_vel, tp.settle_velocity_rad_s,
+                ok ? "成立" : "不成立");
+    return ok;
+  };
 }
 
 }  // namespace robot_arm_node::commander

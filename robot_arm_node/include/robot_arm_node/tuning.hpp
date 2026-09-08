@@ -53,6 +53,12 @@ struct Params
   double position_tolerance_m{0.01};
   double orientation_tolerance_deg{2.0};
   double joint_tolerance_rad{0.02};
+  // 超时兜底（settle）：等待走到 timeout 那一刻，若臂 J1-3 已静止（|q̇| < settle_velocity_rad_s）
+  // 且残差 ≤ settle_factor × joint_tolerance_rad，按到位收尾而不进 ERROR。区分「臂早停好了
+  // 只差一点」（假故障）与「臂根本没跟到位」（J1 卡死 / 驱动器 Fault，残差远超放宽值）。
+  // settle_factor = 0 关闭兜底，行为退回纯 timeout。
+  double settle_factor{2.5};
+  double settle_velocity_rad_s{0.01};
 
   // ── 笛卡尔速度档位（ArmMoveToPose / ArmTrajectoryShot 的 SLOW/NORMAL/FAST）──
   Speed speed_slow  {0.02, 0.05, 0.50, 0.05, 0.10, 1.00};

@@ -15,6 +15,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -28,9 +29,14 @@ enum class WaitOutcome
   STOPPED,    // 执行期间被急停（is_stopped()）
   CANCELLED,  // 用户取消（is_cancel_requested()），已发 stop_motion()
   TIMEOUT,    // 超过 timeout_sec 仍未到位
+  SETTLED,    // 超时那一刻 settled() 成立：臂已静止在放宽容差内，视为到位（见 WaitParams::settled）
 };
 
-inline bool is_reached(WaitOutcome o) { return o == WaitOutcome::REACHED; }
+// SETTLED 也算到位：调用方只看 success 与否，兜底成功的动作对上层就是 "reached"
+inline bool is_reached(WaitOutcome o)
+{
+  return o == WaitOutcome::REACHED || o == WaitOutcome::SETTLED;
+}
 
 class ExecutionMonitor
 {
@@ -48,6 +54,10 @@ public:
   struct WaitParams
   {
     std::function<bool()>       arrived;                        // 到位判据（必填）
+    // 超时兜底判据（可选）：只在 timeout 那一刻问一次。成立 → 返回 SETTLED（算到位），
+    // 不成立 → TIMEOUT。用途：严格容差没满足但臂已静止在放宽容差内时不再误报 ERROR；
+    // 判据本身见 motion_policy.hpp 的 is_settled_near_prefix。传空 = 纯 timeout 行为。
+    std::function<bool()>       settled = nullptr;
     std::function<bool()>       is_cancel_requested = nullptr;  // 取消判据；服务场景传空=不检测
     std::function<void(double)> on_feedback = nullptr;          // 节流后回调(elapsed)，自建并发布 Feedback
     double timeout_sec = 0.0;
@@ -57,8 +67,16 @@ public:
     bool   stop_motion_on_cancel = true;
   };
 
-  // 轮询等待，直到到位 / 急停 / 取消 / 超时。检查顺序与 Python 一致。
+  // 轮询等待，直到到位 / 急停 / 取消 / 超时（超时前先问一次 settled 兜底）。检查顺序与 Python 一致。
   WaitOutcome wait_until(const WaitParams & p);
+
+  // 构造 WaitParams::settled 兜底判据：对前 n 轴做 is_settled_near_prefix，成立时把
+  // 实际残差 / 速度打进日志（标定 tolerance.joint_rad 就靠这一行）。
+  // get_pos / get_vel 返回 motion::JOINT_NAMES 顺序的关节位置 / 速度；target 长度 ≥ n。
+  std::function<bool()> make_settled(std::function<std::vector<double>()> get_pos,
+                                     std::function<std::vector<double>()> get_vel,
+                                     std::vector<double> target, size_t n,
+                                     std::string label) const;
 
 private:
   rclcpp::Logger        logger_;

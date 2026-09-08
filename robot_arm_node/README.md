@@ -86,7 +86,7 @@ robot_arm_bringup/config/arm_params_real.yaml   # 实机覆盖层，只写偏离
 
 | 段 | 内容 |
 | --- | --- |
-| `tolerance.*` | 到位容差（位置 / 姿态 / 关节）—— 实机静差大，容差太紧会让动作走到 timeout |
+| `tolerance.*` | 到位容差（位置 / 姿态 / 关节）—— 实机静差大，容差太紧会让动作走到 timeout；`settle_factor` / `settle_velocity_rad_s` 是超时兜底：timeout 那一刻臂已静止且残差 ≤ factor×joint_rad 则按到位收尾、不进 ERROR（日志打出实际残差，用于标定） |
 | `speed_profiles.*` | SLOW/NORMAL/FAST 三档笛卡尔限制，每档 `[v_pos a_pos j_pos v_ori a_ori j_ori]` |
 | `joint_speed.*` | 关节空间档位角速度与时长上下限（`ArmMoveToJoint` 按 max\|Δq\|/档位 反算时长） |
 | `ik.*` | 单次 IK 超时、采样步长（抽取比由采样步长推导，不单独配） |

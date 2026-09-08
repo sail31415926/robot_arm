@@ -128,6 +128,9 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute_stowed(const std::sha
     cur.resize(STOWED_ARM_TARGET.size());
     return is_at_joints(cur, STOWED_ARM_TARGET);
   };
+  p.settled = monitor_.make_settled([this]() { return motion_.get_current_joints(); },
+                                    [this]() { return status_.joint_velocity_list(); },
+                                    STOWED_ARM_TARGET, motion::ARM_JOINT_COUNT, "STOWED ");
   p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
   p.on_feedback = [this, gh, STOWED_ARM_TARGET](double /*elapsed*/) {
     // 反馈基于关节接近度（非 elapsed 比例）
@@ -193,6 +196,9 @@ MoveToPoseServer::Action::Result MoveToPoseServer::wait_arrival(
       return is_at_joints_prefix(motion_.get_current_joints(), target_joints,
                                  motion::ARM_JOINT_COUNT);
     };
+    p.settled = monitor_.make_settled([this]() { return motion_.get_current_joints(); },
+                                      [this]() { return status_.joint_velocity_list(); },
+                                      target_joints, motion::ARM_JOINT_COUNT, "MoveToPose ");
   } else {
     RCLCPP_WARN(logger_, "无终点关节解，退化为笛卡尔到位判据（云台未到位可能导致超时）");
     p.arrived = [this, target]() { return is_at_pose(status_.pose(), target); };

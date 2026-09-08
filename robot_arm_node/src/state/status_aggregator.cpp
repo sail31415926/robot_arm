@@ -216,6 +216,23 @@ std::vector<double> StatusAggregator::joint_position_list(
 }
 
 /**
+ * @brief 按指定名称获取关节速度。
+ * @param names 要查询的关节名称列表。
+ * @return 与输入名称顺序对应的速度列表（rad/s），未知关节返回零。
+ */
+std::vector<double> StatusAggregator::joint_velocity_list(
+    const std::vector<std::string>& names) const {
+    std::lock_guard<std::mutex> lk(joint_mtx_);
+    std::vector<double> out;
+    out.reserve(names.size());
+    for (const auto& n : names) {
+        auto it = joint_velocities_.find(n);
+        out.push_back(it != joint_velocities_.end() ? it->second : 0.0);
+    }
+    return out;
+}
+
+/**
  * @brief 检查指定关节是否均存在于位置缓存中。
  * @param names 要检查的关节名称列表。
  * @return 名称列表非空且所有关节均存在时返回 true。

@@ -63,6 +63,9 @@ private:
   // target_joints 缺失（规划未产出末点解）时退化为笛卡尔判据并告警。
   std::function<bool()> arm_arrived_fn(const std::vector<double> & target_joints,
                                        const ArmPose & target);
+  // 构造「只判臂 J1-3」的超时兜底判据（WaitParams::settled）；无末点关节解时返回空。
+  std::function<bool()> arm_settled_fn(const std::vector<double> & target_joints,
+                                       const char * label);
   static ArmPose sphere_to_pose(double azimuth_deg, double elevation_deg, double radius_m,
                                 double ox, double oy, double oz);
 

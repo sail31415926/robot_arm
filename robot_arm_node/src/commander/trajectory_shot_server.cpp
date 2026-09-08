@@ -43,6 +43,7 @@ const char * outcome_reason(WaitOutcome o)
 {
   switch (o) {
     case WaitOutcome::REACHED:   return "reached";
+    case WaitOutcome::SETTLED:   return "reached";   // 超时兜底成立：对上层就是到位
     case WaitOutcome::STOPPED:   return "stopped";
     case WaitOutcome::CANCELLED: return "cancelled";
     default:                     return "timeout";
@@ -368,6 +369,7 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::move_and_wait(
   // 到位判据 = 臂 J1-3 到达 PTP 终点关节解（云台照常跟动但不进判据，理由见
   // commander/motion_policy.hpp 的 is_at_joints_prefix）
   p.arrived = arm_arrived_fn(exec_r.target_joints, target);
+  p.settled = arm_settled_fn(exec_r.target_joints, label);
   p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
   p.on_feedback = [this, gh, p_lo, p_hi, total_dur, azimuth, elevation, radius](double elapsed) {
     const double ratio = std::min(elapsed / std::max(total_dur, 1e-6), 0.999);
@@ -417,6 +419,7 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::wait_at_pose(
 {
   ExecutionMonitor::WaitParams p;
   p.arrived = arm_arrived_fn(target_joints, target);
+  p.settled = arm_settled_fn(target_joints, label);
   p.is_cancel_requested = [gh]() { return gh->is_canceling(); };
   const double timeout_ref = tuning::params().trajectory_shot_timeout_sec;
   p.on_feedback = [this, gh, p_lo, p_hi, azimuth, elevation, radius,
@@ -466,6 +469,27 @@ std::function<bool()> TrajectoryShotServer::arm_arrived_fn(
   }
   RCLCPP_WARN(logger_, "无末点关节解，退化为笛卡尔到位判据（云台未到位可能导致超时）");
   return [this, target]() { return is_at_pose(status_.pose(), target); };
+}
+
+// ── 超时兜底判据构造：只判臂 J1-3 ────────────────────────────────────────────────
+/**
+ * @brief 构造超时兜底判据：臂 J1-3 已静止且残差在放宽容差内（见 motion_policy.hpp）。
+ *
+ * 与 arm_arrived_fn 配对：同一组末点关节解，严格容差走 arrived，超时那一刻再用
+ * 放宽容差问一次 settled。没有关节解就没有兜底（退化的笛卡尔判据本来就带 WARN）。
+ *
+ * @param target_joints 轨迹末点关节解，长度 ≥ 3 才构造。
+ * @param label 日志前缀。
+ * @return 兜底判据闭包；无关节解时为空。
+ */
+std::function<bool()> TrajectoryShotServer::arm_settled_fn(
+    const std::vector<double> & target_joints, const char * label)
+{
+  if (target_joints.size() < motion::ARM_JOINT_COUNT) return nullptr;
+  return monitor_.make_settled([this]() { return motion_.get_current_joints(); },
+                               [this]() { return status_.joint_velocity_list(); },
+                               target_joints, motion::ARM_JOINT_COUNT,
+                               std::string(label) + " ");
 }
 
 // ── 球坐标 → Cartesian 位姿 ────────────────────────────────────────────────────────

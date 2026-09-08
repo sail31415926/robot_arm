@@ -76,6 +76,11 @@ public:
   //    has_joint_positions() 确认回读齐全，否则缺回读时会命令关节摆到 0 位。
   std::vector<double> joint_position_list(
       const std::vector<std::string> & names = motion::JOINT_NAMES) const;
+  // 按指定顺序返回关节速度（/joint_states 回读）；未知关节记 0。
+  // 只用于「是否已静止」这类判据，0 在这里是安全侧（缺回读 = 当作已静止，
+  // 兜底判定退化为只看残差）。
+  std::vector<double> joint_velocity_list(
+      const std::vector<std::string> & names = motion::JOINT_NAMES) const;
 
   /// 指定的关节是否**全部**有回读。用于区分 joint_position_list() 里的
   /// 「真实的 0」与「缺回读被记成 0」。

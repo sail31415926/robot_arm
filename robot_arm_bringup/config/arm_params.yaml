@@ -34,6 +34,13 @@ arm_commander:
       position_m: 0.01        # 末端位置（m）
       orientation_deg: 2.0    # 末端姿态（°）
       joint_rad: 0.02         # 关节（rad）；笛卡尔动作的到位判据也只认臂 J1-3 的这个值
+      # 超时兜底（settle）：等待走到 timeout 那一刻，若臂 J1-3 已静止（|q̇| < settle_velocity_rad_s）
+      # 且残差 ≤ settle_factor × joint_rad，按到位收尾、不进 ERROR —— 专治「臂早停好了只差一点，
+      # 却报 timeout 逼人 reset_error」。臂真没跟到位（J1 卡死、驱动器 Fault）时残差远超放宽值，
+      # 照旧 timeout → ERROR，不会被盖掉。兜底触发时日志会打出实际残差，拿它来标定 joint_rad。
+      # settle_factor: 0 关闭兜底（行为退回纯 timeout）。
+      settle_factor: 2.5
+      settle_velocity_rad_s: 0.01
 
     # ── 笛卡尔速度档位（ArmMoveToPose / ArmTrajectoryShot 的 SLOW/NORMAL/FAST）─
     # 每档 6 个数，顺序固定：[v_pos a_pos j_pos v_ori a_ori j_ori]
