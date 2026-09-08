@@ -1,0 +1,15 @@
+[
+  {"op": "enable"},
+  {"op": "observe", "speed": "normal"},
+  {"op": "wait", "seconds": 1.0},
+  {"op": "dolly", "distance_m": 0.10, "speed": "slow"},
+  {"op": "truck", "distance_m": -0.08, "speed": "slow", "return_to_start": true},
+  {"op": "crane", "distance_m": 0.05, "speed": "normal"},
+  {"op": "arc", "center": [0.6, 0.0, 0.7], "radius_m": 0.4,
+   "az_start_deg": -30.0, "az_end_deg": 30.0, "elevation_deg": 0.0, "speed": "normal"},
+  {"op": "linear", "start": {"x": 0.25, "y": 0.0, "z": 0.60, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+   "end":   {"x": 0.35, "y": 0.10, "z": 0.65}, "speed": "slow"},
+  {"op": "gimbal_rotate", "pan": 15.0, "tilt": -10.0, "timeout_sec": 5.0},
+  {"op": "gimbal_rotate", "pan": 0.0, "tilt": 0.0},
+  {"op": "stow"}
+]

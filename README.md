@@ -25,6 +25,7 @@ robot_arm/
 ├── robot_arm_node/          # ★产品层：C++ 产品栈（motion / state / commander，arm_commander_node）
 ├── robot_arm_debug/         # ☆调试层：Python 调试控制器 / GUI / 工具 + 视觉感知（visp_ibvs、红块检测，暂归调试）
 ├── robot_arm_bringup/       # 统一启动入口（bringup/real launch）+ ros2_control 控制器配置 + launch_common 共享工厂
+├── robot_arm_api/           # 对外接口 Python 客户端库 + demo（ArmApi：位姿/关节/运镜/速度流/云台直连，供 Director / 大模型上层调用）
 ├── robot_arm_gazebo/        # Gazebo 仿真后端：gazebo.launch.py + worlds / models 资产
 ├── robot_arm_mujoco/        # MuJoCo 仿真后端：mujoco.launch.py + mujoco_node 仿真桥
 └── robot_arm_matlab/        # MATLAB 离线分析工具箱（Simscape 导出）
@@ -48,7 +49,7 @@ robot_arm/
 ```bash
 colcon build --symlink-install --packages-select \
   robot_arm_interfaces robot_arm_driver robot_arm_description robot_arm_moveit_config \
-  robot_arm_bringup robot_arm_node robot_arm_debug robot_arm_gazebo robot_arm_mujoco \
+  robot_arm_bringup robot_arm_node robot_arm_api robot_arm_debug robot_arm_gazebo robot_arm_mujoco \
   robot_gimbal_interfaces_v2 robot_gimbal_driver_v2 robot_gimbal_description_v2
 
 # 生效（注意：编译出新包后每个已开终端都要重新 source）
@@ -57,13 +58,13 @@ source install/setup.bash
 
 ### 实机编译（板上部署最小集）
 
-只需 6 个 robot_arm 包 + 云台 V2 的 3 包（接口/转发插件/描述，J4-6 依赖，
-另仓库 `robot_gimbal_V2`）：
+只需 7 个 robot_arm 包 + 云台 V2 的 3 包（接口/转发插件/描述，J4-6 依赖，
+另仓库 `robot_gimbal_V2`）；`robot_arm_api` 是给上层（Director / 大模型）调用的 Python 客户端，只依赖接口包：
 
 ```bash
 colcon build --symlink-install --packages-select \
   robot_arm_interfaces robot_arm_driver robot_arm_description robot_arm_moveit_config \
-  robot_arm_bringup robot_arm_node \
+  robot_arm_bringup robot_arm_node robot_arm_api \
   robot_gimbal_interfaces_v2 robot_gimbal_driver_v2 robot_gimbal_description_v2
 
 source install/setup.bash

@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>robot_arm_api</name>
+  <version>1.1.0</version>
+  <description>机械臂 Arm Commander 对外接口的 Python 客户端库 + 调用 Demo（Director / 大模型运镜规划视角）。
+    把 /robot_arm 的 action / service / topic 包成阻塞式方法（arm_commander_client.py），
+    附云台 V2 直连客户端（云台 = 臂 J4-6）与 JSON 运镜步骤表执行器；命令行 demo 在 arm_commander_demo.py。
+    只依赖接口包，属于板上部署最小集。</description>
+  <maintainer email="sw.claude.Ethan@emeet.com">Ethan</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <!-- 机械臂接口（必需） -->
+  <exec_depend>robot_arm_interfaces</exec_depend>
+  <!-- 云台 V2 接口（可选：缺失时 try-import 降级，ArmApi.gimbal 为 None） -->
+  <exec_depend>robot_gimbal_interfaces_v2</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
