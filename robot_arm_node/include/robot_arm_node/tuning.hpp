@@ -65,6 +65,13 @@ struct Params
   Speed speed_normal{0.05, 0.10, 1.00, 0.10, 0.20, 2.00};
   Speed speed_fast  {0.10, 0.20, 2.00, 0.20, 0.40, 4.00};
 
+  // 运镜正式开拍前「搬到起点」那一段用的档位键（0=SLOW / 1=NORMAL / 2=FAST）。
+  // 与 goal.transition_speed 解耦：这一段在 camera_ready 置位之前、根本不入画，没有
+  // 理由跟着运镜档位一起慢 —— SLOW 档（v_pos=0.02m/s）搬 0.3m 要 22.5s 纯空等，
+  // 距离再大点直接顶到 action.trajectory_shot_timeout_sec。运镜段与 return_to_start
+  // 的返回段（都在镜头里）仍用 goal 里的档位，不受这个键影响。
+  uint8_t approach_speed_key{2};   // 默认 FAST
+
   // ── 关节空间档位（**平均**角速度 rad/s；ArmMoveToJoint 用它反算时长）────────
   // 峰值 ≈ 1.875 × 平均（JTC 五次多项式插值），FAST 峰值 ≈ 2.25 rad/s，
   // 仍低于 URDF 里 J1-3 的 velocity=3.14 机械限。

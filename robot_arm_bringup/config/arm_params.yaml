@@ -50,6 +50,12 @@ arm_commander:
       slow:   [0.02, 0.05, 0.50, 0.05, 0.10, 1.00]
       normal: [0.05, 0.10, 1.00, 0.10, 0.20, 2.00]
       fast:   [0.10, 0.20, 2.00, 0.20, 0.40, 4.00]
+      # 运镜前「搬到起点」那一段单独的档位键（0=slow / 1=normal / 2=fast），与 goal 里的
+      # transition_speed 解耦。这一段在 camera_ready 置位之前、根本不入画，慢没有画面收益：
+      # 跟着 slow 走 0.3m 要 22.5s 纯空等（PTP 时长 = 位移/v_pos×1.5），超过约 0.8m 还会
+      # 顶穿 action.trajectory_shot_timeout_sec。运镜段与 return_to_start 的返回段都在
+      # 镜头里，仍用 goal 的档位，不受这个键影响。
+      approach_key: 2
 
     # ── 关节空间档位（ArmMoveToJoint：按 max|Δq| / 档位角速度 反算时长）────────
     # 是**平均**角速度。JTC 五次多项式插值的峰值 ≈ 1.875×平均，

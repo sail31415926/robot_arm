@@ -4,6 +4,7 @@
  *
  * LINEAR：PTP 到起点→dwell→plan_line_ruckig 笛卡尔直线→wait_at_pose[→直线返回]。
  * ORBIT：PTP 到起始球坐标→dwell→plan_orbit_ruckig 球面轨道→wait_at_pose[→原路返回]。
+ * 开头那段 PTP 走 approach_speed()（不入画，与 goal.transition_speed 解耦），其余段走 goal 档位。
  * 运镜段均为密集笛卡尔路点 + 批量 IK（末端严格贴合几何路径）；sphere_to_pose 复用 motion 几何。
  *
  * @version 1.0
@@ -72,6 +73,22 @@ const char * plan_exit_reason(motion::PlanResult pr, bool cancelled)
     default:                              return cancelled ? "cancelled" : "error";
   }
 }
+
+/**
+ * @brief 取「搬到运镜起点」那一段的速度档位。
+ *
+ * 为什么不用 goal.transition_speed：这一段在 dwell_at_start 置 camera_ready 之前，
+ * 根本不入画，慢没有任何画面收益。PTP 时长 = 位移/v_pos×1.5，SLOW 档（0.02m/s）
+ * 搬 0.3m 就是 22.5s 纯空等，超过约 0.8m 直接顶穿 trajectory_shot 超时。
+ * 档位键由 speed_profiles.approach_key 配置（默认 FAST）；运镜段与 return_to_start
+ * 的返回段都在镜头里，仍用 goal 里的档位。
+ *
+ * @return 接近段的笛卡尔速度限制。
+ */
+const Speed & approach_speed()
+{
+  return speed_profile(tuning::params().approach_speed_key);
+}
 }  // namespace
 
 /**
@@ -131,7 +148,7 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute(
  *
  * @param gh Action 目标句柄。
  * @param goal Action 目标（起止位姿、是否返回）。
- * @param speed 速度档位。
+ * @param speed 运镜段的速度档位（搬到起点那段不用它，见 approach_speed）。
  * @return Action 结果。
  */
 TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
@@ -160,8 +177,8 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
 
   Action::Result result;
 
-  // 步骤 1：PTP 移到起始位姿（去程不要求直线）
-  auto r = move_and_wait(gh, start, speed, "LINEAR 起始位",
+  // 步骤 1：PTP 移到起始位姿（去程不要求直线；不入画，走 approach_speed 而非运镜档位）
+  auto r = move_and_wait(gh, start, approach_speed(), "LINEAR 起始位",
                          0.0, goal.return_to_start ? 33.0 : 50.0);
   if (!r.success) return r;
   if (!dwell_at_start(gh, "LINEAR")) {
@@ -218,7 +235,8 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_linear(
  *
  * @param gh Action 目标句柄。
  * @param goal Action 目标（球心、起止球坐标、是否返回）。
- * @param speed 速度档位（位置与姿态两组约束都会用到）。
+ * @param speed 运镜段的速度档位（位置与姿态两组约束都会用到；
+ *              搬到起点那段不用它，见 approach_speed）。
  * @return Action 结果。
  */
 TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
@@ -244,7 +262,7 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
 
   // 步骤 1：PTP 移到起始球坐标
   const ArmPose start_pose = sphere_to_pose(goal.azimuth_start_deg, goal.elevation_start_deg, r0, ox, oy, oz);
-  auto r_ptp = move_and_wait(gh, start_pose, speed, "ORBIT PTP→起点",
+  auto r_ptp = move_and_wait(gh, start_pose, approach_speed(), "ORBIT PTP→起点",
                              0.0, goal.return_to_start ? 30.0 : 20.0,
                              goal.azimuth_start_deg, goal.elevation_start_deg, r0);
   if (!r_ptp.success) return r_ptp;
@@ -266,11 +284,20 @@ TrajectoryShotServer::Action::Result TrajectoryShotServer::execute_orbit(
     }
   }
 
-  if (!goal.return_to_start) {
-    const ArmPose end_pose = sphere_to_pose(goal.azimuth_end_deg, goal.elevation_end_deg, r1, ox, oy, oz);
-    return wait_at_pose(gh, end_pose, seg_joints, "ORBIT 终止到位", 60.0, 100.0,
-                        goal.azimuth_end_deg, goal.elevation_end_deg, r1);
-  }
+  // 步骤 2 收尾：等去程轨迹真正执行完再往下走。
+  // ★ 2026-09-08 修：这次等待原来只在 return_to_start=false 时做，true 时被整段跳过，
+  //   是实机「环绕刚起步就瞬间弹到终点」的根因 ★
+  //   solve_and_send 是把整条 JointTrajectory 一次性发给 JTC 就返回，**不等执行完**。
+  //   少了这次等待，步骤 3 的返回轨迹会在去程只跑了几秒（≈返回段批量 IK 的耗时）时
+  //   把去程顶掉；返回轨迹的首点是环绕**终点**，而臂此刻还在起点附近，JTC 只有
+  //   START_BLEND_SEC(0.2s) 的融合窗口去够它 —— 表现就是一瞬间弹到终点、再慢慢转回来。
+  //   LINEAR 一直有这次等待（见 execute_linear 步骤 2），ORBIT 这里对齐它。
+  const ArmPose end_pose = sphere_to_pose(goal.azimuth_end_deg, goal.elevation_end_deg, r1, ox, oy, oz);
+  auto r_fwd = wait_at_pose(gh, end_pose, seg_joints, "ORBIT 终止到位",
+                            goal.return_to_start ? 30.0 : 60.0,
+                            goal.return_to_start ? 60.0 : 100.0,
+                            goal.azimuth_end_deg, goal.elevation_end_deg, r1);
+  if (!r_fwd.success || !goal.return_to_start) return r_fwd;
 
   // 步骤 3：Ruckig 1-DOF 原路返回（终 → 起）
   if (cancelled()) { motion_.stop(); result.exit_reason = "cancelled"; return result; }

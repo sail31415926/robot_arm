@@ -132,6 +132,25 @@ Speed load_speed(rclcpp::Node& node, const std::string& name,
 }
 
 /**
+ * @brief 声明并读取一个速度档位键（0=SLOW / 1=NORMAL / 2=FAST）。
+ * @param node 用于声明参数和输出警告的 ROS 2 节点。
+ * @param name 参数名称。
+ * @param def 参数默认值。
+ * @return 配置值；不在 0..2 内时返回默认值。
+ */
+/// speed(key) 对非法键本来会静默落 NORMAL，但档位键配错了该让人看见 —— 这里挡一道。
+uint8_t load_speed_key(rclcpp::Node& node, const std::string& name,
+                       uint8_t def) {
+    const int64_t v = node.declare_parameter(name, static_cast<int64_t>(def));
+    if (v >= 0 && v <= 2) return static_cast<uint8_t>(v);
+    RCLCPP_WARN(node.get_logger(),
+                "参数 %s = %ld 不在 0..2（SLOW/NORMAL/FAST），已退回默认值 %u",
+                name.c_str(), static_cast<long>(v),
+                static_cast<unsigned>(def));
+    return def;
+}
+
+/**
  * @brief 声明并读取一组关节角参数。
  * @param node 用于声明参数和输出警告的 ROS 2 节点。
  * @param name 参数名称。
@@ -178,6 +197,8 @@ void declare_and_load(rclcpp::Node& node) {
     p.speed_slow = load_speed(node, "speed_profiles.slow", p.speed_slow);
     p.speed_normal = load_speed(node, "speed_profiles.normal", p.speed_normal);
     p.speed_fast = load_speed(node, "speed_profiles.fast", p.speed_fast);
+    p.approach_speed_key = load_speed_key(node, "speed_profiles.approach_key",
+                                          p.approach_speed_key);
 
     // ── 关节空间档位
     // ────────────────────────────────────────────────────────────
@@ -240,12 +261,16 @@ void declare_and_load(rclcpp::Node& node) {
     RCLCPP_INFO(
         node.get_logger(),
         "tuning 已加载：容差 %.3fm/%.1f°/%.3frad  超时兜底 ×%.1f@%.3frad/s  "
-        "IK %.0fms(抽取 1/%d)  关节档位 %.2f/%.2f/%.2f rad/s  feedback %.0fHz",
+        "IK %.0fms(抽取 1/%d)  关节档位 %.2f/%.2f/%.2f rad/s  feedback %.0fHz  "
+        "运镜接近档位 %s",
         p.position_tolerance_m, p.orientation_tolerance_deg,
         p.joint_tolerance_rad, p.settle_factor, p.settle_velocity_rad_s,
         p.ik_timeout_s * 1e3, p.ik_decimate,
         p.joint_speed_slow_rps, p.joint_speed_normal_rps,
-        p.joint_speed_fast_rps, p.feedback_hz);
+        p.joint_speed_fast_rps, p.feedback_hz,
+        p.approach_speed_key == 0   ? "SLOW"
+        : p.approach_speed_key == 2 ? "FAST"
+                                    : "NORMAL");
 }
 
 }  // namespace robot_arm_node::tuning
