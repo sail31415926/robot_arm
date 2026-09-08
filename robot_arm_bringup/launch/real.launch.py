@@ -53,6 +53,7 @@
   ros2 launch robot_arm_bringup real.launch.py controller:=commander gui:=false
 
   arm_sim_mode:=true   臂 J1-3 不连 CAN（mock_components 回显），云台照常，用于无臂调试
+  arm_sim_offset:=0.03 配合 arm_sim_mode：回显叠 0.03rad 常量静差，复现到位超时 / 验证超时兜底
 
 前置条件（真机）：
   sudo ip link set can0 up type can bitrate 500000 && sudo ip link set can0 txqueuelen 128
@@ -109,6 +110,7 @@ def _setup(context, *args, **kwargs):
     srdf_content     = open(os.path.join(moveit_cfg, 'eMeetArm_models.srdf')).read()
 
     arm_sim_mode  = LaunchConfiguration('arm_sim_mode').perform(context)
+    arm_sim_offset = LaunchConfiguration('arm_sim_offset').perform(context)
     can_interface = LaunchConfiguration('can_interface').perform(context)
     auto_disable  = LaunchConfiguration('auto_disable_on_shutdown').perform(context)
 
@@ -119,6 +121,7 @@ def _setup(context, *args, **kwargs):
         mappings={
             'backend': 'real',
             'arm_sim_mode': arm_sim_mode,
+            'arm_sim_offset': arm_sim_offset,
             'can_interface': can_interface,
             'sim_mode': 'false',            # 云台连实物 HID
             'gazebo_camera': 'false',
@@ -402,6 +405,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'arm_sim_mode', default_value='false',
             description='true=臂 J1-3 不连 CAN（mock 回显），云台照常；false=连接实物 CANopen',
+        ),
+        DeclareLaunchArgument(
+            'arm_sim_offset', default_value='0.0',
+            description='仅 arm_sim_mode:=true 生效：mock 回显位置 = 命令 + 此偏移（rad），'
+                        '模拟伺服静差，用于复现到位超时 / 验证超时兜底；0 = 精确回显',
         ),
         DeclareLaunchArgument(
             'can_interface', default_value=_default_can_interface(),

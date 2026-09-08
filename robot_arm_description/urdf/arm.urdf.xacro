@@ -69,6 +69,7 @@
                      gazebo_camera:='false'
                      backend:='gazebo'
                      arm_sim_mode:='false'
+                     arm_sim_offset:='0.0'
                      can_interface:='can0'
                      emit_camera_control:='true'
                      with_gimbal:='true'
@@ -221,7 +222,8 @@
                                  继承 RobotSystem + 绝对编码器 2π 折算，保证回零走最短方向）
                                  总线拓扑/换算/PDO 见 robot_arm_driver/config/canopen/bus.yml
                                  arm_sim_mode=true → mock_components/GenericSystem
-                                                     （命令回显为状态，不连 CAN，干跑）
+                                                     （命令回显为状态，不连 CAN，干跑；
+                                                      arm_sim_offset 可给回显叠常量静差）
        ═══════════════════════════════════════════════════════════════════════ -->
   <ros2_control name="eMeetArm_hardware" type="system">
     <hardware>
@@ -234,6 +236,11 @@
         </xacro:unless>
         <xacro:if value="${arm_sim_mode}">
           <plugin>mock_components/GenericSystem</plugin>
+          <!-- arm_sim_offset ≠ 0：mock 回显的位置状态 = 命令 + 常量偏移（rad），模拟实机
+               伺服静差，用来在开发机上复现「到位判据卡在容差外」与验证超时兜底；0 = 精确回显 -->
+          <xacro:if value="${float(arm_sim_offset) != 0.0}">
+            <param name="position_state_following_offset">${arm_sim_offset}</param>
+          </xacro:if>
         </xacro:if>
       </xacro:if>
       <xacro:unless value="${backend == 'real'}">

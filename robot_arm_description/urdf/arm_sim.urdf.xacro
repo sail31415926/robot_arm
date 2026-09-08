@@ -33,6 +33,7 @@
   <xacro:arg name="gazebo_camera"       default="false"/>
   <xacro:arg name="backend"             default="gazebo"/>
   <xacro:arg name="arm_sim_mode"        default="false"/>
+  <xacro:arg name="arm_sim_offset"      default="0.0"/>
   <xacro:arg name="can_interface"       default="can0"/>
   <xacro:arg name="emit_camera_control" default="true"/>
   <xacro:arg name="controllers_yaml"    default=""/>
@@ -50,6 +51,7 @@
       gazebo_camera="$(arg gazebo_camera)"
       backend="$(arg backend)"
       arm_sim_mode="$(arg arm_sim_mode)"
+      arm_sim_offset="$(arg arm_sim_offset)"
       can_interface="$(arg can_interface)"
       emit_camera_control="$(arg emit_camera_control)"
       controllers_yaml="$(arg controllers_yaml)"/>
