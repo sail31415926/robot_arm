@@ -1,3 +1,28 @@
+# kinematics.yaml —— pick_ik 求解器参数（规划组 arm，6 轴 arm_base_link → gimbal_tool0）
+#
+# 2026-09-07 收紧容差：position 0.001→0.0002 m，orientation 0.01→0.002 rad。
+# 其余（global 模式、attempts、stop_optimization）**不动** —— 只有 mode 才关系到
+# PTP 远种子能否求解，容差收紧对点到点只是更准，无副作用。
+#
+# 动机（实机运镜段抖动的根因）：build_joint_trajectory 用中央差分算 velocities，
+# 等于把逐点 IK 的位置噪声除以 2h 放大；相邻路点的真实位移必须远大于这里的容差，
+# 否则下发给 JTC 的速度指令由噪声主导。原来 1.0mm 容差下，SLOW 档 60° 环绕
+# （ik.sample_dt=0.05）每步只走 0.75mm、NORMAL 每步 1.50mm，信噪比 0.75~1.5。
+#
+# 板上实测（真实 IK 解 → 模拟 JTC 三次 Hermite + 200Hz 采样；~/Wqh_ws/scripts/jtc_sim.py，
+# 只调 /compute_ik 不动臂；运行期 ros2 param set 做 A/B，两档 IK 均 100% 成功）：
+#
+#   档位    容差             J1 命令速度峰值  J1 加速度峰值  节点加速度跳变 max / mean
+#   SLOW    1.0mm / 0.57°    -0.108 rad/s     -5.19 rad/s²   2.459 / 0.057
+#   SLOW    0.2mm / 0.11°    -0.051 rad/s     -0.75 rad/s²   0.304 / 0.011   ← 8× / 5×
+#   NORMAL  1.0mm / 0.57°    -0.093 rad/s     -3.33 rad/s²   1.976 / 0.069
+#   NORMAL  0.2mm / 0.11°    -0.085 rad/s     -0.40 rad/s²   0.201 / 0.013   ← 10× / 5×
+#
+# SLOW 几何名义 J1 峰值约 0.040 rad/s：原容差下命令峰值是名义的 2.7 倍，收紧后 1.3 倍。
+# 代价：SLOW 432 点批量 IK 从 2.0s 到 3.1s（NORMAL 不变）。
+#
+# 不要为了运镜再去动 mode（改 local 在这条链上对整条轨道全部 NO_IK_SOLUTION，已实测），
+# 也别单靠调大 ik.sample_dt 凑信噪比 —— 那个旋钮随速度档位变，SLOW 永远凑不够。
 arm:
   kinematics_solver: pick_ik/PickIkPlugin
   kinematics_solver_search_resolution: 0.005
@@ -5,6 +30,6 @@ arm:
   kinematics_solver_attempts: 3
   mode: global
   stop_optimization_on_valid_solution: true
-  position_threshold: 0.001
-  orientation_threshold: 0.01
+  position_threshold: 0.0002
+  orientation_threshold: 0.002
   cost_threshold: 0.001
