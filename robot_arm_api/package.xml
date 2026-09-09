@@ -17,6 +17,9 @@
   <exec_depend>action_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <!-- reach_check（可达性 / 余量 / 能力卡）只要 numpy；from_share_files 另需 xacro + 描述包，
+       缺失时报 RuntimeError 而不是 import 失败，所以不在这里声明硬依赖 -->
+  <exec_depend>python3-numpy</exec_depend>
   <!-- 机械臂接口（必需） -->
   <exec_depend>robot_arm_interfaces</exec_depend>
   <!-- 云台 V2 接口（可选：缺失时 try-import 降级，ArmApi.gimbal 为 None） -->
@@ -24,6 +27,11 @@
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>xacro</test_depend>
+  <test_depend>robot_arm_description</test_depend>
+  <test_depend>robot_gimbal_description_v2</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

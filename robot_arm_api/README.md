@@ -9,8 +9,12 @@
 robot_arm_api/
 ├── robot_arm_api/
 │   ├── arm_commander_client.py   ★ 库：ArmCommanderClient / GimbalV2Client / ArmApi / execute_plan
-│   ├── arm_commander_demo.py     命令行 demo（子命令 = 库方法；plan = JSON 步骤表；demo = 小幅全流程）
-│   └── __init__.py               re-export
+│   ├── reach_check.py            ★ 可达性 / 余量盒子 / 步骤表预检 / 能力卡（纯 numpy，给大模型运镜决策用）
+│   ├── llm_shot_loop.py          ★ 大模型单步运镜闭环：读关节角 → 余量 → 大模型出一步 → 校验/夹取 → 执行
+│   ├── arm_commander_demo.py     命令行 demo（子命令 = 库方法；plan = JSON 步骤表；check/headroom/card/llm-step）
+│   └── __init__.py               re-export（无 ROS 环境时只导出 reach_check 那一半）
+├── test/                         pytest：test_reach_check（正解对拍 pinocchio、逆解往返、可达判定、余量、预检、能力卡）
+│                                        test_llm_shot_loop（提示词 / schema、闭环夹取与回喂重试、OpenAI 兼容请求）
 ├── examples/shot_plan_example.json   JSON 运镜步骤表示例
 ├── CMakeLists.txt / package.xml
 └── README.md
@@ -140,6 +144,97 @@ Python 里 `execute_plan(api, steps)`，命令行 `plan 文件`。
 | `gimbal_forward_enable` | `enable` | `set_forward_cmd_enable` |
 | `wait` / `wait_camera_ready` | `seconds` / `timeout_sec` | — |
 
+## 可达性判定与余量盒子（`reach_check.py`，给大模型运镜决策用）
+
+大模型是概率生成器不是约束求解器：让它直接吐末端坐标再"事后拦"永远拦不干净。`reach_check` 提供两层保障，
+共用一个从 URDF 现算的运动学模型（换云台、改限位不用改代码）：
+
+| 层 | 函数 | 作用 |
+| --- | --- | --- |
+| **余量盒子**（主） | `headroom(model, joints, subject=None)` | 从当前关节角出发，各方向**连续运动**还能走多远：`dolly/truck/crane` (m)、`dyaw/dpitch` (°)、给了主体再加环绕方位 `arc_az`。把区间塞进提示词，大模型只在区间里选数；`headroom_schema(h)` 把区间写成单步 JSON schema 的 `minimum/maximum`，支持 structured output 的模型 API 可当硬约束 |
+| **事后校验**（保险丝） | `check_pose(model, pose)` / `check_plan(model, steps, joints, mode)` | 单点判定 / 整张 JSON 步骤表逐条推演。不可达给**人话原因**（"超出臂长：肩到末端 0.66 m，最大 0.60 m"、"J3 = −2.45 rad 距限位只剩 0.05 rad"）与最近可行位姿 `suggestion`；`mode='clip'` 把超余量的路径类步骤夹到边界继续推演，`PlanReport.summary()` 直接回喂大模型 |
+| 背景 | `capability_card(model, joints=None)` / `capability_data(model)` | 能力卡文本 / 结构化数据：r→离地高静态表、J1 可用范围、舒适区、朝向规则；给了关节角再附"当前状态 + 余量区间" |
+
+```python
+from robot_arm_api import ArmModel, headroom, check_plan, capability_card
+
+model = ArmModel.from_share_files()            # xacro 现场展开 arm.urdf.xacro（含云台 V2）；或
+# model = ArmModel.from_urdf_string(robot_description)   # 运行时直接吃 /robot_description
+q = [0.0, 1.0, -1.5, 0.0, 0.3, 0.0]            # 当前关节角（arm_nominal）
+print(capability_card(model, q, subject=[0.85, 0.0, 0.68]))   # 喂给大模型的文本
+h = headroom(model, q)                         # {'dolly': (-0.64, 0.11), 'crane': (-0.31, 0.07), ...}
+report = check_plan(model, steps, q, mode='clip')            # steps = 大模型输出的 JSON 步骤表
+print(report.summary())                        # 每步一行：✓ / ⚠ 夹取到 57%（…）/ ✗ 走到 30% 处不可达：…
+```
+
+命令行（不下发、不需要 Commander 在跑；关节角缺省从 `/joint_states` 读 2 s，读不到用 `--joints`）：
+
+```bash
+R="ros2 run robot_arm_api arm_commander_demo.py"
+$R check shot_plan.json [--clip] [--json]           # 步骤表预检，exit 0 = 整表可执行
+$R headroom [--subject 0.85 0 0.68] [--schema]      # 余量区间 / 单步 JSON schema
+$R card [--joints 0 1 -1.5 0 0.3 0]                 # 能力卡文本
+```
+
+**约定与口径**
+
+- 位姿沿用 `ArmPose` 语义：机械臂 `base_link` 系、末端 `gimbal_tool0`、米 / 度，
+  `R = Rz(yaw)·Ry(pitch)·Rx(roll)`（与 Commander `motion::rpy_to_quat` 一致）。注意这意味着
+  **`pitch` 正 = 俯视**（`ArmPose.msg` 注释里"正值抬头 / 正值向右转"与 Commander 的实际数学相反，
+  本模块按代码实际行为走）；`pose_from_look_at(pos, look_at)` 与 `aim_quat` 同约定。
+- 余量默认 `Margins(dist_m=0.05, joint_rad=(10°, 0.1, 0.1, 0.1, 0.1, 0.1))`：臂长两端各留 5 cm，J1 留 10°
+  （实机 J1 软限位 / 回绕编码器的历史问题），其余关节 0.1 rad。
+- **连续 vs 换分支**：`headroom` 与 `check_plan` 的路径类步骤按"从当前位形连续运动、不换几何分支"判定
+  （运动语义）；`check_pose(continuous=False)`（默认）与 `pose / move_rel` 步骤允许任何限位内的解
+  （"这个位姿臂能不能摆出来"）。两者结论可能不同，这是有意的。
+- 这台臂的结构：J1 偏航 + J2/J3 平行轴平面二连杆（闭式位置解、肘唯一分支）+ 云台 3 轴（数值姿态解）。
+  J1 ±150° 的正向 / 反折两支几乎覆盖全部方位，末端还能沿 y≈0.0265 的臂平面越过基座顶部后退——
+  几何上可达，但**自碰撞不在本模块范围内**，执行前仍由 Commander 的 `/check_state_validity` 兜底。
+- `from_share_files()` 需要 source ROS 与工作空间（xacro + 两个描述包），拿不到时抛 `RuntimeError`；
+  其余全部纯 numpy。
+
+### 大模型单步闭环（`llm_shot_loop.py`）
+
+把上面两层串成"余量盒子"的调用层：**每步** 读关节角 → `headroom` → 组提示词（system = 能力卡静态部分 + 输出规则，
+user = 任务 + 当前状态与余量 + 历史 + 上次被拒原因，schema = 余量区间 + done）→ 大模型只出**一步** JSON →
+`check_plan(mode='clip')` 校验 / 夹取 → `run_plan_step` 执行 → 下一步；大模型输出非法或被拒就把原因回喂再要一次
+（默认最多 2 次），输出 `{"op":"done"}` 或到 `--max-steps` 结束。核心 `run_step_loop` 不依赖 ROS（测试用假臂 +
+脚本大模型跑通闭环），ROS 胶水 `run_llm_shot_loop` 用 `ArmApi` 读关节角、执行、可选附相机画面。
+
+```python
+from robot_arm_api import ArmApi, ArmModel, OpenAICompatClient, ManualClient, run_llm_shot_loop
+
+model = ArmModel.from_share_files()
+llm = OpenAICompatClient.from_env()      # LLM_BASE_URL / LLM_MODEL / LLM_API_KEY；或 ManualClient() 人工当模型
+with ArmApi() as api:
+    api.arm.wait_ready()
+    records = run_llm_shot_loop(api, model, llm, '把桌上的花瓶推成特写，画面居中',
+                                subject=[0.9, 0.0, 0.7], image_topic='/camera/image_raw', max_steps=8)
+    for rec in records:
+        print(rec.line())     # 第 2 步 truck {"distance_m": 0.06}：成功，被夹取到 {…}，模型理由：…
+```
+
+```bash
+R="ros2 run robot_arm_api arm_commander_demo.py"
+$R --dry-run llm-step "推近花瓶" --joints 0 1 -1.5 0 0.3 0        # 不下发、不需要臂：看提示词与校验流程
+$R llm-step "推近花瓶" --llm manual --max-steps 5                  # 实机联调：人在终端里当大模型
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 LLM_MODEL=qwen-vl-max LLM_API_KEY=sk-… \
+$R llm-step "推近花瓶" --llm openai --image-topic /camera/image_raw --subject 0.9 0 0.7
+```
+
+- 大模型接入是 OpenAI 兼容 `/chat/completions`（DashScope 兼容模式、DeepSeek、vLLM、Ollama…都行）；
+  支持 `response_format=json_schema` 的服务会把余量区间当**硬约束**，不支持的自动退到 `json_object`，
+  区间约束就只靠提示词 + 执行侧校验。附图走 OpenAI 的 `image_url`（JPEG base64，需 cv2）。
+- **千问（DashScope）配置**：`LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`、
+  `LLM_MODEL=<控制台里的模型名>`、`LLM_API_KEY=sk-…`，并加 `LLM_EXTRA_JSON='{"enable_thinking": false}'`
+  ——千问 3.x 思考模式下**非流式**调用会被拒，本客户端不走流式。`LLM_TIMEOUT_SEC` 可调超时（默认 60）。
+- 允许的 op：`dolly / truck / crane / move_rel / arc / linear / pose / wait / done`；其它一律拒绝回喂。
+- **会动臂**。第一次先 `--dry-run`；实机用 `--llm manual` 手敲小步（≤ 5 cm）确认链路，再换真模型；
+  Ctrl-C 会取消当前 goal 并急停。
+
+**测试**：`colcon test --packages-select robot_arm_api && colcon test-result --verbose`
+（或在包目录 `python -m pytest test/`，需 source ROS；正解对拍用 venv 里的 pinocchio，缺失自动 skip）。
+
 ## 方法 ↔ ROS 接口对照
 
 | 方法 | ROS 接口 | 类型 |
@@ -217,13 +312,34 @@ Python 里 `execute_plan(api, steps)`，命令行 `plan 文件`。
 ### 2026-09-08 实机首测（Jetson，Wqh_ws overlay）
 
 - `--dry-run / status / enable` 正常；`status` 同时收到云台板 `/robot_gimbal_v2/status`。
-- `gimbal-rotate -45 nan 0`（RotateToAngle）**板端返回 timeout、进度一直 0%**。已定位到云台板上 Wqh_ws 版
-  `robot_gimbal_node_v2` 的语义不一致，不是本 API：该版 `params.yaml` 开了 `fpv_on_startup / forward_cmd_use_fpv /
-  use_motor_angle`，即转发流与反馈都按**框架角（URDF 关节角）**处理；但 `RotateToAngle` 的执行路径仍是
-  `enter_traj_locked → angle_spec`（**IMU 世界绝对姿态角** + 底座补偿），目标与反馈不在一个坐标系，臂末端 yaw 约 30°
-  时 pan 反馈永远追不上目标（实测 pan 从 -45.7° 跑到 +24.7°），tilt 因底座接近水平恰好到位。
-  **临时办法**：云台朝向走 `move_to_pose / move_relative(dyaw=…)`（经 Commander IK → JTC → forward_cmd，该版按框架角执行）；
-  **根治**：在该节点里让 RotateToAngle 在 FPV/框架角配置下走 `fpv_angle_spec`（与 forward_cmd 同一语义）。
+- `gimbal-rotate`（RotateToAngle）曾**稳定返回 timeout**，**2026-09-09 已在云台板修复并实机验证通过**。
+
+  **根因**：云台板把反馈源切成了编码器框架角（`use_motor_angle: true`，9/7 修「起手云台乱转」时改的），
+  转发流也切成框架角（`forward_cmd_use_fpv: true`）；但 `RotateToAngle` / `gimbal_cmd POSITION` 的**命令路径仍是
+  `angle_spec`，即 IMU 世界绝对姿态角**。命令侧与到位判据侧隔着「IMU 零点 vs 编码器零点」的固定偏差，
+  `|cur - tgt|` 永远进不了 `at_target_pos_tol`（0.0175 rad）→ 必然超时。
+  实测（臂在收纳位、只动云台，排除底座旋转）：命令 pan=+0.1745 停在编码器 +0.059（差 0.116）；
+  命令 pan=0 停在 -0.122（差 0.122）。两次偏差一致 ≈ 0.118 rad，正是那个零点差。
+  `at_target_locked` 的注释里写着的前提「`cur_*` 来自 IMU 是惯性角」，正是被 `use_motor_angle: true` 打破的。
+
+  **修复**：`robot_gimbal_node.cpp` 的 `push_manual_locked()` `Mode::TRAJ` 分支增加框架角通路 ——
+  `use_motor_angle_` 为真时改用 `fpv_angle_spec` 下发**框架角**、`tgt_inertial_*` 也存框架角，
+  命令 / 下发值 / 判据三者同系，与一直好用的 `forward_cmd_use_fpv` 转发流同一套语义。
+  `use_motor_angle=false` 的老路径完全不变。
+
+  **实机验证**（2026-09-09，臂在收纳位）：`gimbal-rotate 15 nan -10` → `reached`，编码器 pan=0.2609（目标 0.2618）、
+  tilt=-0.1583（目标 -0.1745）；`gimbal-rotate 0 nan 0` → `reached`，pan=0.0169、tilt=-0.0169。
+  tilt 极性正确（`motor_sign_tilt=-1.0` 只作用于回读，不影响命令）。roll 传 NaN 时按「不关心」保持，正常。
+
+  **第二处修复（同日，也已验证）**：动作完成后 `mode_` 原本退回 `IDLE`，而 `IDLE` 发的 `hold_spec()` 是
+  **IMU 惯性保持**，于是刚摆好的框架角会随 IMU 偏航漂走（改前实测静置 0.013°/s，陀螺校准刚完更快：
+  两次动作之间无任何指令，pan 自己从 -0.017 漂到 1.362 rad）。新增 `settle_after_traj_locked()` 替换
+  TRAJ 退出时的三处 `mode_ = Mode::IDLE`：到位锁目标角、超时/取消锁当前角，统一转入持久 FPV 框架角保持
+  （`use_motor_angle=false` 时仍走 IDLE，老行为不变）。刻意**不** `++cmd_gen_`，否则等结果的 action 会误判 preempted。
+  验证：静置 60s 漂移 0.00035 rad ≈ **0.0006°/s（改善约 20 倍**，已是编码器 0.01° 量化噪声量级）；
+  `15 nan -10` → reached 且停在 pan 0.2616 / tilt -0.1747；取消 → `cancelled` 并就地停住；
+  后到命令 → 前一条正确报 `preempted`。
+  代价：FPV 变常驻，而 FPV 下倾角保护失效（该板本就 `fpv_on_startup: true`，实际暴露面变化不大）。
 
 ### 上实机建议顺序
 

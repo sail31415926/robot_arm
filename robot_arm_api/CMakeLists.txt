@@ -19,4 +19,16 @@ install(PROGRAMS
 install(DIRECTORY examples
   DESTINATION share/${PROJECT_NAME})
 
+# 单元测试（pytest）：reach_check 的正解 / 逆解 / 可达判定 / 余量 / 步骤表预检 / 能力卡。
+# 夹具用 xacro 现场展开 arm.urdf.xacro（含云台 V2），需要 robot_arm_description /
+# robot_gimbal_description_v2 已安装；缺失时整组 skip。参考正解用 pinocchio（venv 里有），缺失时 skip 对拍项。
+#   colcon test --packages-select robot_arm_api && colcon test-result --verbose
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_reach_check test/test_reach_check.py
+    TIMEOUT 300)
+  ament_add_pytest_test(test_llm_shot_loop test/test_llm_shot_loop.py
+    TIMEOUT 120)
+endif()
+
 ament_package()

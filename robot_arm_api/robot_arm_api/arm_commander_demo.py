@@ -29,11 +29,25 @@ JSON 步骤表的 op / 参数名完全一致。
   ros2 run robot_arm_api arm_commander_demo.py gimbal-rotate 20 0 -10      # 云台 pan/roll/tilt（度）
   ros2 run robot_arm_api arm_commander_demo.py plan shot_plan.json         # 执行 JSON 运镜步骤表
   ros2 run robot_arm_api arm_commander_demo.py demo                        # 小幅度全流程演示
+离线工具（不下发、不需要 Commander 在跑；关节角缺省从 /joint_states 读，读不到可 --joints 给）：
+  ros2 run robot_arm_api arm_commander_demo.py check shot_plan.json [--clip]   # 步骤表可达性预检
+  ros2 run robot_arm_api arm_commander_demo.py headroom [--subject 0.8 0 0.7] [--schema]  # 余量盒子
+  ros2 run robot_arm_api arm_commander_demo.py card [--joints j1 … j6]         # 大模型能力卡
+大模型单步闭环（每步：读关节角 → 余量 → 大模型出一步 JSON → 校验/夹取 → 执行；
+--llm manual 由人在终端当模型）：
+  ros2 run robot_arm_api arm_commander_demo.py llm-step "把花瓶推成特写" --llm manual --max-steps 5
+  LLM_BASE_URL=https://host/v1 LLM_MODEL=qwen-vl LLM_API_KEY=… \
+  ros2 run robot_arm_api arm_commander_demo.py llm-step "任务" --llm openai \
+      --image-topic /camera/image_raw
 
 ═══════════════════════════════ 本文件函数汇总 ═══════════════════════════════
   print_status(api)                打印机械臂 / 云台当前状态（等 1s 收状态）
   run_demo_sequence(api)           小幅度全流程演示：使能 → 观察位 → 推/横移/升 5cm 并返回 → 云台点头 → 收纳
   build_arg_parser()               构造 argparse：每个子命令的参数名与 run_plan_step 的 op 参数一致
+  live_joints(timeout_sec)         起一个临时节点从 /joint_states 读 6 轴关节角（离线工具用）
+  load_model(args)                 按 --urdf 或安装的描述包建 ArmModel
+  run_offline(args)                check / headroom / card 三个离线子命令（reach_check，不下发）
+  run_llm_step(api, args)          llm-step：大模型单步运镜闭环（llm_shot_loop）
   main(argv)                       入口：解析参数 → ArmApi → 执行子命令 → 收尾（Ctrl-C 取消 goal 并急停）
 """
 
@@ -46,8 +60,14 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import rclpy
 
-from robot_arm_api.arm_commander_client import (DEFAULT_HOMING_TIMEOUT_SEC, GIMBAL_TOPIC_STATUS,
-                                                ArmApi, execute_plan, run_plan_step)
+from robot_arm_api.arm_commander_client import (ARM_JOINT_NAMES, DEFAULT_HOMING_TIMEOUT_SEC,
+                                                GIMBAL_TOPIC_STATUS, ArmApi, execute_plan,
+                                                run_plan_step)
+from robot_arm_api.llm_shot_loop import ManualClient, OpenAICompatClient, run_llm_shot_loop
+from robot_arm_api.reach_check import (ArmModel, capability_card, check_plan, headroom,
+                                       headroom_schema)
+
+OFFLINE_CMDS = ('check', 'headroom', 'card')   # 不建 ArmApi、不下发的子命令
 
 
 def print_status(api: ArmApi) -> None:
@@ -201,7 +221,129 @@ def build_arg_parser() -> argparse.ArgumentParser:
         add(name, f'云台 {name[7:].replace("-", "_")}')
     sp = add('gimbal-forward-enable', '开/关机械臂转发流对云台的控制权')
     sp.add_argument('enable', choices=['on', 'off'])
+
+    def add_offline(sp: argparse.ArgumentParser) -> None:
+        """@brief 给离线子命令加公共参数：--joints / --urdf / --subject。
+        @param sp 子解析器
+        """
+        sp.add_argument('--joints', type=float, nargs=6, metavar='RAD',
+                        help='当前 6 轴关节角（rad）；缺省从 /joint_states 读 2s')
+        sp.add_argument('--urdf', help='URDF 文件；缺省用 xacro 现场展开安装的描述包')
+        sp.add_argument('--subject', type=float, nargs=3, metavar='M',
+                        help='环绕主体位置 x y z（base_link 系），给了就算环绕余量')
+
+    sp = add('check', '离线预检 JSON 步骤表的可达性（不下发）', op='check')
+    sp.add_argument('file', help='JSON 文件：[{"op": ..., ...}, ...]')
+    sp.add_argument('--clip', action='store_true', help='路径类步骤超余量时夹到边界继续，而不是拒绝')
+    sp.add_argument('--json', action='store_true', help='额外输出 JSON 格式报告')
+    add_offline(sp)
+    sp = add('headroom', '当前位姿各方向还能连续移动多少（余量盒子）', op='headroom')
+    sp.add_argument('--schema', action='store_true', help='输出单步 JSON schema（min/max 硬约束）')
+    add_offline(sp)
+    add_offline(add('card', '生成喂给大模型的能力卡文本', op='card'))
+    sp = add('llm-step', '大模型单步运镜闭环（余量盒子方案；会动臂，先 --dry-run）', op='llm_step')
+    sp.add_argument('task', help='任务描述（自然语言）')
+    sp.add_argument('--llm', choices=['manual', 'openai'], default='manual',
+                    help='manual = 人在终端当大模型；openai = 环境变量 LLM_BASE_URL/LLM_MODEL/LLM_API_KEY')
+    sp.add_argument('--max-steps', dest='max_steps', type=int, default=8)
+    sp.add_argument('--max-retries', dest='max_retries', type=int, default=2)
+    sp.add_argument('--reject', action='store_true', help='校验用 reject（默认 clip：超余量夹到边界）')
+    sp.add_argument('--image-topic', dest='image_topic', default=None,
+                    help='给支持图像的模型附最新一帧，如 /camera/image_raw')
+    sp.add_argument('--show-system', dest='show_system', action='store_true',
+                    help='manual 模式下也打印 system 提示词')
+    add_offline(sp)
     return parser
+
+
+def load_model(args: argparse.Namespace) -> ArmModel:
+    """@brief 按 --urdf（文件）或安装的描述包（xacro 现场展开）建 ArmModel。
+    @param args 解析后的参数
+    @return ArmModel
+    """
+    if getattr(args, 'urdf', None):
+        with open(args.urdf, 'r', encoding='utf-8') as fp:
+            return ArmModel.from_urdf_string(fp.read())
+    return ArmModel.from_share_files()
+
+
+def run_llm_step(api: ArmApi, args: argparse.Namespace) -> int:
+    """@brief llm-step：大模型单步运镜闭环。--dry-run 只打印不下发；没有 /joint_states 时用 --joints 起步。
+    @param api  ArmApi
+    @param args 解析后的参数
+    @return 退出码（0 = 大模型宣布完成或步数用完且全部成功；1 = 中途失败）
+    """
+    model = load_model(args)
+    if args.llm == 'openai':
+        llm = OpenAICompatClient.from_env()
+    else:
+        llm = ManualClient(show_system=args.show_system)
+    if not api.arm.dry_run and args.joints is None and not api.arm.wait_ready():
+        return 2
+    records = run_llm_shot_loop(api, model, llm, args.task, subject=args.subject,
+                                image_topic=args.image_topic, dry_run=api.arm.dry_run,
+                                joints_override=args.joints, max_steps=args.max_steps,
+                                max_retries=args.max_retries,
+                                mode='reject' if args.reject else 'clip')
+    log = api.node.get_logger()
+    for rec in records:
+        log.info(rec.line())
+    return 0 if records and all(r.ok for r in records) else 1
+
+
+def live_joints(timeout_sec: float = 2.0) -> Optional[List[float]]:
+    """@brief 起一个临时节点从 /joint_states 读 6 轴关节角（Joint1..6 顺序，rad）。
+    @param timeout_sec 最长等待
+    @return 6 个关节角；超时或 ROS 不可用返回 None
+    """
+    if not rclpy.ok():
+        rclpy.init()
+    api = ArmApi(node_name='arm_reach_probe', print_cli=False, with_gimbal=False)
+    try:
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            joints = api.arm.get_joints()
+            if all(name in joints for name in ARM_JOINT_NAMES):
+                return [float(joints[name]) for name in ARM_JOINT_NAMES]
+            time.sleep(0.05)
+        return None
+    finally:
+        api.shutdown()
+
+
+def run_offline(args: argparse.Namespace) -> int:
+    """@brief check / headroom / card：reach_check 离线工具，不建 Commander 客户端、不下发。
+    @param args 解析后的参数
+    @return 退出码（0 成功 / 1 步骤表不可达 / 2 拿不到关节角）
+    """
+    model = load_model(args)
+    joints = args.joints
+    if joints is None:
+        joints = live_joints()
+        if joints is None and args.cmd != 'card':
+            print('拿不到关节角：/joint_states 没数据，请用 --joints j1 j2 j3 j4 j5 j6 指定', file=sys.stderr)
+            return 2
+    subject = args.subject
+    if args.cmd == 'card':
+        print(capability_card(model, joints, subject=subject))
+        return 0
+    if args.cmd == 'headroom':
+        h = headroom(model, joints, subject=subject)
+        if args.schema:
+            print(json.dumps(headroom_schema(h), ensure_ascii=False, indent=2))
+        else:
+            print(json.dumps(h, ensure_ascii=False, indent=2, default=lambda v: round(float(v), 4)))
+        return 0
+    with open(args.file, 'r', encoding='utf-8') as fp:
+        steps = json.load(fp)
+    if not isinstance(steps, list):
+        raise ValueError('JSON 顶层必须是数组')
+    report = check_plan(model, steps, joints, mode='clip' if args.clip else 'reject')
+    print(report.summary())
+    if args.json:
+        print(json.dumps([vars(s) for s in report.steps], ensure_ascii=False, indent=2,
+                         default=lambda v: round(float(v), 4)))
+    return 0 if report.ok else 1
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -210,6 +352,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     @return 进程退出码（0 成功，1 失败，2 机械臂未就绪，130 Ctrl-C）
     """
     args = build_arg_parser().parse_args(argv)
+    if args.cmd in OFFLINE_CMDS:
+        try:
+            return run_offline(args)
+        finally:
+            if rclpy.ok():
+                rclpy.shutdown()
     rclpy.init()
     api = ArmApi(node_name='arm_commander_demo', dry_run=args.dry_run,
                  print_cli=not args.no_cli, with_gimbal=not args.no_gimbal)
@@ -222,6 +370,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print_status(api)
         elif args.cmd == 'demo':
             exit_code = 0 if run_demo_sequence(api) else 1
+        elif args.cmd == 'llm-step':
+            exit_code = run_llm_step(api, args)
         elif args.cmd == 'plan':
             with open(args.file, 'r', encoding='utf-8') as fp:
                 steps = json.load(fp)
