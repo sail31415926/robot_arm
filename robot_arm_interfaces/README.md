@@ -55,17 +55,17 @@ Arm Commander 内部维护一个五态状态机（`CommanderState`），决定�
 | `MOVING` | 1 | 正在执行 goal（MoveToPose / TrajectoryShot / TrackTarget），`is_moving=true` |
 | `REACHED` | 2 | 上一条 goal 成功到位；等同空闲，可直接接受新 goal |
 | `STOPPED` | 3 | 被 `ArmStop` 急停；拒绝新 goal，需 `ArmResetError` 复位 |
-| `ERROR` | 4 | 执行失败（超时 / 驱动故障 / 异常）；拒绝新 goal，需 `ArmResetError` 复位 |
+| `ERROR` | 4 | **设备异常**（驱动层 / IK 服务失败、执行线程抛异常）；拒绝新 goal，需 `ArmResetError` 复位。**动作超时不在此列**（2026-09-08 起，见下） |
 
 ```text
                  goal 接受              成功
   IDLE / REACHED ─────────▶ MOVING ──────────▶ REACHED（视同空闲）
        ▲  ▲                  │ │
-       │  │  取消（各 action） │ │
-       │  │  IK 无解（仅 MoveToPose）
+       │  │  取消 / IK 无解 / 限位校验不过（ABORTED）
+       │  │  超时未到位 / 跟随丢失（FAILED，result 带原因）
        │  └──────────────────┘ │
        │                       ├── ArmStop ───▶ STOPPED ──┐
-       │                       └── 失败/异常 ──▶ ERROR ────┤
+       │                       └── 驱动/服务异常 ▶ ERROR ──┤
        └───────────────── ArmResetError ──────────────────┘
 ```
 
@@ -74,14 +74,18 @@ Arm Commander 内部维护一个五态状态机（`CommanderState`），决定�
 - **接受 goal**：仅当状态为 `IDLE` 或 `REACHED`（两者都算"空闲"）；否则直接 abort 该 goal。
   三个 action 共用此规则，同一时刻最多一条 goal 在执行。
 - **MOVING → REACHED**：goal 成功完成，`command_result = SUCCEEDED`。
-- **MOVING → IDLE**：goal 被上层取消（`exit_reason="cancelled"`），或 **MoveToPose** 目标
-  IK 无解（`exit_reason="unreachable"`）；`command_result = ABORTED`。
-  注意：**TrajectoryShot 的起始点 IK 无解不走此分支**——`"unreachable"` 会落入
-  失败分支转 ERROR（`error_code=ERR_DRIVER`），需 `ArmResetError` 复位。
+- **MOVING → IDLE（goal 被拒，`command_result = ABORTED`）**：上层取消（`"cancelled"`）、
+  MoveToPose / TrajectoryShot 起止点 IK 无解（`"unreachable"`）、MoveToJoint 限位 / 自碰撞
+  校验不过（`"out_of_range"` / `"collision"` / `"invalid_goal"`）。没下发任何指令，设备没故障。
+- **MOVING → IDLE（goal 失败，`command_result = FAILED`）**：**2026-09-08 起**，动作在限时内
+  没到位（`"timeout"`，含 TrackTarget 的 `"timeout"` / `"feature_lost"`）**不再进 ERROR**。
+  result 里带 `exit_reason` / `error_code=ERR_TIMEOUT` 供调用方打印，`ArmStatus.error_code`
+  **不置**；下一条正确的指令可直接执行，不需要 `ArmResetError`。
+  超时那一刻若臂已静止且残差在放宽容差内（`tolerance.settle_*`），按 `"reached"` 收尾。
 - **MOVING → STOPPED**：执行期间收到 `ArmStop`（软停轨迹 + goal abort，
   `command_result = ABORTED`）。非 MOVING 状态下调用 `ArmStop` 为空操作（应答"无需急停"）。
-- **MOVING → ERROR**：执行失败（超时 / 限位 / 驱动故障）或抛异常；
-  `command_result = FAILED`，同时置 `ArmStatus.error_code`。
+- **MOVING → ERROR**：**只有设备异常**才进 —— 驱动层 / IK 服务失败（`"error"`）或执行线程
+  抛异常；`command_result = FAILED`，同时置 `ArmStatus.error_code`。这是需要人来干预的情形。
 - **STOPPED / ERROR → IDLE**：仅由 `ArmResetError` 触发 —— 先透传驱动层 recover，
   再复位 Commander 状态、清 `error_code`、`command_result` 回 `RESULT_NONE`。
   在其余状态下调用 `ArmResetError` 只透传驱动层 recover，不改变 Commander 状态。

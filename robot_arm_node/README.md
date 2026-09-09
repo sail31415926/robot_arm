@@ -116,6 +116,37 @@ ros2 param get /arm_commander joint_speed.fast_rps
 C++ 侧的默认值（`include/robot_arm_node/tuning.hpp` 结构体初值）= 参数化之前各处
 `constexpr` 的原值，只作「没挂 YAML 也能跑」的兜底，**不要在那里调参**。
 
+### 到位失败的三种归宿（2026-09-08 定稿）
+
+`ERROR` 只留给「设备真异常、需要人干预」的情形，动作没到位不再锁死状态机：
+
+| 情况 | 判据 | 结果 | 状态机 | 要 `reset_error` 吗 |
+| --- | --- | --- | --- | --- |
+| 到位 | 臂 J1-3 残差 < `tolerance.joint_rad` | `reached` | → `REACHED` | 不要 |
+| **超时兜底** | 超时那一刻已静止（`< settle_velocity_rad_s`）且残差 ≤ `settle_factor × joint_rad` | `reached` | → `REACHED` | 不要 |
+| **超时未到位** | 上面两条都不满足 | `timeout` / `ERR_TIMEOUT` | → `IDLE`，`command_result=FAILED`，**不置 `status.error_code`** | **不要**，下一条指令直接可发 |
+| 设备异常 | 驱动层 / IK 服务失败、执行线程抛异常 | `error` / `ERR_DRIVER` | → `ERROR` | **要** |
+
+失败原因由 action result 的 `exit_reason` / `error_code` 带给调用方打印；兜底触发时日志会打出
+实际残差，拿它 ×1.5~2 就是 `tolerance.joint_rad` 该设的值。
+
+### 无硬件复现与验证（mock 臂 + 人造静差）
+
+`arm_sim_mode:=true` 让 J1-3 走 `mock_components/GenericSystem`（不连 CAN），
+`arm_sim_offset` 再给回显叠一个常量静差（rad），用来复现「到位判据卡在容差外」：
+
+```bash
+ros2 launch robot_arm_bringup real.launch.py controller:=commander gui:=false \
+     arm_sim_mode:=true arm_sim_offset:=0.03      # 0=精确回显 / 0.03=走兜底 / 0.08=真没到位
+```
+
+板上验证脚本：`~/Wqh_ws/scripts/board_test.sh <offset> <tag>`（自带 `ROS_DOMAIN_ID=91` 隔离，
+指令不会漏到云台板）。三组实测：`0.0` 秒到；`0.03` 兜底成立报 `reached`；`0.08` 报 `timeout`
+但状态回 `IDLE`，后续 goal 照收。
+
+> ⚠️ mock 下 J3 回显 = 命令 + offset，而 J3 上限是 `0.02 rad`，所以**相对** MoveToJoint 容易被
+> 判 `out_of_range`。测试用绝对目标（如 `[0.3, 0.2, -0.3]`）。
+
 ---
 
 ## Arm Commander 接口参考

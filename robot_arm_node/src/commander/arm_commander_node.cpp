@@ -289,6 +289,27 @@ bool ArmCommanderNode::is_stopped() const {
     return state() == CommanderState::STOPPED;
 }
 
+/**
+ * @brief 动作没到位（timeout 类）的统一收尾：记失败、回 IDLE，**不进 ERROR**。
+ *
+ * 2026-09-08 起的约定：ERROR 只留给「设备真的异常、需要人来干预」的情形
+ * （驱动层/IK 服务失败、执行线程抛异常、急停后的 STOPPED）。动作超时只说明
+ * 这一条指令没在限时内到位 —— 结果里已带 exit_reason/error_code 给调用方打印，
+ * 状态里 command_result=FAILED 也能查到；下一条正确的指令应当能直接执行，
+ * 不该锁死在 ERROR 逼用户 reset_error。
+ *
+ * @param what 日志用的动作名。
+ * @param cmd_id 本次命令号，用于 set_command_state。
+ */
+void ArmCommanderNode::fail_goal_keep_idle(const char* what, uint32_t cmd_id) {
+    RCLCPP_WARN(get_logger(),
+                "%s 未在限时内到位，本次 goal 失败（result 已带原因），"
+                "恢复空闲、不进 ERROR；下一条指令可直接执行",
+                what);
+    transition(CommanderState::IDLE);
+    status_->set_command_state(cmd_id, ArmStatus::RESULT_FAILED);
+}
+
 // ── ArmMoveToPose 执行线程
 // ──────────────────────────────────────────────────────
 void ArmCommanderNode::mtp_execute(
@@ -342,6 +363,9 @@ void ArmCommanderNode::mtp_execute(
                         "目标不可达（IK 无解），拒绝本次 goal，恢复空闲");
             transition(CommanderState::IDLE);
             status_->set_command_state(cmd_id, ArmStatus::RESULT_ABORTED);
+            gh->abort(result);
+        } else if (result->exit_reason == "timeout") {
+            fail_goal_keep_idle("MoveToPose", cmd_id);
             gh->abort(result);
         } else {
             transition(CommanderState::ERROR);
@@ -422,6 +446,9 @@ void ArmCommanderNode::mtj_execute(
             transition(CommanderState::IDLE);
             status_->set_command_state(cmd_id, ArmStatus::RESULT_ABORTED);
             gh->abort(result);
+        } else if (result->exit_reason == "timeout") {
+            fail_goal_keep_idle("MoveToJoint", cmd_id);
+            gh->abort(result);
         } else {
             transition(CommanderState::ERROR);
             status_->set_command_state(cmd_id, ArmStatus::RESULT_FAILED);
@@ -494,6 +521,9 @@ void ArmCommanderNode::em_execute(
             transition(CommanderState::IDLE);
             status_->set_command_state(cmd_id, ArmStatus::RESULT_ABORTED);
             gh->abort(result);
+        } else if (result->exit_reason == "timeout") {
+            fail_goal_keep_idle("TrajectoryShot", cmd_id);
+            gh->abort(result);
         } else {
             transition(CommanderState::ERROR);
             status_->set_command_state(cmd_id, ArmStatus::RESULT_FAILED);
@@ -543,10 +573,16 @@ void ArmCommanderNode::track_execute(
         } else if (result.success) {
             transition(CommanderState::REACHED);
             status_->set_command_state(cmd_id, ArmStatus::RESULT_SUCCEEDED);
-        } else {
+        } else if (result.exit_reason == "error") {
+            // 服务/驱动层出问题才是故障
             transition(CommanderState::ERROR);
             status_->set_command_state(cmd_id, ArmStatus::RESULT_FAILED);
-            status_->set_error(ArmStatus::ERR_TIMEOUT);
+            status_->set_error(ArmStatus::ERR_DRIVER);
+        } else {
+            // timeout / feature_lost：跟随没收敛，是任务失败不是设备故障
+            fail_goal_keep_idle(
+                (std::string("TrackTarget(") + result.exit_reason + ")").c_str(),
+                cmd_id);
         }
     } catch (const std::exception& e) {
         RCLCPP_ERROR(get_logger(), "TrackTarget 执行异常: %s", e.what());

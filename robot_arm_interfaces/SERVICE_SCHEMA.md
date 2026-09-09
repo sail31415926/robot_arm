@@ -133,6 +133,6 @@ ArmJointVelocityCommand
 | `srv/ArmStop.srv` | `/robot_arm/stop` | 软件急停：停 action（MOVING→STOPPED）+ 停速度流（需 ArmResetError 复位后才能再动） |
 | `srv/ArmEnable.srv` | `/robot_arm/enable` | 伺服上电 / 下电（透传驱动层） |
 | `srv/ArmHoming.srv` | `/robot_arm/homing` | 回零（阻塞至到位或急停） |
-| `srv/ArmResetError.srv` | `/robot_arm/reset_error` | 驱动层 recover + Commander ERROR/STOPPED→IDLE |
+| `srv/ArmResetError.srv` | `/robot_arm/reset_error` | 驱动层 recover + Commander ERROR/STOPPED→IDLE（动作超时不进 ERROR，不需要它） |
 
 各 action 的 Goal / Result / Feedback 字段树见接口文件内注释与 [README.md](README.md) 的接口清单章节。

@@ -80,6 +80,8 @@ private:
   CommanderState state() const;
   void transition(CommanderState new_state);
   bool is_idle() const;
+  // 动作没到位（timeout 类）的统一收尾：记 FAILED、回 IDLE、不进 ERROR（见 .cpp 注释）
+  void fail_goal_keep_idle(const char * what, uint32_t cmd_id);
   static const char * state_name(CommanderState s);
 
   // ── Action 执行线程体（handle_goal/cancel/accepted 在构造体内以 lambda 绑定）────
