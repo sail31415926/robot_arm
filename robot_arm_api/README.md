@@ -34,6 +34,15 @@ ros2 run robot_arm_api arm_commander_demo.py --help
 
 改 `.py` 不用重编（symlink-install）；新增文件 / 改 CMakeLists 才要重编。
 
+**板上两个工作空间都装了本包**（2026-09-09）：
+
+| 位置 | 路径 | 怎么用 |
+| --- | --- | --- |
+| 公用 | `~/E7009_ws/src/E7009/robot_arm/robot_arm_api` | 只 source `/opt/ros/humble` + `~/E7009_ws/install`，**别 source Wqh_ws** |
+| 个人 overlay | `~/Wqh_ws/src/robot_arm/robot_arm_api` | 再 source `~/Wqh_ws/install`（overlay 会盖住公用那份） |
+
+同时 source 两个时 overlay 优先，`ros2 pkg prefix robot_arm_api` 打出哪条路径就是在跑哪一份 —— 排查前先确认这个。
+
 ## 运行前置
 
 | 单元 | 在哪跑 | 启动命令 | 提供的接口 |
@@ -205,20 +214,6 @@ Python 里 `execute_plan(api, steps)`，命令行 `plan 文件`。
 - 云台 server 不在线时对应步骤在 5s 内返回「action server 不可用」，`plan --continue-on-error` 可跨过继续；
   云台实物联调尚未做，接口名与字段按 `robot_gimbal_node_v2` 源码核对。
 
-### 2026-09-08 实机跑通 shot_plan_example.json（Jetson，Wqh_ws overlay）
-
-`plan examples/shot_plan_example.json --continue-on-error` 共 11 步，**臂侧 9 步全部 `reached`**：
-`enable → observe → wait → dolly 0.10 → truck -0.08(return_to_start) → crane 0.05 → arc(-30°→30°, r0.4)
-→ linear(绝对起终点) → stow`；结束时 `pose_state=STOWED`、`error_code=0`、J1-3 ≈ 0。
-
-- 失败的只有第 9、10 步 `gimbal_rotate`（板端 `timeout`），根因见下条。
-- **进程退出码 1 是设计如此**：`--continue-on-error` 只是不中断，但只要有步骤失败就以 1 退出，便于脚本判断。
-- 实机残差（均在 Commander 容差 0.010m 内，属正常）：`dolly` 指令终点 x=0.400、下一步实测起点 x=0.395；
-  `truck` 原路返回后 y 残留 -0.0087。
-- 姿态会沿相对运镜链累积：`dolly/truck/crane` 以**当前末端位姿**为起点，而该位姿含云台回读，
-  三步下来 roll 从 0.19° 漂到 1.89°、yaw 从 -0.09° 到 -1.00°。上层连续下发多条相对运镜时，
-  建议每隔几步用绝对 `pose` / `linear` 归一次基准。
-
 ### 2026-09-08 实机首测（Jetson，Wqh_ws overlay）
 
 - `--dry-run / status / enable` 正常；`status` 同时收到云台板 `/robot_gimbal_v2/status`。
@@ -227,9 +222,6 @@ Python 里 `execute_plan(api, steps)`，命令行 `plan 文件`。
   use_motor_angle`，即转发流与反馈都按**框架角（URDF 关节角）**处理；但 `RotateToAngle` 的执行路径仍是
   `enter_traj_locked → angle_spec`（**IMU 世界绝对姿态角** + 底座补偿），目标与反馈不在一个坐标系，臂末端 yaw 约 30°
   时 pan 反馈永远追不上目标（实测 pan 从 -45.7° 跑到 +24.7°），tilt 因底座接近水平恰好到位。
-  **决定性证据**：同一次 plan 里第 10 步 `rotate_to(pan=0, tilt=0)` 超时失败，紧接着第 11 步 `stow` 经
-  JTC → `forward_cmd` 把 J4-6 拉到零并成功（跑完实测云台 pan=0.008 / roll=-0.003 / tilt=0.002 rad）——
-  同一个「回零」目标，走转发流通、走 action 不通，问题精确定位在板端 action 执行路径。
   **临时办法**：云台朝向走 `move_to_pose / move_relative(dyaw=…)`（经 Commander IK → JTC → forward_cmd，该版按框架角执行）；
   **根治**：在该节点里让 RotateToAngle 在 FPV/框架角配置下走 `fpv_angle_spec`（与 forward_cmd 同一语义）。
 
