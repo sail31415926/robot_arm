@@ -30,8 +30,9 @@ torch==2.12.0
 mujoco==3.8.1
 
 # [analysis]
-# MATLAB 离线分析工具箱：robot_arm_matlab/reach_oracle.py
-#   判定核心需 numpy + scipy；GUI 另需 matplotlib（tkinter 由 apt python3-tk 提供）。
+# 离线分析 / 画图用（scipy + matplotlib，tkinter 由 apt python3-tk 提供）。
+#   注：原使用者 robot_arm_matlab/reach_oracle.py（V1 云台的栅格可达域判定器）已于 2026-09-11 删除；
+#   可达域 / 余量判定改用 robot_arm_api 的 reach_check / reach_fit，纯 numpy，不需要本组。
 # ⚠️ 必须装 pip 版、不能只靠系统 apt 版：Ubuntu 22.04 的 python3-scipy 是 1.8.0，
 #    它要求 numpy<1.25，与本工程锁定的 numpy 1.26.4 不兼容（import 时会警告
 #    "A NumPy version >=1.17.3 and <1.25.0 is required"，数值行为不保证）。

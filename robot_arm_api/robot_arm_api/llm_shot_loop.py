@@ -17,12 +17,15 @@
 
 ═══════════════════════════════ 本文件函数 / 类汇总 ═══════════════════════════════
   extract_json(text)                 从大模型输出里抽出 JSON 对象（容忍 ```json 围栏与前后闲话）
-  StepRecord                         一步的记录：大模型提议 / 实际执行（可能被夹）/ 是否成功 / 说明
-  PromptBuilder                      组 system / user 提示词与单步 JSON schema
+  StepRecord                         一步的记录：大模型提议 / 实际执行（可能被夹取或投影）/ 成败 / 说明
+  StepRecord.user_line() / format_user_report(records)   面向最终用户的口语反馈（不带术语）
+  PromptBuilder                      组 system / user 提示词与单步 JSON schema（可选带可达区拟合公式）
   ScriptedClient / ManualClient / OpenAICompatClient   三种 LLMClient
   run_step_loop(model, llm, task, get_joints, execute, …)   核心闭环（无 ROS）
   ros_joint_reader(api) / ros_executor(api, dry_run)       ArmApi → get_joints / execute 回调
   make_image_grabber(node, topic)    订阅相机话题，给大模型附最新一帧（JPEG base64；需 cv2）
+  make_feedback_publisher(node, …)   把给用户的反馈发到 ROS 话题（std_msgs/String）
+  fan_out(*sinks)                    把多个文本出口合成一个回调（日志 + 话题 + 上层回调）
   run_llm_shot_loop(api, model, llm, task, …)              ROS 版入口：把上面串起来
 """
 
@@ -43,6 +46,48 @@ from .reach_check import (ArmModel, Margins, capability_card, check_plan, curren
 
 # 大模型允许输出的 op（其余一律拒绝并回喂）；done = 任务完成
 ALLOWED_OPS = ('dolly', 'truck', 'crane', 'move_rel', 'arc', 'linear', 'pose', 'wait', 'done')
+
+# 面向最终用户的反馈话题（std_msgs/String，每执行一步发一句口语说明）
+FEEDBACK_TOPIC = '/robot_arm/llm_feedback'
+
+
+def fan_out(*sinks: Optional[Callable[[str], None]]) -> Callable[[str], None]:
+    """@brief 把多个文本出口合成一个回调（None 自动跳过），用于同时打日志、发话题、回调上层。
+    @param sinks 若干 Callable[[str], None] 或 None
+    @return 单个回调
+    """
+    live = [sink for sink in sinks if sink is not None]
+
+    def _emit(text: str) -> None:
+        """@brief 依次转发给每个出口。"""
+        for sink in live:
+            sink(text)
+    return _emit
+
+
+def make_feedback_publisher(node: Any, topic: Optional[str] = FEEDBACK_TOPIC,
+                            depth: int = 10) -> Optional[Callable[[str], None]]:
+    """@brief 建一个"把给用户的反馈发到 ROS 话题"的回调（std_msgs/String）。
+    @param node  rclpy 节点（ArmApi.node）
+    @param topic 话题名，None = 不发话题
+    @param depth QoS 深度
+    @return user_log 回调；topic 为 None 或 std_msgs 不可用时返回 None
+    """
+    if topic is None:
+        return None
+    try:
+        from std_msgs.msg import String  # noqa: WPS433  ROS 包
+    except ImportError as exc:  # pragma: no cover - 无 ROS 环境
+        node.get_logger().warning(f'反馈话题不可用（{exc!r}），只打日志')
+        return None
+    publisher = node.create_publisher(String, topic, depth)
+
+    def _emit(text: str) -> None:
+        """@brief 发一条反馈。"""
+        msg = String()
+        msg.data = text
+        publisher.publish(msg)
+    return _emit
 
 
 def extract_json(text: str) -> Dict[str, Any]:
@@ -85,6 +130,73 @@ def extract_json(text: str) -> Dict[str, Any]:
     raise ValueError(f'JSON 括号不配对: {text[:80]!r}')
 
 
+_DIRECTION_WORDS = {
+    'dolly': ('向前推近', '向后拉远'),
+    'truck': ('向左平移', '向右平移'),
+    'crane': ('升高', '降低'),
+}
+
+
+def _cm(value: float) -> str:
+    """@brief 米 → "12 厘米" / "1.05 米"（小量用厘米，口语化）。
+    @param value 长度，m
+    @return 字符串
+    """
+    return f'{abs(value) * 100:.0f} 厘米' if abs(value) < 1.0 else f'{abs(value):.2f} 米'
+
+
+def _action_phrase(op: str, params: Dict[str, Any]) -> str:
+    """@brief 一个动作的口语描述（不含"已/没有"等语气词）。
+    @param op     动作名
+    @param params 该动作的参数
+    @return 字符串
+    """
+    if op in _DIRECTION_WORDS:
+        dist = float(params.get('distance_m', 0.0))
+        word = _DIRECTION_WORDS[op][0 if dist >= 0 else 1]
+        return f'{word} {_cm(dist)}'
+    if op == 'move_rel':
+        bits = []
+        for key, pair in (('dx', _DIRECTION_WORDS['dolly']), ('dy', _DIRECTION_WORDS['truck']),
+                          ('dz', _DIRECTION_WORDS['crane'])):
+            val = float(params.get(key, 0.0))
+            if abs(val) > 1e-6:
+                bits.append(f'{pair[0 if val >= 0 else 1]} {_cm(val)}')
+        for key, pair in (('dyaw', ('镜头左转', '镜头右转')), ('dpitch', ('镜头下俯', '镜头上仰'))):
+            val = float(params.get(key, 0.0))
+            if abs(val) > 1e-6:
+                bits.append(f'{pair[0 if val >= 0 else 1]} {abs(val):.0f} 度')
+        return '、'.join(bits) if bits else '保持不动'
+    if op == 'pose':
+        return (f'移动到位置（前 {float(params.get("x", 0)):.2f} 米、左 {float(params.get("y", 0)):.2f} 米、'
+                f'高 {float(params.get("z", 0)):.2f} 米）')
+    if op == 'arc':
+        return f'绕拍摄对象转到 {float(params.get("az_end_deg", 0.0)):.0f} 度'
+    if op == 'linear':
+        return '沿直线移动'
+    if op == 'wait':
+        return f'等待 {float(params.get("seconds", 1.0)):.0f} 秒'
+    return f'动作「{op}」'
+
+
+def format_user_report(records: Sequence['StepRecord']) -> str:
+    """@brief 面向最终用户的整段反馈：每步一行 + 末尾总结（做了几步、几步被降级、是否有失败）。
+    @param records run_step_loop 返回的记录
+    @return 多行文本
+    """
+    lines = [rec.user_line() for rec in records]
+    done = [r for r in records if r.executed is not None and r.ok]
+    degraded = [r for r in done if r.adjust_kind or r.clipped]
+    failed = [r for r in records if r.executed is not None and not r.ok]
+    summary = f'共执行 {len(done)} 个动作'
+    if degraded:
+        summary += f'，其中 {len(degraded)} 个因超出机械臂能力已降级执行'
+    if failed:
+        summary += f'，{len(failed)} 个执行失败'
+    lines.append(summary + '。')
+    return '\n'.join(lines)
+
+
 @dataclass
 class StepRecord:
     """@brief 闭环里一步的记录。executed=None 表示没有执行（被拒 / 输出非法 / done）。"""
@@ -96,6 +208,7 @@ class StepRecord:
     note: str = ''
     result: Any = None
     attempts: int = 1
+    adjust_kind: Optional[str] = None      # 'clip' 夹到边界 / 'project' 投影到最近可行位姿
 
     def line(self) -> str:
         """@brief 一行人话（历史回喂 / 日志）。
@@ -112,6 +225,28 @@ class StepRecord:
         return f'{head} {json.dumps(params, ensure_ascii=False)}：{status}{clip}' + \
             (f'，模型理由：{why}' if why else '')
 
+    def user_line(self) -> str:
+        """@brief 面向**最终用户**的一句话：口语、不带 op 名 / 关节名 / 弧度等术语；
+               被降级执行时同时说出"你要多少"和"实际做了多少"。
+        @return 字符串
+        """
+        op = str(self.proposed.get('op', '')).lower()
+        if op == 'done':
+            why = self.proposed.get('reason', '')
+            return '拍摄完成。' + (str(why) if why else '')
+        want = _action_phrase(op, self.proposed)
+        if self.executed is None:
+            tail = f'：{self.note}' if self.note else ''
+            return f'没有执行{want}{tail}'
+        got = _action_phrase(op, self.executed)
+        if not self.ok:
+            return f'{got} 执行失败' + (f'：{self.note}' if self.note else '')
+        if self.adjust_kind == 'project':
+            return f'{want} 超出机械臂可达范围，已改到最近能到的位置执行'
+        if self.adjust_kind == 'clip' or self.clipped:
+            return f'{want} 超出机械臂行程，最多只能{got}，已按这个幅度执行'
+        return f'已{got}'
+
 
 class PromptBuilder:
     """@brief 组提示词：system = 角色 + 能力卡静态部分 + 输出规则（只发一次）；
@@ -120,19 +255,22 @@ class PromptBuilder:
 
     def __init__(self, model: ArmModel, subject: Optional[Sequence[float]] = None,
                  margins: Optional[Margins] = None, base_height_m: float = 0.31,
-                 history_lines: int = 6):
+                 history_lines: int = 6, region_fit: Optional[Any] = None):
         """@brief 构造。
         @param model         运动学模型
         @param subject       环绕主体位置（base_link 系），None 不给环绕选项
         @param margins       余量
         @param base_height_m 臂基座离地高
         @param history_lines 回喂最近多少步历史
+        @param region_fit    reach_fit.RegionFit，给了就把可达区公式写进 system 提示词，
+                             让大模型输出绝对位置前自己代入自检（方案 1）
         """
         self.model = model
         self.subject = [float(v) for v in subject] if subject is not None else None
         self.margins = margins or Margins()
         self.base_height_m = base_height_m
         self.history_lines = history_lines
+        self.region_fit = region_fit
         self._system: Optional[str] = None
 
     def system_prompt(self) -> str:
@@ -141,10 +279,16 @@ class PromptBuilder:
         """
         if self._system is None:
             card = capability_card(self.model, None, None, self.margins, self.base_height_m)
+            formula = []
+            if self.region_fit is not None:
+                formula = ['', self.region_fit.formula_text(),
+                           '输出绝对位置（op=pose）前先用上面的公式**自检**：把 (x, y, z) 代入算出 r 和 h，'
+                           '确认 h_min(r) ≤ h ≤ h_max(r)；不满足就自己改一个满足的点。']
             self._system = '\n'.join([
                 '你是一台机械臂相机机器人的运镜决策器。机械臂末端装着相机，你每次只决定**下一步**动作。',
                 '',
                 card,
+                *formula,
                 '',
                 '输出规则：',
                 '1. 每次只输出一个 JSON 对象，不要任何解释文字；字段 op 取 dolly / truck / crane'
@@ -375,7 +519,9 @@ def run_step_loop(model: ArmModel, llm: Any, task: str,
                   mode: str = 'clip', max_steps: int = 10, max_retries: int = 2,
                   get_image_b64: Optional[Callable[[], Optional[str]]] = None,
                   on_step: Optional[Callable[[StepRecord], None]] = None,
-                  log: Callable[[str], None] = print) -> List[StepRecord]:
+                  log: Callable[[str], None] = print,
+                  user_log: Optional[Callable[[str], None]] = None,
+                  region_fit: Optional[Any] = None) -> List[StepRecord]:
     """@brief 核心闭环：每步 读关节角 → 余量 → 提示词 → 大模型 → 校验 / 夹取 → 执行，直到 done 或 max_steps。
            大模型输出非法 / 被拒时把原因回喂再要一次，最多 max_retries 次；用尽则结束闭环。
     @param model        运动学模型
@@ -385,15 +531,18 @@ def run_step_loop(model: ArmModel, llm: Any, task: str,
     @param execute      执行一步的回调（返回值 bool() 为成败）
     @param subject      环绕主体（可选）
     @param margins      余量
-    @param mode         check_plan 模式：'clip' 夹取 / 'reject' 拒绝
+    @param mode         check_plan 模式：'clip' 路径类夹取 / 'reject' 拒绝 /
+                        'project' 再加上整点类投影到最近可行位姿（超范围直接降级执行、不回喂大模型）
     @param max_steps    最多执行多少步
     @param max_retries  同一步最多回喂重试次数
     @param get_image_b64 取相机画面 JPEG base64 的回调（可选）
     @param on_step      每条记录产生时的回调（可选）
-    @param log          日志函数
+    @param log          开发日志函数
+    @param user_log     面向最终用户的反馈回调（每条记录产生时收到一句口语说明），可选
+    @param region_fit   reach_fit.RegionFit，给了就把可达区公式写进 system 提示词让大模型自检
     @return 所有 StepRecord（含 done / 失败记录）
     """
-    builder = PromptBuilder(model, subject=subject, margins=margins)
+    builder = PromptBuilder(model, subject=subject, margins=margins, region_fit=region_fit)
     history: List[StepRecord] = []
     for index in range(1, max_steps + 1):
         joints = list(get_joints())
@@ -430,7 +579,7 @@ def run_step_loop(model: ArmModel, llm: Any, task: str,
             ok = bool(result)
             note = srep.reason if srep.clipped else ('' if ok else str(result))
             record = StepRecord(index, step, to_run, ok, clipped=bool(srep.clipped), note=note,
-                                result=result, attempts=attempt)
+                                result=result, attempts=attempt, adjust_kind=srep.adjust_kind)
             break
         if record is None:
             record = StepRecord(index, {'op': '?'}, None, False,
@@ -438,11 +587,15 @@ def run_step_loop(model: ArmModel, llm: Any, task: str,
             history.append(record)
             if on_step:
                 on_step(record)
+            if user_log:
+                user_log(record.user_line())
             log(f'[{index}] {record.note}，闭环结束')
             break
         history.append(record)
         if on_step:
             on_step(record)
+        if user_log:
+            user_log(record.user_line())
         if record.executed is None:
             log(f'[{index}] 大模型判定任务完成：{record.proposed.get("reason", "")}')
             break
@@ -542,7 +695,10 @@ def make_image_grabber(node: Any, topic: str,
 def run_llm_shot_loop(api: Any, model: ArmModel, llm: Any, task: str, *,
                       subject: Optional[Sequence[float]] = None, image_topic: Optional[str] = None,
                       dry_run: bool = False, joints_override: Optional[Sequence[float]] = None,
+                      feedback_topic: Optional[str] = FEEDBACK_TOPIC,
+                      user_log: Optional[Callable[[str], None]] = None,
                       **kwargs) -> List[StepRecord]:
+    # kwargs 透传 run_step_loop：mode / max_steps / max_retries / region_fit / on_step …
     """@brief ROS 版入口：ArmApi 提供关节角与执行，其余交给 run_step_loop。
     @param api             ArmApi
     @param model           运动学模型
@@ -552,7 +708,9 @@ def run_llm_shot_loop(api: Any, model: ArmModel, llm: Any, task: str, *,
     @param image_topic     相机话题（可选，给支持图像的模型附图）
     @param dry_run         只打印不下发
     @param joints_override 没有 /joint_states 时（离线演示）用这组关节角起步，且每步按推演结果更新
-    @param kwargs          透传 run_step_loop（max_steps / max_retries / mode / on_step …）
+    @param feedback_topic  面向用户的反馈话题（std_msgs/String），None = 不发话题
+    @param user_log        额外的用户反馈回调（与日志、话题并行收到同一句话）
+    @param kwargs          透传 run_step_loop（max_steps / max_retries / mode / region_fit / on_step …）
     @return StepRecord 列表
     """
     log = api.node.get_logger().info
@@ -576,5 +734,7 @@ def run_llm_shot_loop(api: Any, model: ArmModel, llm: Any, task: str, *,
         get_joints = ros_joint_reader(api)
         execute = ros_executor(api, dry_run)
     grabber = make_image_grabber(api.node, image_topic) if image_topic else None
+    sink = fan_out(lambda text: log(f'[给用户] {text}'),
+                   make_feedback_publisher(api.node, feedback_topic), user_log)
     return run_step_loop(model, llm, task, get_joints, execute, subject=subject,
-                         get_image_b64=grabber, log=log, **kwargs)
+                         get_image_b64=grabber, log=log, user_log=sink, **kwargs)

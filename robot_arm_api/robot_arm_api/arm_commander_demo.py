@@ -33,9 +33,13 @@ JSON 步骤表的 op / 参数名完全一致。
   ros2 run robot_arm_api arm_commander_demo.py check shot_plan.json [--clip]   # 步骤表可达性预检
   ros2 run robot_arm_api arm_commander_demo.py headroom [--subject 0.8 0 0.7] [--schema]  # 余量盒子
   ros2 run robot_arm_api arm_commander_demo.py card [--joints j1 … j6]         # 大模型能力卡
+  ros2 run robot_arm_api arm_commander_demo.py fit [--json]                    # 可达区拟合公式
 大模型单步闭环（每步：读关节角 → 余量 → 大模型出一步 JSON → 校验/夹取 → 执行；
 --llm manual 由人在终端当模型）：
   ros2 run robot_arm_api arm_commander_demo.py llm-step "把花瓶推成特写" --llm manual --max-steps 5
+  ros2 run robot_arm_api arm_commander_demo.py llm-step "任务" --mode project --formula
+      # project = 超范围的动作直接降级执行（夹到边界 / 投影到最近可行位姿），不回喂大模型重来
+      # 每步给用户的口语反馈同时发到 /robot_arm/llm_feedback（std_msgs/String），--feedback-topic none 可关
   LLM_BASE_URL=https://host/v1 LLM_MODEL=qwen-vl LLM_API_KEY=… \
   ros2 run robot_arm_api arm_commander_demo.py llm-step "任务" --llm openai \
       --image-topic /camera/image_raw
@@ -46,7 +50,7 @@ JSON 步骤表的 op / 参数名完全一致。
   build_arg_parser()               构造 argparse：每个子命令的参数名与 run_plan_step 的 op 参数一致
   live_joints(timeout_sec)         起一个临时节点从 /joint_states 读 6 轴关节角（离线工具用）
   load_model(args)                 按 --urdf 或安装的描述包建 ArmModel
-  run_offline(args)                check / headroom / card 三个离线子命令（reach_check，不下发）
+  run_offline(args)                check / headroom / card / fit 四个离线子命令（不下发）
   run_llm_step(api, args)          llm-step：大模型单步运镜闭环（llm_shot_loop）
   main(argv)                       入口：解析参数 → ArmApi → 执行子命令 → 收尾（Ctrl-C 取消 goal 并急停）
 """
@@ -63,11 +67,13 @@ import rclpy
 from robot_arm_api.arm_commander_client import (ARM_JOINT_NAMES, DEFAULT_HOMING_TIMEOUT_SEC,
                                                 GIMBAL_TOPIC_STATUS, ArmApi, execute_plan,
                                                 run_plan_step)
-from robot_arm_api.llm_shot_loop import ManualClient, OpenAICompatClient, run_llm_shot_loop
+from robot_arm_api.llm_shot_loop import (FEEDBACK_TOPIC, ManualClient, OpenAICompatClient,
+                                         format_user_report, run_llm_shot_loop)
 from robot_arm_api.reach_check import (ArmModel, capability_card, check_plan, headroom,
                                        headroom_schema)
+from robot_arm_api.reach_fit import fit_reach_region
 
-OFFLINE_CMDS = ('check', 'headroom', 'card')   # 不建 ArmApi、不下发的子命令
+OFFLINE_CMDS = ('check', 'headroom', 'card', 'fit')   # 不建 ArmApi、不下发的子命令
 
 
 def print_status(api: ArmApi) -> None:
@@ -241,13 +247,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     sp.add_argument('--schema', action='store_true', help='输出单步 JSON schema（min/max 硬约束）')
     add_offline(sp)
     add_offline(add('card', '生成喂给大模型的能力卡文本', op='card'))
+    sp = add('fit', '拟合可达区并输出公式（喂大模型让它自检绝对坐标）', op='fit')
+    sp.add_argument('--json', action='store_true', help='输出 JSON（系数、r 范围、覆盖率）')
+    sp.add_argument('--degree', type=int, default=3, help='多项式次数，默认 3')
+    add_offline(sp)
     sp = add('llm-step', '大模型单步运镜闭环（余量盒子方案；会动臂，先 --dry-run）', op='llm_step')
     sp.add_argument('task', help='任务描述（自然语言）')
     sp.add_argument('--llm', choices=['manual', 'openai'], default='manual',
                     help='manual = 人在终端当大模型；openai = 环境变量 LLM_BASE_URL/LLM_MODEL/LLM_API_KEY')
     sp.add_argument('--max-steps', dest='max_steps', type=int, default=8)
     sp.add_argument('--max-retries', dest='max_retries', type=int, default=2)
-    sp.add_argument('--reject', action='store_true', help='校验用 reject（默认 clip：超余量夹到边界）')
+    sp.add_argument('--mode', choices=['clip', 'reject', 'project'], default='clip',
+                    help='clip=路径类夹到边界（默认）；reject=不可行就回喂大模型重来；'
+                         'project=再加上绝对位姿投影到最近可行点，超范围一律降级执行、不回喂')
+    sp.add_argument('--formula', action='store_true',
+                    help='把可达区拟合公式写进提示词，让大模型自检绝对坐标')
+    sp.add_argument('--feedback-topic', dest='feedback_topic', default=FEEDBACK_TOPIC,
+                    help=f'把给用户的反馈发到该话题（std_msgs/String），默认 {FEEDBACK_TOPIC}；'
+                         'none = 不发')
     sp.add_argument('--image-topic', dest='image_topic', default=None,
                     help='给支持图像的模型附最新一帧，如 /camera/image_raw')
     sp.add_argument('--show-system', dest='show_system', action='store_true',
@@ -280,14 +297,18 @@ def run_llm_step(api: ArmApi, args: argparse.Namespace) -> int:
         llm = ManualClient(show_system=args.show_system)
     if not api.arm.dry_run and args.joints is None and not api.arm.wait_ready():
         return 2
+    region = fit_reach_region(model) if args.formula else None
+    log = api.node.get_logger()
+    topic = None if str(args.feedback_topic).lower() == 'none' else args.feedback_topic
     records = run_llm_shot_loop(api, model, llm, args.task, subject=args.subject,
                                 image_topic=args.image_topic, dry_run=api.arm.dry_run,
                                 joints_override=args.joints, max_steps=args.max_steps,
-                                max_retries=args.max_retries,
-                                mode='reject' if args.reject else 'clip')
-    log = api.node.get_logger()
+                                max_retries=args.max_retries, mode=args.mode, region_fit=region,
+                                feedback_topic=topic)
     for rec in records:
         log.info(rec.line())
+    print('\n──────── 给用户的反馈 ────────')
+    print(format_user_report(records))
     return 0 if records and all(r.ok for r in records) else 1
 
 
@@ -318,12 +339,17 @@ def run_offline(args: argparse.Namespace) -> int:
     """
     model = load_model(args)
     joints = args.joints
-    if joints is None:
+    if joints is None and args.cmd != 'fit':
         joints = live_joints()
         if joints is None and args.cmd != 'card':
             print('拿不到关节角：/joint_states 没数据，请用 --joints j1 j2 j3 j4 j5 j6 指定', file=sys.stderr)
             return 2
     subject = args.subject
+    if args.cmd == 'fit':
+        region = fit_reach_region(model, degree=args.degree)
+        print(json.dumps(region.to_dict(), ensure_ascii=False, indent=2) if args.json
+              else region.formula_text())
+        return 0
     if args.cmd == 'card':
         print(capability_card(model, joints, subject=subject))
         return 0

@@ -31,8 +31,9 @@ gimbal_tool0（x 前 / z 上），rpy 按 motion::rpy_to_quat 的 ZYX 约定 R =
   check_pose(model, pose, margins)    单点可达判定，给人话原因与最近可行位姿
   theta_ref / sphere_to_cart / cart_to_sphere / arc_pose   球面环绕几何（与 motion/geometry.hpp 一致）
   headroom(model, joints, subject)    余量盒子：各方向连续可动的一维区间（dolly/truck/crane/dyaw/dpitch/arc_az）
-  check_plan(model, steps, joints)    JSON 步骤表预检（reject / clip 两种模式），PlanReport.summary() 给人话汇总
-  capability_data / capability_card   能力卡：结构化数据 / 喂给大模型的文本（静态表 + 当前状态与余量）
+  check_plan(model, steps, joints)    JSON 步骤表预检（reject / clip / project 三种模式），
+                                      PlanReport.summary() 给人话汇总
+  capability_data / capability_card   能力卡：结构化数据 / 喂给大模型的文本（静态表按高度分段 + 当前状态与余量）
   current_state_text(model, joints)   能力卡的"当前状态"段（每步重发的那部分）
   headroom_schema(h)                  余量区间 → 单步 JSON schema（oneOf 每 op 一项，min/max 硬约束）
 """
@@ -1193,8 +1194,9 @@ class StepReport:
     ok: bool
     reason: str = ''
     fraction: float = 1.0
-    waypoint: Optional[Dict[str, float]] = None      # 失败 / 夹取处的位姿
-    clipped: Optional[Dict[str, Any]] = None         # clip 模式下被改写的参数
+    waypoint: Optional[Dict[str, float]] = None      # 失败 / 夹取 / 投影处的位姿
+    clipped: Optional[Dict[str, Any]] = None         # 被改写的参数（clip 夹取 / project 投影）
+    adjust_kind: Optional[str] = None                # 'clip'（夹到边界）/ 'project'（投影到最近可行）
     suggestion: Optional[Dict[str, float]] = None    # 整点类 op 失败时的最近可行位姿
     joints_end: Optional[List[float]] = None         # 步骤结束时的关节角
 
@@ -1326,7 +1328,7 @@ def _simulate_step(model: ArmModel, index: int, step: Dict[str, Any], q: np.ndar
     @param q          当前关节角
     @param pose       当前位姿
     @param margins    余量
-    @param mode       'reject' / 'clip'
+    @param mode       'reject' / 'clip' / 'project'
     @param sample_m   笛卡尔路径位置采样步长，m
     @param sample_deg 角度采样步长，度
     @return (StepReport, q_new, pose_new)
@@ -1349,6 +1351,15 @@ def _simulate_step(model: ArmModel, index: int, step: Dict[str, Any], q: np.ndar
         lo3, hi3 = model.lower[:3] + jm[:3], model.upper[:3] - jm[:3]
         bad = [f'{_joint_label(i)} = {q_new[i]:.2f} rad 超出可用范围 [{lo3[i]:.2f}, {hi3[i]:.2f}]'
                for i in range(3) if not (lo3[i] <= q_new[i] <= hi3[i])]
+        if bad and mode == 'project':
+            q_new[:3] = np.clip(q_new[:3], lo3, hi3)
+            clipped = {f'j{i + 1}': round(float(q_new[i]), 4) for i in range(3)}
+            if bool(p.get('relative', False)):
+                clipped = {f'j{i + 1}': round(float(q_new[i] - q0[i]), 4) for i in range(3)}
+            wp = matrix_to_pose(model.fk(q_new))
+            return StepReport(index, op, True, True, '夹到关节可用范围：' + '；'.join(bad), 1.0, wp,
+                              clipped=clipped, adjust_kind='clip',
+                              joints_end=_jlist(q_new)), q_new, wp
         wp = matrix_to_pose(model.fk(q_new))
         if bad:
             return StepReport(index, op, True, False, '；'.join(bad), 1.0, wp,
@@ -1362,6 +1373,20 @@ def _simulate_step(model: ArmModel, index: int, step: Dict[str, Any], q: np.ndar
         else:
             target = _rel_target(pose0, p)
         res = check_pose(model, target, margins, seed=q0)
+        if not res.ok and mode == 'project' and res.suggestion is not None:
+            moved = math.sqrt(sum((res.suggestion[k] - target[k]) ** 2 for k in ('x', 'y', 'z')))
+            sub = check_pose(model, res.suggestion, margins, seed=q0)
+            if sub.ok:
+                if op == 'pose':
+                    clipped = {k: round(res.suggestion[k], 4) for k in _POSE_KEYS}
+                else:
+                    clipped = {dk: round(res.suggestion[k] - pose0[k], 4)
+                               for k, dk in zip(_POSE_KEYS, _DELTA_KEYS) if dk in p}
+                reason = f'原目标不可达（{res.reason}），已投影到最近可行位姿（移动了 {moved:.2f} m）'
+                rep = StepReport(index, op, True, True, reason, 1.0, res.suggestion,
+                                 clipped=clipped, adjust_kind='project',
+                                 joints_end=_jlist(q0 if rts else sub.joints))
+                return (rep, q0, pose0) if rts else (rep, sub.joints, res.suggestion)
         if not res.ok:
             return StepReport(index, op, True, False, res.reason, 1.0, target,
                               suggestion=res.suggestion, joints_end=_jlist(q0)), q0, pose0
@@ -1438,11 +1463,11 @@ def _simulate_step(model: ArmModel, index: int, step: Dict[str, Any], q: np.ndar
     else:
         bad_pose = path_fn(f_bad)
         reason = _fail_reason(model, bad_pose, q_ok, margins)
-        if mode == 'clip' and f_ok > 0.0:
+        if mode in ('clip', 'project') and f_ok > 0.0:
             clipped = clip_fn(f_ok)
             rep = StepReport(index, op, True, True,
                              f'夹取到 {f_ok * 100:.0f}%（{clipped}）：再往前 {reason}', f_ok, end_pose,
-                             clipped=clipped, joints_end=_jlist(q_ok))
+                             clipped=clipped, adjust_kind='clip', joints_end=_jlist(q_ok))
         else:
             return StepReport(index, op, True, False, reason, f_ok, bad_pose,
                               joints_end=_jlist(q0)), q0, pose0
@@ -1463,13 +1488,15 @@ def check_plan(model: ArmModel, steps: Sequence[Dict[str, Any]], start_joints: S
     @param steps        [{'op': ..., ...}, ...]
     @param start_joints 起始 6 轴关节角
     @param margins      余量，None 取默认
-    @param mode         'reject'：第一条不可达就停；'clip'：路径类步骤夹到可达边界继续推演，整点类仍拒绝
+    @param mode         'reject'：第一条不可达就停；'clip'：路径类夹到可达边界继续、整点类仍拒绝；
+                        'project'：在 clip 基础上，整点类（pose / move_rel）投影到最近可行位姿、
+                        joint 夹进关节可用范围——即"能做多少做多少"，几乎不拒绝
     @param sample_m     位置采样步长，m
     @param sample_deg   角度采样步长，度
     @return PlanReport（ok / 每步 StepReport / 起止位姿 / 终止关节角；summary() 给人话汇总）
     """
-    if mode not in ('reject', 'clip'):
-        raise ValueError("mode 只能是 'reject' 或 'clip'")
+    if mode not in ('reject', 'clip', 'project'):
+        raise ValueError("mode 只能是 'reject' / 'clip' / 'project'")
     margins = margins or Margins()
     q = np.asarray(start_joints, dtype=float)
     pose = matrix_to_pose(model.fk(q))
@@ -1502,6 +1529,11 @@ def _tip_feasible(model: ArmModel, p_base: Sequence[float], margins: Margins) ->
     """
     jm = margins.joint_array()
     pl = model.planar
+    p_f1 = (_inv_tf(pl.tf_base_f1) @ np.append(np.asarray(p_base, dtype=float), 1.0))[:3]
+    rho = math.hypot(p_f1[0], p_f1[1])
+    # 离 J1 轴太近（落进半径 |H| 的盲柱）：几何上无解；solve() 为了给数值初值会把它夹到切点，这里得自己拦
+    if rho * pl.n_xy_norm < abs(pl.height_n - p_f1[2] * pl.n[2]) - 1e-9:
+        return False
     for c in pl.solve(p_base):
         if np.any(c < model.lower[:3] + jm[:3]) or np.any(c > model.upper[:3] - jm[:3]):
             continue
@@ -1511,9 +1543,36 @@ def _tip_feasible(model: ArmModel, p_base: Sequence[float], margins: Margins) ->
     return False
 
 
+def _h_bands_at(model: ArmModel, r: float, margins: Margins, base_height_m: float,
+                z_step: float = 0.005) -> List[tuple]:
+    """@brief 前方水平距离 r 处（正前方、臂平面内）臂末端可达的离地高**分段**。
+           r 小时（≲0.20 m）可达高度不是一段：肩部周围 dist_min+余量 的球内够不到，被分成上下两段。
+    @param model         模型
+    @param r             到臂基座竖轴的水平距离，m
+    @param margins       余量
+    @param base_height_m 臂基座离地高
+    @param z_step        z 扫描步长
+    @return [(h_lo, h_hi), ...] 按高度升序，可能为空
+    """
+    bands: List[tuple] = []
+    start = prev = None
+    for z in np.arange(-0.6, 1.2, z_step):
+        ok = _tip_feasible(model, (r, 0.0, float(z)), margins)
+        if ok and start is None:
+            start = float(z)
+        if not ok and start is not None:
+            bands.append((start + base_height_m, prev + base_height_m))
+            start = None
+        if ok:
+            prev = float(z)
+    if start is not None:
+        bands.append((start + base_height_m, prev + base_height_m))
+    return bands
+
+
 def _h_range_at(model: ArmModel, r: float, margins: Margins, base_height_m: float,
                 z_step: float = 0.005) -> Optional[tuple]:
-    """@brief 前方水平距离 r 处（正前方、臂平面内）臂末端可达的离地高范围。
+    """@brief 前方水平距离 r 处臂末端可达的离地高**主段**（分段里最长的一段；只报 min/max 会把中间的洞掩掉）。
     @param model         模型
     @param r             到臂基座竖轴的水平距离，m
     @param margins       余量
@@ -1521,11 +1580,10 @@ def _h_range_at(model: ArmModel, r: float, margins: Margins, base_height_m: floa
     @param z_step        z 扫描步长
     @return (h_min, h_max) 或 None（该 r 全高不可达）
     """
-    zs = [z for z in np.arange(-0.6, 1.2, z_step)
-          if _tip_feasible(model, (r, 0.0, float(z)), margins)]
-    if not zs:
+    bands = _h_bands_at(model, r, margins, base_height_m, z_step)
+    if not bands:
         return None
-    return float(min(zs) + base_height_m), float(max(zs) + base_height_m)
+    return max(bands, key=lambda b: b[1] - b[0])
 
 
 def capability_data(model: ArmModel, margins: Optional[Margins] = None,
@@ -1545,9 +1603,11 @@ def capability_data(model: ArmModel, margins: Optional[Margins] = None,
     pl = model.planar
     table = []
     for r in r_grid:
-        rng_ = _h_range_at(model, float(r), margins, base_height_m)
-        table.append({'r': float(r), 'h_min': rng_[0] if rng_ else None,
-                      'h_max': rng_[1] if rng_ else None, 'reachable': rng_ is not None})
+        bands = _h_bands_at(model, float(r), margins, base_height_m)
+        main = max(bands, key=lambda b: b[1] - b[0]) if bands else None
+        table.append({'r': float(r), 'h_min': main[0] if main else None,
+                      'h_max': main[1] if main else None, 'reachable': main is not None,
+                      'bands': [(round(b[0], 3), round(b[1], 3)) for b in bands]})
     r_max = 0.0
     for r in np.arange(0.05, 1.0, 0.01):
         if _h_range_at(model, float(r), margins, base_height_m, z_step=0.02) is not None:
@@ -1621,10 +1681,14 @@ def capability_card(model: ArmModel, joints: Optional[Sequence[float]] = None,
     ]
     cells = []
     for row in data['table']:
-        if row['reachable']:
-            cells.append(f'r={row["r"]:.2f}: h {row["h_min"]:.2f}~{row["h_max"]:.2f}')
-        else:
+        if not row['reachable']:
             cells.append(f'r={row["r"]:.2f}: 不可达')
+            continue
+        cell = f'r={row["r"]:.2f}: h {row["h_min"]:.2f}~{row["h_max"]:.2f}'
+        others = [b for b in row['bands'] if abs(b[0] - row['h_min']) > 1e-6]
+        if others:
+            cell += '（另一段 ' + '、'.join(f'{b[0]:.2f}~{b[1]:.2f}' for b in others) + '）'
+        cells.append(cell)
     cells.append(f'r ≥ {data["r_max"] + 0.01:.2f}: 不可达')
     for i in range(0, len(cells), 3):
         lines.append('     ' + ' | '.join(cells[i:i + 3]))

@@ -203,3 +203,158 @@ def test_openai_compat_client_extra_body_and_env(monkeypatch):
     assert captured['body']['enable_thinking'] is False
     assert captured['body']['model'] == 'qwen3.6-flash'
     assert captured['timeout'] == 45.0
+
+
+# ═══════════════════════════════ 面向用户的文字反馈 ═══════════════════════════════
+
+def _rec(proposed, executed, ok=True, clipped=False, adjust_kind=None, note=''):
+    """@brief 造一条 StepRecord。"""
+    return loop.StepRecord(index=1, proposed=proposed, executed=executed, ok=ok, clipped=clipped,
+                           adjust_kind=adjust_kind, note=note)
+
+
+def test_user_line_uses_plain_words_not_jargon():
+    """@brief 面向用户的一行：说"向前推近 5 厘米"，不出现 op 名、关节名、弧度这些术语。"""
+    text = _rec({'op': 'dolly', 'distance_m': 0.05}, {'op': 'dolly', 'distance_m': 0.05}).user_line()
+    assert '向前' in text and '5' in text and '厘米' in text
+    for jargon in ('dolly', 'J3', 'rad', 'op'):
+        assert jargon not in text, text
+    back = _rec({'op': 'dolly', 'distance_m': -0.08}, {'op': 'dolly', 'distance_m': -0.08}).user_line()
+    assert '后' in back and '8' in back
+    up = _rec({'op': 'crane', 'distance_m': 0.05}, {'op': 'crane', 'distance_m': 0.05}).user_line()
+    assert '升' in up or '抬' in up
+
+
+def test_user_line_reports_requested_and_actual_when_clipped():
+    """@brief 降级执行要把"你要多少"和"实际做了多少"都说出来，并说明是行程到头了。"""
+    text = _rec({'op': 'truck', 'distance_m': 0.60}, {'op': 'truck', 'distance_m': 0.225},
+                clipped=True, adjust_kind='clip', note='夹取到 38%').user_line()
+    assert '60' in text and '22' in text and ('行程' in text or '最多' in text)
+    assert '向左' in text
+
+
+def test_user_line_reports_projection():
+    """@brief 投影降级要说明"改到最近的可行位置"。"""
+    text = _rec({'op': 'pose', 'x': 0.9, 'y': 0.0, 'z': 0.6},
+                {'op': 'pose', 'x': 0.55, 'y': 0.0, 'z': 0.6},
+                clipped=True, adjust_kind='project', note='已投影到最近可行位姿').user_line()
+    assert '最近' in text and ('可行' in text or '能到' in text)
+
+
+def test_user_line_reports_failure_and_done():
+    """@brief 失败说明没执行；done 说任务完成。"""
+    bad = _rec({'op': 'dolly', 'distance_m': 0.3}, None, ok=False, note='机械臂伸不了那么远').user_line()
+    assert '没' in bad or '未' in bad
+    assert '机械臂伸不了那么远' in bad
+    done = _rec({'op': 'done', 'reason': '构图完成'}, None, note='任务完成').user_line()
+    assert '完成' in done
+
+
+def test_format_user_report_lists_steps_and_summary(model):
+    """@brief 整段报告：每步一行 + 末尾总结做了几步、其中几步被降级。"""
+    records = [_rec({'op': 'dolly', 'distance_m': 0.05}, {'op': 'dolly', 'distance_m': 0.05}),
+               _rec({'op': 'truck', 'distance_m': 0.6}, {'op': 'truck', 'distance_m': 0.22},
+                    clipped=True, adjust_kind='clip'),
+               _rec({'op': 'done'}, None, note='任务完成')]
+    text = loop.format_user_report(records)
+    assert text.count('\n') >= 2
+    assert '2' in text and '降级' in text
+
+
+def test_step_loop_project_mode_never_asks_llm_again(model):
+    """@brief 方案 2 的核心：project 模式下超范围的动作直接降级执行，不回喂大模型重来。
+    大模型给了一个远超行程的 truck 和一个超出可达域的 pose，两步都执行了，且大模型只被调用 3 次
+    （两步 + done），没有任何重试。"""
+    arm = FakeArm(model, ARM_NOMINAL)
+    llm = loop.ScriptedClient([{'op': 'truck', 'distance_m': 1.0, 'reason': '大幅左移'},
+                               {'op': 'pose', 'x': 0.9, 'y': 0.0, 'z': 0.6, 'reason': '冲过去'},
+                               {'op': 'done'}])
+    seen = []
+    records = loop.run_step_loop(model, llm, '任务', arm.get_joints, arm.execute,
+                                 mode='project', max_steps=5, user_log=seen.append)
+    assert [s['op'] for s in arm.executed] == ['truck', 'pose']
+    assert len(llm.calls) == 3
+    assert all(r.attempts == 1 for r in records)
+    assert records[0].adjust_kind == 'clip' and records[1].adjust_kind == 'project'
+    assert len(seen) == 3 and '22' in seen[0] or '厘米' in seen[0]
+
+
+def test_prompt_builder_can_embed_region_formula(model):
+    """@brief 方案 1 的接入点：给 PromptBuilder 一个 RegionFit，system 提示词里就带上可达区公式与自检要求，
+    大模型输出绝对位置前可以自己代入验算。不给则不带。"""
+    from robot_arm_api import reach_fit as rf
+    fit = rf.fit_reach_region(model)
+    plain = loop.PromptBuilder(model).system_prompt()
+    assert 'h_max(r)' not in plain
+    with_fit = loop.PromptBuilder(model, region_fit=fit).system_prompt()
+    assert 'h_max(r)' in with_fit and 'h_min(r)' in with_fit
+    assert '自检' in with_fit or '代入' in with_fit
+
+
+# ═══════════════════════════════ 反馈话题 ═══════════════════════════════
+
+class FakeNode:
+    """@brief 假 rclpy 节点：记录 create_publisher 的参数，publisher 记录发出的消息。"""
+
+    class Pub:
+        """@brief 假 publisher。"""
+
+        def __init__(self):
+            self.sent = []
+
+        def publish(self, msg):
+            """@brief 记录一条消息。"""
+            self.sent.append(msg)
+
+    def __init__(self):
+        self.created = []
+        self.pub = FakeNode.Pub()
+        self.warnings = []
+
+    def create_publisher(self, msg_type, topic, qos):
+        """@brief 记录并返回假 publisher。"""
+        self.created.append((msg_type, topic, qos))
+        return self.pub
+
+    def get_logger(self):
+        """@brief 假 logger。"""
+        node = self
+
+        class _Log:
+            def info(self, text):
+                """@brief 忽略。"""
+
+            def warning(self, text):
+                """@brief 记录警告。"""
+                node.warnings.append(text)
+        return _Log()
+
+
+def test_make_feedback_publisher_publishes_user_text():
+    """@brief 反馈话题：默认发 std_msgs/String 到 /robot_arm/llm_feedback，内容就是给用户的那句话。"""
+    pytest.importorskip('std_msgs')
+    node = FakeNode()
+    emit = loop.make_feedback_publisher(node)
+    assert node.created and node.created[0][1] == loop.FEEDBACK_TOPIC
+    assert node.created[0][0].__name__ == 'String'
+    emit('向左平移 22 厘米')
+    assert [m.data for m in node.pub.sent] == ['向左平移 22 厘米']
+
+
+def test_make_feedback_publisher_accepts_custom_topic_and_none():
+    """@brief 可换话题名；topic=None 表示不发话题（返回 None，不建 publisher）。"""
+    pytest.importorskip('std_msgs')
+    node = FakeNode()
+    loop.make_feedback_publisher(node, '/my/topic')
+    assert node.created[0][1] == '/my/topic'
+    node2 = FakeNode()
+    assert loop.make_feedback_publisher(node2, None) is None
+    assert node2.created == []
+
+
+def test_user_log_fan_out_calls_every_sink():
+    """@brief 多个反馈出口（日志 + 话题 + 上层回调）用 fan_out 串起来，一次调用全部收到。"""
+    got_a, got_b = [], []
+    sink = loop.fan_out(got_a.append, None, got_b.append)
+    sink('测试')
+    assert got_a == ['测试'] and got_b == ['测试']

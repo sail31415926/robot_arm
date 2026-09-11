@@ -7,12 +7,14 @@
        也能 `from robot_arm_api import ArmModel, run_step_loop`。
 """
 
-from .llm_shot_loop import (ManualClient, OpenAICompatClient, PromptBuilder, ScriptedClient,
-                            StepRecord, run_llm_shot_loop, run_step_loop)
+from .llm_shot_loop import (FEEDBACK_TOPIC, ManualClient, OpenAICompatClient, PromptBuilder,
+                            ScriptedClient, StepRecord, fan_out, format_user_report,
+                            make_feedback_publisher, run_llm_shot_loop, run_step_loop)
 from .reach_check import (ArmModel, Margins, PlanReport, ReachResult, StepReport, arc_pose,
                           capability_card, capability_data, check_plan, check_pose,
                           current_state_text, headroom, headroom_schema, matrix_to_pose,
                           pose_from_look_at, pose_to_matrix)
+from .reach_fit import RegionFit, fit_reach_region
 
 try:
     from .arm_commander_client import (HAS_GIMBAL_IFACE, ArmApi, ArmCommanderClient, CallResult,
@@ -29,9 +31,12 @@ __all__ = [
     'ArmModel', 'Margins', 'ReachResult', 'StepReport', 'PlanReport', 'check_pose', 'check_plan',
     'headroom', 'headroom_schema', 'capability_card', 'capability_data', 'current_state_text',
     'pose_to_matrix', 'matrix_to_pose', 'pose_from_look_at', 'arc_pose', 'HAS_ROS_CLIENT',
+    # reach_fit（可达区多项式拟合）
+    'RegionFit', 'fit_reach_region',
     # llm_shot_loop（核心闭环纯 Python；run_llm_shot_loop 运行时才要 ROS）
     'PromptBuilder', 'StepRecord', 'ScriptedClient', 'ManualClient', 'OpenAICompatClient',
-    'run_step_loop', 'run_llm_shot_loop',
+    'run_step_loop', 'run_llm_shot_loop', 'format_user_report', 'FEEDBACK_TOPIC',
+    'make_feedback_publisher', 'fan_out',
 ]
 if HAS_ROS_CLIENT:
     __all__ += [

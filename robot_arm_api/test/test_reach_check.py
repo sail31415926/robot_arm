@@ -367,3 +367,83 @@ def test_from_share_files_matches_urdf_string_model(model):
     np.testing.assert_allclose(other.lower, model.lower)
     np.testing.assert_allclose(other.upper, model.upper)
     np.testing.assert_allclose(other.fk(ARM_NOMINAL), model.fk(ARM_NOMINAL), atol=1e-12)
+
+
+def test_capability_table_reports_hole_near_shoulder(model):
+    """@brief r ≤ 0.20 时可达高度不是一段：肩部（离地 0.57）周围 0.207 m 内够不到，被分成上下两段。
+    表必须按段给（主段 = 最长的一段），不能只报 min/max 把中间的洞掩掉。r=0.15：主段约 0.72~1.15，
+    另有一小段 0.27~0.42。"""
+    data = rc.capability_data(model, base_height_m=0.31)
+    row = next(r for r in data['table'] if abs(r['r'] - 0.15) < 1e-9)
+    assert len(row['bands']) == 2, row
+    assert abs(row['h_min'] - 0.72) < 0.03 and abs(row['h_max'] - 1.15) < 0.03, row
+    low = min(row['bands'], key=lambda b: b[0])
+    assert abs(low[0] - 0.27) < 0.03 and abs(low[1] - 0.42) < 0.04, row
+    row30 = next(r for r in data['table'] if abs(r['r'] - 0.30) < 1e-9)
+    assert len(row30['bands']) == 1
+    text = rc.capability_card(model)
+    assert '另一段' in text
+
+
+# ═══════════════════════════════ check_plan project 模式（投影降级） ═══════════════════════════════
+
+def test_check_plan_project_mode_projects_pose_to_nearest_feasible(model):
+    """@brief project 模式：pose 到 0.9 m 外不再拒绝，而是投影到最近可行位姿并执行。
+    整表 ok；该步 adjust_kind='project'、改写后的位姿真可达、reason 说清改到哪。"""
+    rep = rc.check_plan(model, [{'op': 'pose', 'x': 0.9, 'y': 0.0, 'z': 0.6}], ARM_NOMINAL,
+                        mode='project')
+    assert rep.ok
+    step = rep.steps[0]
+    assert step.adjust_kind == 'project' and step.clipped is not None
+    assert step.clipped['x'] < 0.9
+    assert rc.check_pose(model, {**step.clipped}, seed=ARM_NOMINAL).ok
+    assert '投影' in step.reason or '改到' in step.reason
+
+
+def test_check_plan_project_mode_projects_move_rel_as_deltas(model):
+    """@brief move_rel 投影后改写的仍是增量字段（dx/dy/dz…），不是绝对坐标，执行器才认得。"""
+    rep = rc.check_plan(model, [{'op': 'move_rel', 'dx': 0.6, 'dz': 0.0}], ARM_NOMINAL,
+                        mode='project')
+    assert rep.ok and rep.steps[0].adjust_kind == 'project'
+    clipped = rep.steps[0].clipped
+    assert set(clipped) <= {'dx', 'dy', 'dz', 'droll', 'dpitch', 'dyaw'}
+    assert clipped['dx'] < 0.6
+
+
+def test_check_plan_project_mode_clips_joint_into_limits(model):
+    """@brief project 模式下 joint 超限位不再拒绝，而是夹进可用范围（adjust_kind='clip'）。"""
+    rep = rc.check_plan(model, [{'op': 'joint', 'j1': 0.0, 'j2': 1.0, 'j3': -2.45}], ARM_NOMINAL,
+                        mode='project')
+    assert rep.ok and rep.steps[0].adjust_kind == 'clip'
+    j3_lo = model.lower[2] + rc.Margins().joint_array()[2]
+    assert rep.steps[0].clipped['j3'] == pytest.approx(j3_lo)
+
+
+def test_check_plan_project_mode_clips_paths_like_clip(model):
+    """@brief 路径类在 project 下与 clip 行为一致：超余量的 dolly 夹到边界。"""
+    rep = rc.check_plan(model, [{'op': 'dolly', 'distance_m': 0.30}], ARM_NOMINAL, mode='project')
+    assert rep.ok and rep.steps[0].adjust_kind == 'clip'
+    assert rep.steps[0].clipped['distance_m'] < 0.30
+
+
+def test_check_plan_project_mode_fails_when_not_even_one_step_fits(model):
+    """@brief "能做多少做多少"不等于"假装做了"：从相机几乎朝天的位形出发，dolly 连第一个采样点都到不了
+    （可走比例 0），此时仍然判失败并给原因，而不是夹成 0 距离蒙混过去。"""
+    q = np.array([0.0, 1.0, -2.4, 0.0, 0.3, 0.0])
+    rep = rc.check_plan(model, [{'op': 'dolly', 'distance_m': 0.30}], q, mode='project')
+    assert not rep.ok and rep.steps[0].fraction == 0.0 and rep.steps[0].reason
+
+
+def test_check_plan_project_mode_still_rejects_impossible_orientation(model):
+    """@brief 投影只救位置。把云台三轴余量放到 1.4 rad（几乎转不动），要求相机正下方俯拍 80°：
+    位置怎么挪都做不出这个朝向 → 仍然 ok=False，reason 说明原因。"""
+    margins = rc.Margins(joint_rad=(0.1745, 0.1, 0.1, 1.4, 1.4, 1.4))
+    rep = rc.check_plan(model, [{'op': 'pose', 'x': 0.35, 'y': 0.0, 'z': 0.6, 'pitch': 80.0}],
+                        ARM_NOMINAL, margins=margins, mode='project')
+    assert not rep.ok and rep.steps[0].reason
+
+
+def test_check_plan_rejects_unknown_mode(model):
+    """@brief mode 只认 reject / clip / project。"""
+    with pytest.raises(ValueError):
+        rc.check_plan(model, [{'op': 'dolly', 'distance_m': 0.01}], ARM_NOMINAL, mode='guess')

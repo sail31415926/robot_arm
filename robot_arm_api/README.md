@@ -10,11 +10,13 @@ robot_arm_api/
 ├── robot_arm_api/
 │   ├── arm_commander_client.py   ★ 库：ArmCommanderClient / GimbalV2Client / ArmApi / execute_plan
 │   ├── reach_check.py            ★ 可达性 / 余量盒子 / 步骤表预检 / 能力卡（纯 numpy，给大模型运镜决策用）
+│   ├── reach_fit.py              ★ 可达区多项式拟合：给大模型一条能自己代入验算的公式
 │   ├── llm_shot_loop.py          ★ 大模型单步运镜闭环：读关节角 → 余量 → 大模型出一步 → 校验/夹取 → 执行
 │   ├── arm_commander_demo.py     命令行 demo（子命令 = 库方法；plan = JSON 步骤表；check/headroom/card/llm-step）
 │   └── __init__.py               re-export（无 ROS 环境时只导出 reach_check 那一半）
 ├── test/                         pytest：test_reach_check（正解对拍 pinocchio、逆解往返、可达判定、余量、预检、能力卡）
-│                                        test_llm_shot_loop（提示词 / schema、闭环夹取与回喂重试、OpenAI 兼容请求）
+│                                        test_reach_fit（拟合保守性、覆盖率、公式文本）
+│                                        test_llm_shot_loop（提示词 / schema、夹取投影与降级、用户反馈、OpenAI 兼容请求）
 ├── examples/shot_plan_example.json   JSON 运镜步骤表示例
 ├── CMakeLists.txt / package.xml
 └── README.md
@@ -193,6 +195,77 @@ $R card [--joints 0 1 -1.5 0 0.3 0]                 # 能力卡文本
 - `from_share_files()` 需要 source ROS 与工作空间（xacro + 两个描述包），拿不到时抛 `RuntimeError`；
   其余全部纯 numpy。
 
+### 可达区公式（`reach_fit.py`）——给大模型一条能自己代入验算的式子
+
+静态表是离散采样，公式是连续函数：大模型要输出**绝对位置**（`op=pose`）时，可以自己把 (x, y, z) 代进去验算。
+
+```bash
+ros2 run robot_arm_api arm_commander_demo.py fit          # 公式文本；--json 给系数
+```
+
+```text
+臂末端可达区用 r 的 3 次多项式描述（r = 到臂基座竖轴的水平距离，h = 离地高，单位 m）：
+  r ∈ [0.24, 0.56]
+  h_max(r) = - 6.505·r^3 + 5.347·r^2 - 2.040·r + 1.373
+  h_min(r) = 12.628·r^3 - 12.005·r^2 + 3.650·r - 0.127
+  点 (r, h) 可达 ⇔ r 在范围内 且 h_min(r) ≤ h ≤ h_max(r)。
+  换算：r = sqrt(x² + y²)，h = z + 0.31（x, y, z 为机械臂 base_link 系）。
+  公式已向内收缩（各 ≤ 2 cm）保证保守：公式内的点全部真可达，覆盖真实可达区 94%。
+```
+
+两个**必须知道**的边界条件（都在 `formula_text()` 里写给大模型了）：
+
+- **公式只覆盖 r ∈ [0.24, 0.56]**。r 再小时，肩部周围「肩到末端距离 ≥ `dist_min`+余量」的球够不到，
+  可达高度被切成**上下两段**（r=0.15：主段 0.72~1.15，另有一小段 0.27~0.42）——带洞的区域没法用
+  `h_min ≤ h ≤ h_max` 表达，硬拟就会把洞判成可达。这段交给 `capability_card` 的**分段表**
+  （`capability_data()['table'][i]['bands']`）和 `headroom`。
+- **保守优先**：拟合后按最大残差 + 安全量整体内移，再逐点网格复核，发现假可达继续内移。
+  `coverage` 告诉你为此损失了多少真实可达区（当前 94%）。宁可少给，不能给出做不到的点。
+
+把公式塞进提示词让大模型自检：`PromptBuilder(model, region_fit=fit)`，或 CLI 的 `llm-step --formula`。
+注意它只管**位置**；朝向能不能做出来仍由 `check_pose` / `check_plan` 兜底。
+
+### 超范围动作的降级执行（`check_plan(mode='project')`）
+
+不想让大模型为"推 1 米"这种越界动作反复重来时，用 `project` 模式：**能做多少做多少**，执行后用人话告诉用户。
+
+| 动作类型 | reject | clip | **project** |
+| --- | --- | --- | --- |
+| 路径类 `dolly/truck/crane/linear/arc/orbit` | 拒绝 | 夹到可达边界 | 夹到可达边界 |
+| 整点类 `pose / move_rel` | 拒绝 | 拒绝 | **投影到最近可行位姿** |
+| `joint` | 拒绝 | 拒绝 | **夹进关节可用范围** |
+
+`StepReport.adjust_kind` 标明改写方式（`'clip'` / `'project'` / `None`），`clipped` 是改写后的参数
+（`move_rel` 投影后仍写回**增量**字段，执行器才认得）。一步都走不了（`fraction == 0`）仍然判失败——
+"能做多少做多少"不等于"假装做了"。朝向做不出来的位姿投影也救不了，仍然拒绝。
+
+### 面向最终用户的文字反馈
+
+`StepRecord.user_line()` / `format_user_report(records)` 给的是**口语**，不带 op 名、关节名、弧度：
+
+```text
+向左平移 1.00 米 超出机械臂行程，最多只能向左平移 29 厘米，已按这个幅度执行
+移动到位置（前 0.90 米、左 0.00 米、高 0.60 米） 超出机械臂可达范围，已改到最近能到的位置执行
+共执行 2 个动作，其中 2 个因超出机械臂能力已降级执行。
+```
+
+三个出口并行（`fan_out` 合流，互不影响）：
+
+| 出口 | 怎么拿 |
+| --- | --- |
+| **ROS 话题** `/robot_arm/llm_feedback`（`std_msgs/String`） | 默认就发；`run_llm_shot_loop(feedback_topic=...)` 换名、`None` 关闭 |
+| 节点日志 | `[给用户]` 前缀，跟着 Commander 日志走 |
+| 上层回调 | `run_llm_shot_loop(user_log=你的函数)` / 无 ROS 时 `run_step_loop(user_log=...)` |
+
+```bash
+ros2 topic echo /robot_arm/llm_feedback          # 另一个终端就能看到每步的口语反馈
+$R llm-step "推成特写" --mode project --formula --llm openai   # 降级执行 + 公式自检，不回喂重来
+$R llm-step "…" --feedback-topic none            # 只要日志、不发话题
+```
+
+话题只发**执行后**的口语说明（每步一条 + done 一条），不发中间的校验细节；整段总结由
+`format_user_report(records)` 在闭环结束时给出。
+
 ### 大模型单步闭环（`llm_shot_loop.py`）
 
 把上面两层串成"余量盒子"的调用层：**每步** 读关节角 → `headroom` → 组提示词（system = 能力卡静态部分 + 输出规则，
@@ -229,6 +302,7 @@ $R llm-step "推近花瓶" --llm openai --image-topic /camera/image_raw --subjec
   `LLM_MODEL=<控制台里的模型名>`、`LLM_API_KEY=sk-…`，并加 `LLM_EXTRA_JSON='{"enable_thinking": false}'`
   ——千问 3.x 思考模式下**非流式**调用会被拒，本客户端不走流式。`LLM_TIMEOUT_SEC` 可调超时（默认 60）。
 - 允许的 op：`dolly / truck / crane / move_rel / arc / linear / pose / wait / done`；其它一律拒绝回喂。
+- `--mode project` 时超范围动作直接降级执行、**不回喂大模型重来**（只有 JSON 非法 / op 不认识才重试）。
 - **会动臂**。第一次先 `--dry-run`；实机用 `--llm manual` 手敲小步（≤ 5 cm）确认链路，再换真模型；
   Ctrl-C 会取消当前 goal 并急停。
 
@@ -255,6 +329,7 @@ $R llm-step "推近花瓶" --llm openai --image-topic /camera/image_raw --subjec
 | `publish_velocity`, `jog` | `/robot_gimbal_v2/cmd_vel` | `Twist`（angular.z=pan, .x=roll, .y=tilt） |
 | `get_status`, `get_angles` | `/robot_gimbal_v2/status`, `/robot_gimbal_v2/joint_states_raw` | topic |
 | `set_forward_cmd_enable` | `/robot_gimbal_v2/set_forward_cmd_enable` | service |
+| `llm_shot_loop` 的用户反馈 | `/robot_arm/llm_feedback` | `std_msgs/String`（本包发布，供上层订阅） |
 
 ## 约定与坑
 

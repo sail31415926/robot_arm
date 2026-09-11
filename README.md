@@ -338,10 +338,12 @@ Gazebo / MuJoCo / 实物三套后端共用同一对总线接口，上层控制�
 | :--- | :--- | :--- |
 | `--with-mujoco` | `mujoco` 3.8.1 | `robot_arm_mujoco/scripts/mujoco_node.py` |
 | `--with-rl` | `gymnasium` / `stable-baselines3` / `tensorboard` / `torch`(CPU) / `mujoco` | 仅 `robot_arm_rl/` |
-| `--with-analysis` | `scipy` / `matplotlib` | 仅 `robot_arm_matlab/reach_oracle.py` |
+| `--with-analysis` | `scipy` / `matplotlib` | 离线分析 / 画图；`robot_arm_api` 本身只要 numpy |
 
 > `analysis` 组必须装 pip 版：Ubuntu 22.04 的 apt `python3-scipy` 是 1.8.0，它要求
 > `numpy<1.25`，与本工程锁定的 numpy 1.26.4 不兼容（import 时会警告）。
+> 原来唯一的使用者 `robot_arm_matlab/reach_oracle.py`（V1 云台的栅格可达域判定器）已于
+> 2026-09-11 删除，可达域判定改用 `robot_arm_api`（纯 numpy，不需要这一组）。
 
 ---
 

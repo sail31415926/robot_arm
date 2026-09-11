@@ -28,7 +28,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_reach_check test/test_reach_check.py
     TIMEOUT 300)
   ament_add_pytest_test(test_llm_shot_loop test/test_llm_shot_loop.py
-    TIMEOUT 120)
+    TIMEOUT 180)
+  ament_add_pytest_test(test_reach_fit test/test_reach_fit.py
+    TIMEOUT 180)
 endif()
 
 ament_package()
