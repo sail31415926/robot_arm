@@ -78,6 +78,9 @@ $R stow                                      # 收纳位（6 轴关节回零）
 $R pose 0.25 0.0 0.65 0 0 0 --speed slow     # 绝对末端位姿 x y z roll pitch yaw（米 / 度）
 $R move-rel 0.0 0.0 0.05                     # 相对当前末端位姿 dx dy dz [--droll --dpitch --dyaw]
 $R joint 0.2 0.5 -0.8 [--relative] [--duration-sec 3]   # 关节空间点到点 J1 J2 J3（rad，不过 IK）
+$R joint-one 2 0.1 --relative                # ★单关节：只动 J2 转 +0.1 rad（编号 1-6）
+$R joint-one 4 0.26                          # ★单关节：J4=云台 pan，自动路由到云台（rad）
+$R jog-joint-one 1 0.2 --duration 1.0        # ★单关节点动：编号 1-6，rad/s
 $R dolly 0.10  |  $R truck -0.08  |  $R crane 0.05      # 推拉 / 横移 / 升降运镜（米），可 --return-to-start
 $R orbit 0.6 0.0 0.7 -30 30 --radius 0.4 --elevation 0  # 球面环绕：球心 xyz、方位起止（度）
 $R jog 0.05 0 0 --wyaw 10 --duration 1.0     # 末端速度点动（m/s、deg/s），自动切速度模式再切回
@@ -110,6 +113,8 @@ with ArmApi() as api:                    # 一个节点 + 后台执行器；退�
                    az_start_deg=-30, az_end_deg=30,
                    on_camera_ready=lambda: print('开始录像'))       # 到达起拍点时回调
     arm.jog_cartesian(vx=0.05, duration_sec=1.0)                   # 末端速度点动（自动切模式）
+    api.move_single_joint(2, 0.1, relative=True)                   # 单关节：只动 J2（编号 1-6）
+    api.move_single_joint(4, 0.26)                                 # J4=云台 pan，自动路由
     if api.gimbal:                                                 # 云台直连（可选）
         api.gimbal.rotate_to_deg(pan_deg=20, tilt_deg=-10)
     arm.move_to_stowed()
@@ -134,6 +139,8 @@ Python 里 `execute_plan(api, steps)`，命令行 `plan 文件`。
 | `pose` | `x y z roll pitch yaw, speed, return_to_start` | `move_to_pose` |
 | `move_rel` | `dx dy dz droll dpitch dyaw, speed` | `move_relative` |
 | `joint` | `j1 j2 j3, speed, relative, duration_sec` | `move_to_joint` |
+| `joint_one` | `index(1-6) value, speed, relative, duration_sec` | `ArmApi.move_single_joint`（1-3 臂 / 4-6 云台） |
+| `jog_joint_one` | `index(1-6) velocity, duration_sec, auto_mode` | `ArmApi.jog_single_joint` |
 | `dolly` / `truck` / `crane` | `distance_m, speed, return_to_start` | 同名方法 |
 | `linear` | `start{...} end{...}` 或 `dx dy dz …`（从当前位姿出发） | `shot_linear / shot_linear_from_current` |
 | `arc` | `center[3] radius_m az_start_deg az_end_deg elevation_deg` | `arc_around` |
@@ -318,6 +325,8 @@ $R llm-step "推近花瓶" --llm openai --image-topic /camera/image_raw --subjec
 | `get_control_mode` | `/robot_arm/control_mode` | `ControlMode` topic（latched） |
 | `move_to_stowed/observe/pose`, `move_relative` | `/robot_arm/move_to_pose` | `ArmMoveToPose` action |
 | `move_to_joint` | `/robot_arm/move_to_joint` | `ArmMoveToJoint` action |
+| `ArmApi.move_single_joint(1-3)` / `jog_single_joint(1-3)` | 同上 / `/robot_arm/cmd/joint_velocity` | 补齐另两轴后转发 |
+| `ArmApi.move_single_joint(4-6)` / `jog_single_joint(4-6)` | `/robot_gimbal_v2/rotate_to_angle` / `cmd_vel` | 路由到云台，其余轴 NaN=不动 |
 | `shot_linear*`, `dolly/truck/crane`, `shot_orbit`, `arc_around` | `/robot_arm/trajectory_shot` | `ArmTrajectoryShot` action |
 | `track_target_start/stop` | `/robot_arm/track_target` | `ArmTrackTarget` action |
 | `publish_cartesian_velocity`, `jog_cartesian` | `/robot_arm/follow_command` | `ArmFollowCommand` topic |

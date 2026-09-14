@@ -79,6 +79,8 @@
     move_to_pose(pose, speed, return_to_start, timeout_sec)   绝对末端位姿（拍摄位）
     move_relative(dx, dy, dz, droll, dpitch, dyaw, speed)     相对当前末端位姿
     move_to_joint(j1, j2, j3, speed, relative, duration_sec)  关节空间点到点（不过 IK）
+    move_single_joint(index, value, speed, relative, duration_sec)  只动 J1-3 中的一个，
+                                                                    另两轴自动补齐（不动）
   运镜（action，阻塞到结束）：
     shot_linear(start, end, speed, return_to_start, on_camera_ready)   直线运镜（两端绝对位姿）
     shot_linear_from_current(dx, dy, dz, droll, dpitch, dyaw, ...)     从当前位姿出发的直线运镜
@@ -94,6 +96,7 @@
     publish_joint_velocity(v1, v2, v3)                            单帧 J1-3 角速度
     jog_cartesian(..., duration_sec, auto_mode)   按时长持续发末端速度，结束补 0 帧
     jog_joint(v1, v2, v3, duration_sec, auto_mode) 按时长持续发关节速度，结束补 0 帧
+    jog_single_joint(index, velocity, duration_sec, auto_mode)  只点动 J1-3 中的一个
   内部：
     _move_to_pose_goal(...) / _run_shot(...) / _current_pose_or_zero()
     _on_status / _on_joint_states / _on_control_mode   订阅回调（缓存状态）
@@ -111,6 +114,8 @@
 
 【ArmApi —— 门面】
     ArmApi(node_name, dry_run, print_cli, with_gimbal)
+    move_single_joint(index, value, ...)   ★J1-J6 统一按编号单关节控制（1-3 臂 / 4-6 云台）
+    jog_single_joint(index, velocity, ...) ★J1-J6 统一按编号单关节点动
     shutdown() / __enter__ / __exit__
 
 【运镜步骤表】
@@ -175,6 +180,9 @@ ARM_SRV_HOMING = '/robot_arm/homing'
 ARM_SRV_RESET_ERROR = '/robot_arm/reset_error'
 ARM_SRV_SWITCH_MODE = '/robot_arm/switch_control_mode'
 ARM_JOINT_NAMES = ('Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6')
+ARM_ONLY_JOINT_COUNT = 3        # 前 3 个是臂（CANopen），后 3 个是云台（串口，另一台机器）
+# 单关节编号 → 云台轴名：J4-6 归云台直连，J1-3 归臂 Commander（见 ArmApi.move_single_joint）
+GIMBAL_JOINT_AXIS = {4: 'pan', 5: 'roll', 6: 'tilt'}
 
 # 云台 V2：robot_gimbal_node_v2/src/robot_gimbal_node.cpp（注意都带 _v2，V1 名字已废）
 GIMBAL_TOPIC_CMD = '/robot_gimbal_v2/gimbal_cmd'
@@ -1210,7 +1218,62 @@ class ArmCommanderClient(_RosClientBase):
             self.exit_velocity_mode()
         return CallResult(True, f'jog {duration_sec:.2f}s')
 
+    # ── 单关节便捷封装 ──────────────────────────────────────────────────────
+    def move_single_joint(self, index: int, value: float, speed: Any = 'normal',
+                          relative: bool = False, duration_sec: float = 0.0,
+                          timeout_sec: float = DEFAULT_ACTION_TIMEOUT_SEC) -> CallResult:
+        """@brief 只动臂的某一个关节（J1-3），另外两轴保持不动。
+
+        接口层 `ArmMoveToJoint` 要求一次给齐 3 个角（个数不对直接 invalid_goal），本方法替调用方补齐：
+        relative=True 时另两轴填 0（增量 0 = 不动）；relative=False 时从 /joint_states 读当前角填回去。
+        @param index        关节编号 1 / 2 / 3
+        @param value        目标角 rad（relative=True 时为增量）
+        @param speed        档位 slow / normal / fast
+        @param relative     True = 相对当前关节角
+        @param duration_sec >0 直接指定运动时长（覆盖档位）
+        @param timeout_sec  超时
+        @return CallResult
+        @throws ValueError index 不在 1-3
+        """
+        if index not in (1, 2, 3):
+            raise ValueError(f'臂关节编号必须是 1/2/3，收到 {index}；'
+                             'J4-6 是云台，用 ArmApi.move_single_joint 按编号路由')
+        targets = [0.0, 0.0, 0.0] if relative else self._current_arm_joints_or_zero()
+        targets[index - 1] = float(value)
+        return self.move_to_joint(targets[0], targets[1], targets[2], speed, relative,
+                                  duration_sec, timeout_sec)
+
+    def jog_single_joint(self, index: int, velocity: float, duration_sec: float = 1.0,
+                         auto_mode: bool = True,
+                         rate_hz: float = VELOCITY_STREAM_RATE_HZ) -> CallResult:
+        """@brief 只让臂的某一个关节（J1-3）以给定角速度点动，另外两轴速度填 0。
+        @param index        关节编号 1 / 2 / 3
+        @param velocity     角速度 rad/s（逐轴限幅 max_joint_speed，默认 1.0）
+        @param duration_sec 持续时长，结束自动补一帧全 0
+        @param auto_mode    True = 自动切 JOINT_VELOCITY，结束后切回 TRAJECTORY
+        @param rate_hz      发布频率
+        @return CallResult
+        @throws ValueError index 不在 1-3
+        """
+        if index not in (1, 2, 3):
+            raise ValueError(f'臂关节编号必须是 1/2/3，收到 {index}；'
+                             'J4-6 是云台，用 ArmApi.jog_single_joint 按编号路由')
+        vel = [0.0, 0.0, 0.0]
+        vel[index - 1] = float(velocity)
+        return self.jog_joint(vel[0], vel[1], vel[2], duration_sec, auto_mode, rate_hz)
+
     # ── 内部 ────────────────────────────────────────────────────────────────
+    def _current_arm_joints_or_zero(self) -> List[float]:
+        """@brief 取当前臂 J1-3 关节角；没收到 /joint_states 时（如 dry-run）退化为全 0 并告警。
+        @return [J1, J2, J3] rad
+        """
+        joints = self.get_joints()
+        out = [joints.get(n) for n in ARM_JOINT_NAMES[:ARM_ONLY_JOINT_COUNT]]
+        if any(v is None for v in out):
+            self._log.warning('尚未收到 /joint_states，绝对单关节运动以 0 为基准（仅 dry-run 可接受）')
+            return [0.0, 0.0, 0.0]
+        return [float(v) for v in out]
+
     def _current_pose_or_zero(self) -> ArmPose:
         """@brief 取当前末端位姿；没收到状态时（如 dry-run）退化为零位姿并告警。
         @return ArmPose
@@ -1469,6 +1532,62 @@ class ArmApi:
                                              name='robot_arm_api_spin')
         self._spin_thread.start()
 
+    # ── J1-J6 统一单关节控制（按编号路由到臂 / 云台）──────────────────────────
+    def move_single_joint(self, index: int, value: float, speed: Any = 'normal',
+                          relative: bool = False, duration_sec: float = 0.0,
+                          timeout_sec: Optional[float] = None) -> CallResult:
+        """@brief 按编号单独控制一个关节：J1-3 走臂 Commander，J4-6 走云台直连。
+
+        单位统一 **rad**（云台那半的 GimbalV2Client 也是 rad；要度制用 gimbal.rotate_to_deg）。
+        J4-6 天然支持单轴（其余轴传 None = 不动）；J1-3 由 ArmCommanderClient 替你补齐另两轴。
+        @param index        关节编号 1-6（4=pan/Joint4，5=roll/Joint5，6=tilt/Joint6）
+        @param value        目标角 rad（relative=True 时为增量）
+        @param speed        档位，仅 J1-3 有效（云台由板端伺服自行决定速度）
+        @param relative     True = 相对当前角；J4-6 的当前角取云台回读
+        @param duration_sec >0 直接指定运动时长，仅 J1-3 有效
+        @param timeout_sec  超时；None = 各自默认（J1-3 用 action 默认，J4-6 用板端 5s）
+        @return CallResult
+        @throws ValueError index 不在 1-6
+        """
+        if index in (1, 2, 3):
+            return self.arm.move_single_joint(
+                index, value, speed, relative, duration_sec,
+                DEFAULT_ACTION_TIMEOUT_SEC if timeout_sec is None else timeout_sec)
+        axis = GIMBAL_JOINT_AXIS.get(index)
+        if axis is None:
+            raise ValueError(f'关节编号必须是 1-6，收到 {index}')
+        if self.gimbal is None:
+            return CallResult(False, f'J{index} 属云台，但云台直连接口不可用'
+                                     '（robot_gimbal_interfaces_v2 未编译）')
+        target = float(value)
+        if relative:
+            cur = self.gimbal.get_angles()[index - 4]
+            if cur is None:
+                return CallResult(False, f'未收到云台回读，J{index} 无法做相对运动')
+            target += cur
+        return self.gimbal.rotate_to(timeout_sec=5.0 if timeout_sec is None else timeout_sec,
+                                     **{axis: target})
+
+    def jog_single_joint(self, index: int, velocity: float, duration_sec: float = 1.0,
+                         auto_mode: bool = True) -> CallResult:
+        """@brief 按编号单独点动一个关节：J1-3 走臂速度流，J4-6 走云台 cmd_vel。
+        @param index        关节编号 1-6
+        @param velocity     角速度 rad/s
+        @param duration_sec 持续时长，结束自动补一帧全 0
+        @param auto_mode    仅 J1-3：自动切 JOINT_VELOCITY 再切回（云台没有这道模式闸）
+        @return CallResult
+        @throws ValueError index 不在 1-6
+        """
+        if index in (1, 2, 3):
+            return self.arm.jog_single_joint(index, velocity, duration_sec, auto_mode)
+        axis = GIMBAL_JOINT_AXIS.get(index)
+        if axis is None:
+            raise ValueError(f'关节编号必须是 1-6，收到 {index}')
+        if self.gimbal is None:
+            return CallResult(False, f'J{index} 属云台，但云台直连接口不可用'
+                                     '（robot_gimbal_interfaces_v2 未编译）')
+        return self.gimbal.jog(duration_sec=duration_sec, **{f'{axis}_vel': float(velocity)})
+
     def shutdown(self) -> None:
         """@brief 停执行器、销毁节点；若 rclpy 是本对象初始化的则一并 shutdown。"""
         self._executor.shutdown(timeout_sec=1.0)
@@ -1511,7 +1630,7 @@ def run_plan_step(api: ArmApi, step: Dict[str, Any]) -> CallResult:
     op 一览：
       机械臂  enable / disable / homing / reset_error / stop / mode / stow / observe / pose /
               move_rel / joint / dolly / truck / crane / linear / orbit / arc /
-              jog / jog_joint / track_start / track_stop
+              jog / jog_joint / joint_one / jog_joint_one / track_start / track_stop
       云台    gimbal_rotate（度）/ gimbal_rotate_rad / gimbal_jog / gimbal_freeze / gimbal_go_zero /
               gimbal_start / gimbal_stop / gimbal_gyro_calib / gimbal_forward_enable
       其他    wait / wait_camera_ready
@@ -1553,6 +1672,10 @@ def run_plan_step(api: ArmApi, step: Dict[str, Any]) -> CallResult:
     if op == 'joint':
         return arm.move_to_joint(p['j1'], p['j2'], p['j3'], speed, bool(p.get('relative', False)),
                                  float(p.get('duration_sec', 0.0)))
+    if op == 'joint_one':
+        return api.move_single_joint(int(p['index']), float(p['value']), speed,
+                                     bool(p.get('relative', False)),
+                                     float(p.get('duration_sec', 0.0)))
     if op in ('dolly', 'truck', 'crane'):
         return getattr(arm, op)(float(p['distance_m']), speed, rts)
     if op == 'linear':
@@ -1579,6 +1702,10 @@ def run_plan_step(api: ArmApi, step: Dict[str, Any]) -> CallResult:
     if op == 'jog_joint':
         return arm.jog_joint(p.get('v1', 0.0), p.get('v2', 0.0), p.get('v3', 0.0),
                              float(p.get('duration_sec', 1.0)), bool(p.get('auto_mode', True)))
+    if op == 'jog_joint_one':
+        return api.jog_single_joint(int(p['index']), float(p['velocity']),
+                                    float(p.get('duration_sec', 1.0)),
+                                    bool(p.get('auto_mode', True)))
     if op == 'track_start':
         return arm.track_target_start(p.get('desired_depth_m', 0.0), p.get('desired_x', 0.0),
                                       p.get('desired_y', 0.0),

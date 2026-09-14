@@ -26,6 +26,9 @@ JSON 步骤表的 op / 参数名完全一致。
   ros2 run robot_arm_api arm_commander_demo.py pose 0.25 0.0 0.65 0 0 0 --speed normal
   ros2 run robot_arm_api arm_commander_demo.py dolly 0.10            # 推镜 10cm（base_link +x）
   ros2 run robot_arm_api arm_commander_demo.py orbit 0.6 0.0 0.7 -30 30 --radius 0.4
+  ros2 run robot_arm_api arm_commander_demo.py joint-one 2 0.1 --relative  # 只动 J2，转 +0.1 rad
+  ros2 run robot_arm_api arm_commander_demo.py joint-one 4 0.26            # 只动 J4（云台 pan），rad
+  ros2 run robot_arm_api arm_commander_demo.py jog-joint-one 1 0.2 --duration 1.0
   ros2 run robot_arm_api arm_commander_demo.py gimbal-rotate 20 0 -10      # 云台 pan/roll/tilt（度）
   ros2 run robot_arm_api arm_commander_demo.py plan shot_plan.json         # 执行 JSON 运镜步骤表
   ros2 run robot_arm_api arm_commander_demo.py demo                        # 小幅度全流程演示
@@ -188,6 +191,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     sp.add_argument('--relative', action='store_true')
     sp.add_argument('--duration-sec', dest='duration_sec', type=float, default=0.0)
     add_speed(sp, rts=False)
+    sp = add('joint-one', '单关节点到点：编号 1-6（4-6 走云台）+ 目标角 rad')
+    sp.add_argument('index', type=int, help='关节编号 1-6（4=pan/J4, 5=roll/J5, 6=tilt/J6）')
+    sp.add_argument('value', type=float, help='目标角 rad（--relative 时为增量）')
+    sp.add_argument('--relative', action='store_true')
+    sp.add_argument('--duration-sec', dest='duration_sec', type=float, default=0.0)
+    add_speed(sp, rts=False)
+    sp = add('jog-joint-one', '单关节速度点动：编号 1-6 + 角速度 rad/s [--duration]')
+    sp.add_argument('index', type=int, help='关节编号 1-6')
+    sp.add_argument('velocity', type=float, help='角速度 rad/s')
+    sp.add_argument('--duration', dest='duration_sec', type=float, default=1.0)
     for name, text in (('dolly', '推拉：+x 米'), ('truck', '横移：+y（左）米'),
                        ('crane', '升降：+z 米')):
         sp = add(name, text)
@@ -422,9 +435,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if args.cmd == 'homing':
                 step.setdefault('timeout_sec', DEFAULT_HOMING_TIMEOUT_SEC)
             needs_arm = not step['op'].startswith('gimbal_')
+            # J4-6 的单关节命令实际路由到云台，不必等臂 Commander 上线
+            if step['op'] in ('joint_one', 'jog_joint_one') and int(step.get('index', 1)) >= 4:
+                needs_arm = False
             if needs_arm and not api.arm.wait_ready():   # dry-run 下只是顺带等 1.5s 状态，恒为 True
                 return 2
-            result = run_plan_step(api, step)
+            try:
+                result = run_plan_step(api, step)
+            except (KeyError, ValueError, TypeError) as exc:   # 参数不合法 → 人话，不吐 traceback
+                log.error(f'{args.cmd}: 参数错误 — {exc}')
+                return 1
             if result:
                 log.info(f'{args.cmd}: {result}')
             else:
