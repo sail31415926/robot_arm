@@ -58,14 +58,14 @@
 
   ```bash
   # ① 装 commit-msg 钩子（每个新克隆仓库一次；已装过跳过）
-  gitdir=$(git rev-parse --git-dir); scp -p -P 29418 zoulongyou@192.168.16.75:hooks/commit-msg ${gitdir}/hooks/
+  gitdir=$(git rev-parse --git-dir); scp -p -P 29418 <user>@<gerrit-host>:hooks/commit-msg ${gitdir}/hooks/
   # ② 已有提交漏了 Change-Id 时补（钩子装好后 amend 会自动加）
   git commit --amend --no-edit
   # ③ 推送走 Gerrit 评审流（不是直推 master）
   git push origin HEAD:refs/for/master
   ```
 
-  离线时钩子也可从兄弟仓库复制：`cp ../robot_arm/.git/hooks/commit-msg <目标仓库>/.git/hooks/`。Gerrit 地址 `ssh://<user>@192.168.16.75:29418/E7009/<repo>`。
+  离线时钩子也可从兄弟仓库复制：`cp ../robot_arm/.git/hooks/commit-msg <目标仓库>/.git/hooks/`。Gerrit 地址 `ssh://<user>@<gerrit-host>:29418/E7009/<repo>`。
 - **推送前先同步远端**：`git fetch origin` 后若远端有新提交，`git rebase origin/master` 再推，冲突时注意语义级冲突（别只看文本——曾发生"我方废弃的功能远端正在用"的情况，要看对方代码意图再整合）。
 - **提交范围要干净**：只提交本次工作相关文件；与任务无关的脏文件（他人的 .gitignore 改动、未跟踪目录）留给对应负责人。大二进制（如 26MB 的 `RTB.mltbx` 第三方安装包）不进 git，加 `.gitignore` 并注明获取方式。
 - 提交/推送由用户明确要求时才做，不要顺手提交。
