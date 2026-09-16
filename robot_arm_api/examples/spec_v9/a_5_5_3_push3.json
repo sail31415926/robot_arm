@@ -1,0 +1,15 @@
+{
+  "type": "static",
+  "waypoints": [
+    { "position": [0.20, 0.00, 1.20], "look_at": [1.10, 0.00, 0.60] },
+    { "position": [0.50, 0.15, 1.00], "look_at": [1.10, 0.00, 0.60] },
+    { "position": [0.75, 0.15, 0.80], "look_at": [1.10, 0.00, 0.60], "hold": 1.0 },
+    { "position": [0.90, 0.00, 0.70], "look_at": [1.10, 0.00, 0.60], "hold": 3.0 }
+  ],
+  "segments": [
+    { "path": "spline", "law": "ease_in",  "duration": 5.0 },
+    { "path": "spline", "law": "constant", "duration": 4.0 },
+    { "path": "line",   "law": "ease_out", "speed": 0.06 }
+  ],
+  "tolerance": { "position": 0.02, "aim": 0.02, "roll": 0.02 }
+}

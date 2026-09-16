@@ -1,0 +1,8 @@
+{
+  "type": "static",
+  "waypoints": [
+    { "position": [0.35, 0.45, 0.85], "look_at": [1.10, 0.00, 0.60], "hold": 10.0 }
+  ],
+  "segments": [],
+  "tolerance": { "position": 0.02, "aim": 0.02, "roll": 0.02 }
+}

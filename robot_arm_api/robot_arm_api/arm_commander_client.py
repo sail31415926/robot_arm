@@ -822,7 +822,8 @@ class ArmCommanderClient(_RosClientBase):
 
     # ── 位置类 action ───────────────────────────────────────────────────────
     def _move_to_pose_goal(self, pose_state: int, pose: Optional[ArmPose], speed: Any,
-                           return_to_start: bool, timeout_sec: float) -> CallResult:
+                           return_to_start: bool, timeout_sec: float,
+                           feedback_cb: Optional[Callable[[Any], None]] = None) -> CallResult:
         """@brief ArmMoveToPose 的公共发送逻辑。
         @param pose_state      POSE_STATE_STOWED / OBSERVE / SHOOTING
         @param pose            SHOOTING 时的绝对位姿；其余可 None
@@ -837,7 +838,7 @@ class ArmCommanderClient(_RosClientBase):
         goal.return_to_start = bool(return_to_start)
         if pose is not None:
             goal.target_pose = pose
-        return self._send_goal(self._act_move_to_pose, goal, timeout_sec)
+        return self._send_goal(self._act_move_to_pose, goal, timeout_sec, feedback_cb)
 
     def move_to_stowed(self, speed: Any = 'normal', return_to_start: bool = False,
                        timeout_sec: float = DEFAULT_ACTION_TIMEOUT_SEC) -> CallResult:
@@ -862,7 +863,8 @@ class ArmCommanderClient(_RosClientBase):
                                        return_to_start, timeout_sec)
 
     def move_to_pose(self, pose: ArmPose, speed: Any = 'normal', return_to_start: bool = False,
-                     timeout_sec: float = DEFAULT_ACTION_TIMEOUT_SEC) -> CallResult:
+                     timeout_sec: float = DEFAULT_ACTION_TIMEOUT_SEC,
+                     feedback_cb: Optional[Callable[[Any], None]] = None) -> CallResult:
         """@brief 到绝对末端位姿（拍摄位，IK 求解后 6 轴一起动）。
 
         IK 无解时 exit_reason='unreachable'，Commander 回 IDLE 不进 ERROR。
@@ -870,10 +872,11 @@ class ArmCommanderClient(_RosClientBase):
         @param speed           slow / normal / fast（末端线速度约 0.02 / 0.05 / 0.10 m/s）
         @param return_to_start 到位后自动原路返回
         @param timeout_sec     超时
+        @param feedback_cb     action 反馈回调 f(feedback)（progress_percent / current_pose）；None = 每秒打印进度
         @return CallResult
         """
         return self._move_to_pose_goal(ArmMoveToPose.Goal.POSE_STATE_SHOOTING, pose, speed,
-                                       return_to_start, timeout_sec)
+                                       return_to_start, timeout_sec, feedback_cb)
 
     def move_relative(self, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0,
                       droll: float = 0.0, dpitch: float = 0.0, dyaw: float = 0.0,
@@ -912,11 +915,13 @@ class ArmCommanderClient(_RosClientBase):
 
     # ── 运镜 action ─────────────────────────────────────────────────────────
     def _run_shot(self, goal: Any, timeout_sec: float,
-                  on_camera_ready: Optional[Callable[[], None]]) -> CallResult:
+                  on_camera_ready: Optional[Callable[[], None]],
+                  feedback_cb: Optional[Callable[[Any], None]] = None) -> CallResult:
         """@brief 发送 ArmTrajectoryShot，并可在 camera_ready 上升沿触发回调（开录像）。
         @param goal            ArmTrajectoryShot.Goal
         @param timeout_sec     超时
         @param on_camera_ready 到达起拍点时调用一次（None = 不监听）
+        @param feedback_cb     action 反馈回调 f(feedback)；None = 每秒打印进度
         @return CallResult
         """
         stop_event = threading.Event()
@@ -935,7 +940,7 @@ class ArmCommanderClient(_RosClientBase):
             watcher = threading.Thread(target=_watch, daemon=True, name='camera_ready_watch')
             watcher.start()
         try:
-            return self._send_goal(self._act_shot, goal, timeout_sec)
+            return self._send_goal(self._act_shot, goal, timeout_sec, feedback_cb)
         finally:
             stop_event.set()
             if watcher is not None:
@@ -943,13 +948,15 @@ class ArmCommanderClient(_RosClientBase):
 
     def shot_linear(self, start: ArmPose, end: ArmPose, speed: Any = 'normal',
                     return_to_start: bool = False, timeout_sec: float = DEFAULT_SHOT_TIMEOUT_SEC,
-                    on_camera_ready: Optional[Callable[[], None]] = None) -> CallResult:
+                    on_camera_ready: Optional[Callable[[], None]] = None,
+                    feedback_cb: Optional[Callable[[Any], None]] = None) -> CallResult:
         """@brief 直线运镜：先 PTP 到 start，起点停顿 1s（camera_ready=true），再直线到 end。
         @param start,end       两端绝对末端位姿（base_link 系）
         @param speed           档位
         @param return_to_start 结束后原路返回 start
         @param timeout_sec     超时
         @param on_camera_ready 到达起拍点的回调（开始录像）
+        @param feedback_cb     action 反馈回调 f(feedback)（progress_percent / current_pose …）
         @return CallResult
         """
         goal = ArmTrajectoryShot.Goal()
@@ -958,7 +965,7 @@ class ArmCommanderClient(_RosClientBase):
         goal.return_to_start = bool(return_to_start)
         goal.linear_start_pose = start
         goal.linear_end_pose = end
-        return self._run_shot(goal, timeout_sec, on_camera_ready)
+        return self._run_shot(goal, timeout_sec, on_camera_ready, feedback_cb)
 
     def shot_linear_from_current(self, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0,
                                  droll: float = 0.0, dpitch: float = 0.0, dyaw: float = 0.0,
@@ -1031,7 +1038,8 @@ class ArmCommanderClient(_RosClientBase):
                    el_start_deg: float, el_end_deg: float, r_start_m: float, r_end_m: float,
                    speed: Any = 'normal', return_to_start: bool = False,
                    timeout_sec: float = DEFAULT_SHOT_TIMEOUT_SEC,
-                   on_camera_ready: Optional[Callable[[], None]] = None) -> CallResult:
+                   on_camera_ready: Optional[Callable[[], None]] = None,
+                   feedback_cb: Optional[Callable[[Any], None]] = None) -> CallResult:
         """@brief 球面环绕运镜：以 center 为球心，相机始终朝向球心，从起始球坐标运动到终止球坐标。
 
         球坐标约定（ArmTrajectoryShot.action）：方位角 0° = 近侧，正值顺时针；俯仰角正值向上，
@@ -1047,6 +1055,7 @@ class ArmCommanderClient(_RosClientBase):
         @param return_to_start 结束后原路返回起始球坐标
         @param timeout_sec     超时
         @param on_camera_ready 到达起拍点回调
+        @param feedback_cb     action 反馈回调 f(feedback)（progress_percent / current_azimuth_deg …）
         @return CallResult
         """
         goal = ArmTrajectoryShot.Goal()
@@ -1061,7 +1070,7 @@ class ArmCommanderClient(_RosClientBase):
         goal.elevation_end_deg = float(el_end_deg)
         goal.radius_start_m = float(r_start_m)
         goal.radius_end_m = float(r_end_m)
-        return self._run_shot(goal, timeout_sec, on_camera_ready)
+        return self._run_shot(goal, timeout_sec, on_camera_ready, feedback_cb)
 
     def arc_around(self, center: Sequence[float], radius_m: float, az_start_deg: float,
                    az_end_deg: float, elevation_deg: float = 0.0, speed: Any = 'normal',

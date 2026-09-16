@@ -32,6 +32,13 @@ JSON 步骤表的 op / 参数名完全一致。
   ros2 run robot_arm_api arm_commander_demo.py gimbal-rotate 20 0 -10      # 云台 pan/roll/tilt（度）
   ros2 run robot_arm_api arm_commander_demo.py plan shot_plan.json         # 执行 JSON 运镜步骤表
   ros2 run robot_arm_api arm_commander_demo.py demo                        # 小幅度全流程演示
+《拍摄接口规范 v9》分镜 JSON（A 型 static / B 型 tracking，见 examples/spec_v9/）→ Commander goal：
+  ros2 run robot_arm_api arm_commander_demo.py shot-compile examples/spec_v9/a_5_5_2_orbit90.json   # 离线：校验 + 编译，不下发
+  ros2 run robot_arm_api arm_commander_demo.py shot shot.json --chassis 0 0 0 --dry-run          # 执行（先 dry-run 看等效指令）
+  ros2 run robot_arm_api arm_commander_demo.py shot llm_output.json --shot-index 0 --tf          # 大模型输出文件里取第 0 镜，世界系走 tf
+  ros2 run robot_arm_api arm_commander_demo.py shot b_shot.json --target-topic /subject_pose      # B 型：订阅目标话题取快照
+      # 反馈（规范第 9 章）发到 /robot_arm/shot_feedback（std_msgs/String JSON）；世界系 = odom，
+      # 不给 --chassis / --tf 时按"世界系 = 机械臂基座系"处理并告警
 离线工具（不下发、不需要 Commander 在跑；关节角缺省从 /joint_states 读，读不到可 --joints 给）：
   ros2 run robot_arm_api arm_commander_demo.py check shot_plan.json [--clip]   # 步骤表可达性预检
   ros2 run robot_arm_api arm_commander_demo.py headroom [--subject 0.8 0 0.7] [--schema]  # 余量盒子
@@ -53,8 +60,12 @@ JSON 步骤表的 op / 参数名完全一致。
   build_arg_parser()               构造 argparse：每个子命令的参数名与 run_plan_step 的 op 参数一致
   live_joints(timeout_sec)         起一个临时节点从 /joint_states 读 6 轴关节角（离线工具用）
   load_model(args)                 按 --urdf 或安装的描述包建 ArmModel
-  run_offline(args)                check / headroom / card / fit 四个离线子命令（不下发）
+  run_offline(args)                check / headroom / card / fit / shot-compile 离线子命令（不下发）
   run_llm_step(api, args)          llm-step：大模型单步运镜闭环（llm_shot_loop）
+  load_shot_json(path, index)      读规范分镜 JSON（单条 / 数组 / 大模型输出文件）
+  build_world_frame(args, node)    --chassis / --tf → WorldFrame（odom → 机械臂基座系）
+  run_shot_compile(args)           shot-compile：校验 + 编译，打印原语与告警
+  run_shot(api, args)              shot：规范分镜 → ShotExecutor 执行并回报
   main(argv)                       入口：解析参数 → ArmApi → 执行子命令 → 收尾（Ctrl-C 取消 goal 并急停）
 """
 
@@ -75,8 +86,13 @@ from robot_arm_api.llm_shot_loop import (FEEDBACK_TOPIC, ManualClient, OpenAICom
 from robot_arm_api.reach_check import (ArmModel, capability_card, check_plan, headroom,
                                        headroom_schema)
 from robot_arm_api.reach_fit import fit_reach_region
+from robot_arm_api.shot_compiler import CameraFrames, ShotCompiler, WorldFrame
+from robot_arm_api.shot_executor import (SHOT_FEEDBACK_TOPIC, ShotExecutor, lookup_world_frame,
+                                         make_shot_feedback_publisher, make_target_provider)
+from robot_arm_api.shot_spec import (SpecValidationError, TargetData, parse_shot, tracking_to_static,
+                                     validate_target_data)
 
-OFFLINE_CMDS = ('check', 'headroom', 'card', 'fit')   # 不建 ArmApi、不下发的子命令
+OFFLINE_CMDS = ('check', 'headroom', 'card', 'fit', 'shot-compile')   # 不建 ArmApi、不下发的子命令
 
 
 def print_status(api: ArmApi) -> None:
@@ -283,7 +299,177 @@ def build_arg_parser() -> argparse.ArgumentParser:
     sp.add_argument('--show-system', dest='show_system', action='store_true',
                     help='manual 模式下也打印 system 提示词')
     add_offline(sp)
+
+    def add_shot_common(sp: argparse.ArgumentParser) -> None:
+        """@brief shot / shot-compile 的公共参数：文件定位、世界系、校验参数。
+        @param sp 子解析器
+        """
+        sp.add_argument('file', help='规范分镜 JSON：单条分镜 / 分镜数组 / 大模型输出文件（取 cinematographer.shot_plans）')
+        sp.add_argument('--shot-index', dest='shot_index', type=int, default=0, help='数组 / 大模型输出文件里取第几镜')
+        sp.add_argument('--chassis', type=float, nargs=3, metavar=('X', 'Y', 'YAW'),
+                        help='底盘在 odom 系的位姿（m, m, rad）：世界系 → 臂基座系用它换算')
+        sp.add_argument('--arm-base-height', dest='arm_base_height', type=float, default=0.31,
+                        help='臂基座离地高（m），配合 --chassis，默认 0.31')
+        sp.add_argument('--lens', choices=['WIDE', 'TELE'], default='WIDE', help='本镜用的镜头（校验 uv 出画边界）')
+        sp.add_argument('--aspect', choices=['4:3', '16:9', '1:1', '9:16'], default='4:3', help='整片交付画幅')
+        sp.add_argument('--base-fps', dest='base_fps', type=float, default=None, help='基准帧率（校验 fps = 基准 × slowmo）')
+        sp.add_argument('--target-json', dest='target_json', default=None,
+                        help='B 型：直接给一帧目标数据 JSON（{"stamp":…,"id":…,"position":[x,y,z]}），不订话题')
+        sp.add_argument('--tolerance-budget', dest='tolerance_budget', type=float, default=0.5,
+                        help='编译期允许吃掉的容差比例，默认 0.5')
+
+    sp = add('shot-compile', '离线：校验《拍摄接口规范 v9》分镜 JSON 并编译成 Commander 原语（不下发）', op='shot_compile')
+    add_shot_common(sp)
+    sp.add_argument('--json', action='store_true', help='额外输出编译结果 JSON（步骤表 / 告警）')
+    add_offline(sp)
+    sp = add('shot', '执行《拍摄接口规范 v9》分镜 JSON（会动臂，先 --dry-run）', op='shot')
+    add_shot_common(sp)
+    sp.add_argument('--tf', action='store_true', help='世界系用 tf 查 odom → arm_base_link（需要 TF 在发）')
+    sp.add_argument('--world-frame', dest='world_frame', default='odom')
+    sp.add_argument('--arm-frame', dest='arm_frame', default='arm_base_link')
+    sp.add_argument('--target-topic', dest='target_topic', default=None,
+                    help='B 型目标话题；缺省用分镜里的 target 字段')
+    sp.add_argument('--target-msg', dest='target_msg', choices=['json', 'point'], default='json',
+                    help='目标话题类型：json = std_msgs/String（6.2.4 口径）；point = geometry_msgs/PointStamped')
+    sp.add_argument('--target-wait', dest='target_wait', type=float, default=2.0, help='等第一帧目标数据的秒数')
+    sp.add_argument('--feedback-topic', dest='feedback_topic', default=SHOT_FEEDBACK_TOPIC,
+                    help=f'第 9 章反馈话题（std_msgs/String JSON），默认 {SHOT_FEEDBACK_TOPIC}；none = 不发')
+    add_offline(sp)
     return parser
+
+
+def load_shot_json(path: str, index: int = 0) -> Dict[str, Any]:
+    """@brief 读规范分镜 JSON：单条分镜（dict 带 type）/ 分镜数组 / 大模型输出文件
+           （agent_outputs.cinematographer.shot_plans 或顶层 shot_plans）。
+    @param path  文件
+    @param index 数组里取第几镜
+    @return 一条分镜 dict
+    @throws ValueError 文件结构不认识
+    """
+    with open(path, 'r', encoding='utf-8') as fp:
+        data = json.load(fp)
+    if isinstance(data, dict) and 'type' in data:
+        return data
+    if isinstance(data, dict):
+        plans = data.get('shot_plans')
+        if plans is None:
+            plans = (data.get('agent_outputs', {}).get('cinematographer', {}) or {}).get('shot_plans')
+        if plans is None:
+            raise ValueError('JSON 里既没有 type 字段也没有 shot_plans，不是规范分镜')
+        data = plans
+    if isinstance(data, list):
+        if not 0 <= index < len(data):
+            raise ValueError(f'--shot-index {index} 超出范围（共 {len(data)} 镜）')
+        return data[index]
+    raise ValueError('JSON 顶层必须是分镜对象或数组')
+
+
+def build_world_frame(args: argparse.Namespace, node: Any = None) -> WorldFrame:
+    """@brief 由 --tf / --chassis 得到 odom → 机械臂基座系；都没给就按单位阵并提醒。
+    @param args 参数
+    @param node rclpy 节点（--tf 时需要，且必须在 spin）
+    @return WorldFrame
+    """
+    if getattr(args, 'tf', False):
+        if node is None:
+            raise ValueError('--tf 需要 ROS 节点')
+        return lookup_world_frame(node, args.world_frame, args.arm_frame)
+    if args.chassis is not None:
+        return WorldFrame.from_chassis(args.chassis[0], args.chassis[1], args.chassis[2], args.arm_base_height)
+    print('⚠ 未给 --chassis / --tf：按"世界系 = 机械臂基座系"处理（分镜坐标直接当臂系坐标）', file=sys.stderr)
+    return WorldFrame.identity()
+
+
+def _static_target(args: argparse.Namespace) -> Optional[Dict[str, Any]]:
+    """@brief --target-json → dict（stamp 缺省补当前时间）。"""
+    if not args.target_json:
+        return None
+    data = json.loads(args.target_json)
+    data.setdefault('stamp', time.time())
+    data.setdefault('id', 'cli')
+    return data
+
+
+def run_shot_compile(args: argparse.Namespace) -> int:
+    """@brief shot-compile：校验 + 编译，打印原语序列 / 告警 / 名义时长；B 型需 --target-json 给一帧目标。
+    @param args 参数
+    @return 0 成功 / 1 校验或编译失败
+    """
+    model = load_model(args)
+    shot = load_shot_json(args.file, args.shot_index)
+    try:
+        spec = parse_shot(shot, args.lens, args.aspect, args.base_fps)
+    except SpecValidationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    for warn in spec.warnings:
+        print(f'⚠ {warn}')
+    if spec.is_tracking:
+        target = _static_target(args)
+        if target is None:
+            print('B 型分镜离线编译需要 --target-json 给一帧目标数据', file=sys.stderr)
+            return 1
+        errs = validate_target_data(target, spec.position_ref)
+        if errs:
+            print('--target-json 不合 6.2.4 口径：' + '；'.join(str(e) for e in errs), file=sys.stderr)
+            return 1
+        spec = tracking_to_static(spec, TargetData.from_dict(target))
+        print('B 型已按给定目标快照展开为 A 型（开环）')
+    compiler = ShotCompiler(model, world=build_world_frame(args), frames=CameraFrames(),
+                            tolerance_budget=args.tolerance_budget)
+    try:
+        compiled = compiler.compile(spec, args.joints)
+    except SpecValidationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print(compiled.summary())
+    steps = compiled.plan_steps()
+    print(f'步骤表（{len(steps)} 条，可直接 `plan` 执行）：')
+    for step in steps:
+        print('  ' + json.dumps(step, ensure_ascii=False))
+    if args.json:
+        print(json.dumps({'plan_steps': steps, 'warnings': compiled.warnings, 'degradation': compiled.degradation,
+                          'nominal_total_sec': compiled.nominal_total_sec}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def run_shot(api: ArmApi, args: argparse.Namespace) -> int:
+    """@brief shot：规范分镜 → ShotExecutor 执行，反馈发话题，结束打印报告。
+    @param api  ArmApi
+    @param args 参数
+    @return 0 完成 / 1 失败或被拒 / 2 机械臂未就绪
+    """
+    log = api.node.get_logger()
+    model = load_model(args)
+    shot = load_shot_json(args.file, args.shot_index)
+    world = build_world_frame(args, api.node)
+    compiler = ShotCompiler(model, world=world, frames=CameraFrames(), tolerance_budget=args.tolerance_budget)
+    topic = None if str(args.feedback_topic).lower() == 'none' else args.feedback_topic
+    executor = ShotExecutor(api, compiler, feedback_publisher=make_shot_feedback_publisher(api.node, topic),
+                            on_camera_ready=lambda av: log.info(f'camera_ready：可以开录（av={av}）'),
+                            lens=args.lens, aspect=args.aspect, base_fps=args.base_fps)
+    static_target = _static_target(args)
+    if static_target is not None:
+        executor.target_provider = lambda: dict(static_target, stamp=time.time())
+    elif shot.get('type') == 'tracking':
+        topic_t = args.target_topic or shot.get('target')
+        provider = make_target_provider(api.node, topic_t, args.target_msg)
+        deadline = time.monotonic() + args.target_wait
+        while provider() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        executor.target_provider = provider
+    if not api.arm.dry_run and not api.arm.wait_ready():
+        return 2
+    report = executor.run(shot)
+    print('\n──────── 运镜报告 ────────')
+    print(report.user_line())
+    for warn in report.warnings:
+        print(f'⚠ {warn}')
+    for err in report.errors:
+        print(f'✗ [规则 {err["rule"]}] {err["field"]}: {err["message"]}')
+    if report.feedback:
+        print('最后一帧反馈: ' + json.dumps(report.feedback, ensure_ascii=False))
+    return 0 if report.ok else 1
 
 
 def load_model(args: argparse.Namespace) -> ArmModel:
@@ -350,6 +536,8 @@ def run_offline(args: argparse.Namespace) -> int:
     @param args 解析后的参数
     @return 退出码（0 成功 / 1 步骤表不可达 / 2 拿不到关节角）
     """
+    if args.cmd == 'shot-compile':
+        return run_shot_compile(args)
     model = load_model(args)
     joints = args.joints
     if joints is None and args.cmd != 'fit':
@@ -411,6 +599,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             exit_code = 0 if run_demo_sequence(api) else 1
         elif args.cmd == 'llm-step':
             exit_code = run_llm_step(api, args)
+        elif args.cmd == 'shot':
+            exit_code = run_shot(api, args)
         elif args.cmd == 'plan':
             with open(args.file, 'r', encoding='utf-8') as fp:
                 steps = json.load(fp)

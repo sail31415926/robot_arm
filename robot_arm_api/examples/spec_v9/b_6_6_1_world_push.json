@@ -1,0 +1,15 @@
+{
+  "type": "tracking",
+  "target": "/subject_pose",
+  "position_ref": "world",
+  "waypoints": [
+    { "position": [0.40, 0.60, 1.05], "uv": [0.0, -0.10] },
+    { "position": [0.40, 0.85, 1.05], "uv": [0.0, -0.10] },
+    { "position": [0.40, 1.10, 1.05], "uv": [0.0, -0.10], "hold": 3.0 }
+  ],
+  "segments": [
+    { "path": "line", "law": "ease_in",  "duration": 10.0 },
+    { "path": "line", "law": "ease_out", "duration": 10.0 }
+  ],
+  "tolerance": { "position": 0.03, "u": 0.03, "v": 0.03, "roll": 0.02 }
+}

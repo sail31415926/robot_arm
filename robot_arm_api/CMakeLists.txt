@@ -5,7 +5,9 @@ project(robot_arm_api)
 #   robot_arm_api/arm_commander_client.py  库：ArmCommanderClient / GimbalV2Client / ArmApi / execute_plan
 #                                          → 上层 `from robot_arm_api import ArmApi`
 #   robot_arm_api/arm_commander_demo.py    命令行 demo → `ros2 run robot_arm_api arm_commander_demo.py`
-#   examples/                              JSON 运镜步骤表示例
+#   robot_arm_api/shot_spec.py / shot_compiler.py / shot_executor.py
+#                                          《拍摄接口规范 v9》JSON → Commander goal 的适配层（解析校验 / 编译 / 执行）
+#   examples/                              JSON 运镜步骤表示例；examples/spec_v9/ 规范 5.5 / 6.6 的示例分镜
 # 只依赖接口包（robot_arm_interfaces 必需；robot_gimbal_interfaces_v2 可选），板上单独编译即可。
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
@@ -31,6 +33,12 @@ if(BUILD_TESTING)
     TIMEOUT 180)
   ament_add_pytest_test(test_reach_fit test/test_reach_fit.py
     TIMEOUT 180)
+  ament_add_pytest_test(test_shot_spec test/test_shot_spec.py
+    TIMEOUT 120)
+  ament_add_pytest_test(test_shot_compiler test/test_shot_compiler.py
+    TIMEOUT 300)
+  ament_add_pytest_test(test_shot_executor test/test_shot_executor.py
+    TIMEOUT 300)
 endif()
 
 ament_package()

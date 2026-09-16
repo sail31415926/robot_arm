@@ -12,12 +12,17 @@ robot_arm_api/
 │   ├── reach_check.py            ★ 可达性 / 余量盒子 / 步骤表预检 / 能力卡（纯 numpy，给大模型运镜决策用）
 │   ├── reach_fit.py              ★ 可达区多项式拟合：给大模型一条能自己代入验算的公式
 │   ├── llm_shot_loop.py          ★ 大模型单步运镜闭环：读关节角 → 余量 → 大模型出一步 → 校验/夹取 → 执行
-│   ├── arm_commander_demo.py     命令行 demo（子命令 = 库方法；plan = JSON 步骤表；check/headroom/card/llm-step）
+│   ├── shot_spec.py              ★ 《拍摄接口规范 v9》分镜 JSON：解析、第 8 章校验、A 型参考轨迹、B 型按目标快照展开
+│   ├── shot_compiler.py          ★ 规范分镜 → Commander 原语（LINEAR / ORBIT / PTP）：坐标系、光心↔法兰、容差内细分、档位量化、可达性
+│   ├── shot_executor.py          ★ 逐条下发 + 第 9 章反馈（phase / progress / error / in_tolerance / degradation / target_status）
+│   ├── arm_commander_demo.py     命令行 demo（子命令 = 库方法；plan = JSON 步骤表；shot / shot-compile = 规范分镜；check/headroom/card/llm-step）
 │   └── __init__.py               re-export（无 ROS 环境时只导出 reach_check 那一半）
 ├── test/                         pytest：test_reach_check（正解对拍 pinocchio、逆解往返、可达判定、余量、预检、能力卡）
 │                                        test_reach_fit（拟合保守性、覆盖率、公式文本）
 │                                        test_llm_shot_loop（提示词 / schema、夹取投影与降级、用户反馈、OpenAI 兼容请求）
+│                                        test_shot_spec / test_shot_compiler / test_shot_executor（规范校验规则、几何、编译、假臂执行与反馈）
 ├── examples/shot_plan_example.json   JSON 运镜步骤表示例
+├── examples/spec_v9/                 规范 5.5 / 6.6 的示例分镜（a_* A 型、b_* B 型）+ 一条臂系可达的 100° 圆弧
 ├── CMakeLists.txt / package.xml
 └── README.md
 ```
@@ -152,6 +157,55 @@ Python 里 `execute_plan(api, steps)`，命令行 `plan 文件`。
 | `gimbal_freeze` / `gimbal_go_zero` / `gimbal_start` / `gimbal_stop` / `gimbal_gyro_calib` | — | 同名方法 |
 | `gimbal_forward_enable` | `enable` | `set_forward_cmd_enable` |
 | `wait` / `wait_camera_ready` | `seconds` / `timeout_sec` | — |
+
+## 《拍摄接口规范 v9》分镜 JSON → Commander（`shot_spec` / `shot_compiler` / `shot_executor`）
+
+`~/eMeetWork_sail/摄影机器人规范/摄影机器人-拍摄接口规范-v9.md` 定义的层级 2 运镜 JSON（`type` + `waypoints` +
+`segments` + `tolerance` [+ `av`]），和上面的 op 步骤表是两套东西：规范里只有几何量（光心世界坐标、`look_at`、弧度、
+`duration`/`speed`），没有推拉摇移这类动作词。本包用三层把它接到现有 Commander 接口上，**不改 Commander**：
+
+```text
+规范 JSON ─▶ shot_spec.parse_shot ─▶ (B 型) tracking_to_static ─▶ shot_compiler.compile ─▶ shot_executor.run
+              第 8 章校验                 按目标快照展开成 A 型         → LINEAR / ORBIT / PTP      逐条 goal + 第 9 章反馈
+```
+
+```python
+from robot_arm_api import ArmApi, ArmModel, ShotCompiler, ShotExecutor, WorldFrame, make_shot_feedback_publisher
+
+model = ArmModel.from_share_files()
+world = WorldFrame.from_chassis(x=0.0, y=0.0, yaw=0.0, arm_base_height=0.31)   # odom → arm_base_link；或 lookup_world_frame(node)
+with ArmApi() as api:
+    api.arm.wait_ready(); api.arm.enable()
+    executor = ShotExecutor(api, ShotCompiler(model, world=world),
+                            feedback_publisher=make_shot_feedback_publisher(api.node),   # /robot_arm/shot_feedback
+                            on_camera_ready=lambda av: start_recording(av))              # av 组由相机模块消费
+    report = executor.run(shot_json)          # 阻塞到 done / 失败 / 取消
+    print(report.user_line(), report.exit_reason, report.warnings)
+```
+
+命令行：`shot-compile 文件`（离线校验 + 编译，打印原语与告警）、`shot 文件 [--chassis X Y YAW | --tf] [--dry-run]`
+（执行；B 型加 `--target-topic` 或 `--target-json`）。文件可以是单条分镜、分镜数组或大模型输出文件（`--shot-index` 选镜）。
+
+**编译规则**（对照规范章节）：
+
+| 规范 | 这里怎么做 |
+| --- | --- |
+| 4.1 世界系 odom、受控体相机光心 | `WorldFrame`（odom → arm_base_link）换到臂基座系；`CameraFrames` 用 URDF 里 gimbal_tool0 → camera_optical_frame 的固定变换（光轴 +Z = 法兰 +X，偏 4.4 cm）把光心位姿换成 Commander 的法兰 ArmPose |
+| 5.2 `look_at` + `roll` | `camera_rotation()`：右向量水平（roll=0 = 画面水平），roll 正 = 从相机背后看顺时针，与 Commander 的 `aim_quat`（roll 0）同一个旋转；正俯视时取世界 +X 为画面上方 |
+| 5.3.2–5.3.4 line / arc / spline | 每段先试"一条原语能否在 `tolerance × 0.5` 内复现参考轨迹"：直线 / 纯摇镜 → LINEAR；`look_at` 恒定的圆弧 → ORBIT（球心 = 法兰光轴射线的交点）；都不行按弧长细分成 N ≤ 8 条 LINEAR 弦。偏差按**法兰**插值再换回光心算，所以 4.4 cm 偏置的影响也算进去了 |
+| 5.3.5 `law` | Commander 每条原语都是 Ruckig 静止→静止 S 曲线（= `s_curve` / `ease_in_out`）；其余 law 告警；末段 `constant` / `ease_in` 按 4.1 标 `degradation: slowed` |
+| 5.3.6 `duration` / `speed` | 折成 slow / normal / fast（`arm_params.yaml speed_profiles`，位置 0.02/0.05/0.10 m/s、姿态 0.05/0.10/0.20 rad/s）中最接近的档；比 fast 还快 → `slowed`；比 slow 还慢 → 告警（会比要求的快） |
+| 5.3.7 段内插值 | `look_at` 点线性插值；纯摇镜按光轴**方向**在大圆上按角度插值（与规则 13 的"扫角 < 180° 才唯一"一致），roll 线性；大圆经过正上 / 正下方（画面上方向无定义）按规则 13 报错。Commander 对姿态做的是 slerp（两端俯仰相同时 = 绕竖轴的等俯角小圆），两者在带俯仰的大幅摇镜里会差几度，超出 aim 预算就细分成多条 LINEAR |
+| 5.4 / 6.5 `tolerance` | 编译期只允许吃一半（`tolerance_budget`），执行期 `error` / `in_tolerance` 按全额判 |
+| 6 B 型 | **没有闭环**：开始时读一帧 `target`（`make_target_provider` 订 std_msgs/String JSON 或 PointStamped），`tracking_to_static` 按 d/az/el/position + uv 展开成 A 型开环执行；段上附 `TrackInfo`，参考轨迹按 6.4.3：位置在目标球坐标 (d, az, el) 里插值（line 与 Commander ORBIT 同一几何，环绕 / 螺旋 / 整圈 Δaz=2π 都能编成一条 ORBIT；spline 按弧长归一化、只能细分），`uv` 段内线性、每一点光轴由目标 + uv(s) 定；段间复查 id（变 → `id_changed` 停）、`target_static` 按纵深 / 横向 / 竖向分轴复查位置（阈值 = 对应容差与 2 cm 感知噪声地板取大，动 → `moved` 停）、过期只告警；`time_scale` 恒 1.0 |
+| 8 校验 | 规则 1–24、29–35、37–40 在 `validate_shot`（21 需 `lens` / `aspect`，40 需 `base_fps`；35 只对**显式**写出的 SUBJECT_ANCHOR / TARGET 报错，缺省值由规则引擎按型填）；25 / 26 在编译期用 `check_pose` 沿每条原语的法兰路径采样；**28 只告警**（规范自己的例 6.6.3 就踩线，与规范维护方对齐后再定）；36 需要目标尺寸，不在本层 |
+| 9 反馈 | `ShotFeedback`：`phase`（segment / hold / done）、`hold_elapsed`、`segment_index`、`progress`（**由反馈里的 current_pose 在原语几何上投影得到**——Commander 的 `progress_percent` 在运镜段内是按 0.1×timeout 归一化的时间，只用来判断"还没开始动"：LINEAR ≤ 50、ORBIT ≤ 60；LINEAR 的转角大于弦长时按转角占比，免受纯摇镜短弦的位置噪声影响）、`error` / `in_tolerance`（A 型 position / aim / roll 三项；B 型按规范给 d / az / el / u / v / roll 六项或 position / u / v / roll 四项，相对锁定的目标算；hold 期相对臂所停的 waypoint）、`deviation_cause`（只会给 none / limit）、`degradation`；B 型多 `time_scale` / `target_status`。反馈回调与主线程共用一把锁，goal 结果返回后的迟到反馈按代号丢弃 |
+| `hold` | 本地睡眠，后面还有 goal 时扣掉 Commander 自带的 1 s 起点停顿（`posture.dwell_at_start_sec`），停顿期间仍报 `phase: hold`；`plan_steps()` 里的 `wait` 同一口径 |
+| 7 `av` | 只校验、不执行：到达起拍点即调一次 `on_camera_ready(av)`（首点带 hold 时在 PTP 到位后，否则在第一条运镜 goal 的 camera_ready 上升沿） |
+
+**能力边界**（报告 / 告警里会明说）：单臂 6 轴、底盘不动，所以规范例子里 1–2 m 的机位会被规则 25 拒掉（那是走位 + 全身
+协同的活，见 robot_wholebody）；每条原语之间机械臂会停住（Commander 每条 goal 先 PTP 到起点、停 1 s 再动），细分越多停顿越多；
+没有避障；B 型 `uv` 不闭环。
 
 ## 可达性判定与余量盒子（`reach_check.py`，给大模型运镜决策用）
 
@@ -339,6 +393,8 @@ $R llm-step "推近花瓶" --llm openai --image-topic /camera/image_raw --subjec
 | `get_status`, `get_angles` | `/robot_gimbal_v2/status`, `/robot_gimbal_v2/joint_states_raw` | topic |
 | `set_forward_cmd_enable` | `/robot_gimbal_v2/set_forward_cmd_enable` | service |
 | `llm_shot_loop` 的用户反馈 | `/robot_arm/llm_feedback` | `std_msgs/String`（本包发布，供上层订阅） |
+| `shot_executor` 的第 9 章反馈 | `/robot_arm/shot_feedback` | `std_msgs/String`（JSON，本包发布） |
+| `shot_executor` 的 B 型目标输入 | 分镜 `target` 字段指定 | `std_msgs/String`（6.2.4 JSON）或 `geometry_msgs/PointStamped` |
 
 ## 约定与坑
 
