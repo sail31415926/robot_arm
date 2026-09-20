@@ -130,7 +130,7 @@ public:
         makeTrigger("zero_target",    [this] { clearTargets(); return "60FF/6071 目标已清零"; });
         makeTrigger("zero_calibrate", [this] { return zeroCalibrate(); });
         makeTrigger("save_eeprom",    [this] { bus_->saveToEeprom();
-                                               return "已固化 EEPROM（1010:02h \"save\"）"; });
+                                               return "已固化 EEPROM（1010:01h \"save\"）"; });
 
         move_pp_srv_ = create_service<COTargetDouble>("~/move_pp",
             [this](COTargetDouble::Request::ConstSharedPtr rq, COTargetDouble::Response::SharedPtr rs)
