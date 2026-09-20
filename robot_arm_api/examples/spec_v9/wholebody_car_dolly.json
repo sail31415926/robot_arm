@@ -1,0 +1,45 @@
+{
+  "type": "static",
+  "waypoints": [
+    {
+      "position": [
+        0.0,
+        -3.5,
+        0.7
+      ],
+      "look_at": [
+        0.0,
+        0.0,
+        0.7
+      ],
+      "roll": 0.0,
+      "hold": 2.0
+    },
+    {
+      "position": [
+        0.0,
+        -2.0,
+        0.7
+      ],
+      "look_at": [
+        0.0,
+        0.0,
+        0.7
+      ],
+      "roll": 0.0,
+      "hold": 3.0
+    }
+  ],
+  "segments": [
+    {
+      "path": "line",
+      "law": "ease_in_out",
+      "duration": 12.0
+    }
+  ],
+  "tolerance": {
+    "position": 0.08,
+    "aim": 0.05,
+    "roll": 0.05
+  }
+}

@@ -16,6 +16,8 @@
   · deviation_cause 只能给 none / limit（Commander 报 unreachable / limit 即 limit）；没有避障，不会给 obstacle。
   · progress 由 current_pose 在原语几何上投影得到（Commander 的 progress_percent 在运镜段内是按时间归一化的，
     只用来判断"还没开始动"）。
+  · Commander 每条 goal 自带"先 PTP 到起点"，那一段属于走位（规范 2.3），期间 error / in_tolerance 留空不判超差；
+    段走完补发一帧 progress=1.0。
   · av 只透传：第一条运镜 goal 的 camera_ready 上升沿调 on_camera_ready(av)，由相机 / 录音模块消费。
 
 ═══════════════════════════════ 本文件函数 / 类汇总 ═══════════════════════════════
@@ -294,6 +296,21 @@ class ShotExecutor:
             ok = [pos_err <= tol.position, u_err <= tol.u, v_err <= tol.v, roll_err <= tol.roll]
         return error, ok
 
+    def _error_keys(self) -> tuple:
+        """@brief 本分镜反馈里 error 的字段集，与 tolerance 一致（第 9 章）：A 型 3 项，B 型 6 项或 4 项。
+        @return 字段名元组
+        """
+        if self._tracking is None:
+            return ('position', 'aim', 'roll')
+        if self._tracking.position_ref == 'world':
+            return ('position', 'u', 'v', 'roll')
+        return ('d', 'az', 'el', 'u', 'v', 'roll')
+
+    def _clear_error(self) -> None:
+        """@brief 把 error / in_tolerance 清空（尚未进入受控的运镜段，超差无从谈起），字段集仍按型给全。"""
+        self._fb.error = dict.fromkeys(self._error_keys(), None)
+        self._fb.in_tolerance = None
+
     def _reference(self, seg_index: int, s: float) -> ss.CamRef:
         """@brief 参考位姿：有段就按段内进度，0 段的分镜就是唯一的 waypoint。"""
         spec = self._static
@@ -423,7 +440,9 @@ class ShotExecutor:
                         self._fb.hold_elapsed = 0.0
                         self._update_error(pose, *start_at)
                     elif pct <= offset + 1e-6:
-                        # 还在搬到起点 / 起点停顿（ORBIT 还含规划期）：臂停在原语起点
+                        # 运镜段还没开始：Commander 正把臂搬到本原语起点（ORBIT 还含规划期）。
+                        # 这一段属于走位（规范 2.3），容差只约束运镜段，所以**不判超差**——
+                        # 拿"离起点还差多远"去填 in_tolerance，会让上层把一镜完美的运镜判成「完成但有降级」。
                         if hold_t0 is not None:
                             self._fb.phase = 'hold'
                             self._fb.hold_elapsed = max(0.0, self._clock() - hold_t0)
@@ -433,7 +452,7 @@ class ShotExecutor:
                         else:
                             self._fb.phase, self._fb.segment_index, self._fb.progress = 'segment', seg_index, prim.s0
                             self._fb.hold_elapsed = 0.0
-                        self._update_error(pose, *start_at)
+                        self._clear_error()
                     else:
                         self._fb.phase, self._fb.segment_index, self._fb.hold_elapsed = 'segment', seg_index, 0.0
                         local = primitive_progress(prim, pose) if pose is not None else 0.0
@@ -564,6 +583,7 @@ class ShotExecutor:
         self._fb = ShotFeedback(degradation=compiled.degradation,
                                 time_scale=1.0 if spec.is_tracking else None,
                                 target_status='ok' if spec.is_tracking else None)
+        self._clear_error()
         holds = compiled.holds
         n_seg = len(static.segments)
 
@@ -621,8 +641,12 @@ class ShotExecutor:
                     self._fb.segment_index = i
                     return _fail(result)
             with self._lock:
+                # 段走完补发一帧 progress=1.0：反馈频率与 goal 结束之间有间隙，最后一帧 Commander 反馈时
+                # 臂往往还差几个百分点（实测 0.957），不补这一帧上层就判不出这一段真的走完了
                 self._fb.phase, self._fb.segment_index, self._fb.progress = 'segment', i, 1.0
+                self._fb.hold_elapsed = 0.0
                 self._update_error(self.api.arm.get_pose(), i, 1.0)
+                self._publish()
             if holds[i + 1] > 0:
                 self._hold(i, holds[i + 1], shorten=i < n_seg - 1, at=(i, 1.0))
                 if self._cancel:

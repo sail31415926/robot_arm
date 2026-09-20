@@ -1,0 +1,60 @@
+{
+  "type": "static",
+  "waypoints": [
+    {
+      "position": [
+        0.3,
+        -0.1,
+        0.5
+      ],
+      "look_at": [
+        0.45,
+        0.0,
+        0.45
+      ]
+    },
+    {
+      "position": [
+        0.35,
+        0.0,
+        0.52
+      ],
+      "look_at": [
+        0.45,
+        0.0,
+        0.45
+      ],
+      "hold": 2.0
+    },
+    {
+      "position": [
+        0.3,
+        0.1,
+        0.5
+      ],
+      "look_at": [
+        0.45,
+        0.0,
+        0.45
+      ],
+      "hold": 1.0
+    }
+  ],
+  "segments": [
+    {
+      "path": "line",
+      "law": "s_curve",
+      "duration": 4.0
+    },
+    {
+      "path": "line",
+      "law": "s_curve",
+      "duration": 4.0
+    }
+  ],
+  "tolerance": {
+    "position": 0.03,
+    "aim": 0.03,
+    "roll": 0.02
+  }
+}

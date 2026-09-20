@@ -1,0 +1,27 @@
+{
+  "type": "tracking",
+  "target": "/subject_pose",
+  "target_static": true,
+  "position_ref": "target",
+  "waypoints": [
+    {
+      "d": 0.15,
+      "az": 3.1416,
+      "el": 0.0,
+      "uv": [
+        0.0,
+        0.0
+      ],
+      "hold": 2.0
+    }
+  ],
+  "segments": [],
+  "tolerance": {
+    "d": 0.05,
+    "az": 0.05,
+    "el": 0.05,
+    "u": 0.03,
+    "v": 0.03,
+    "roll": 0.02
+  }
+}

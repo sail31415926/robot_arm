@@ -45,10 +45,12 @@ class FakeArm:
     """@brief 假 ArmCommanderClient：记录每次调用；运镜类调用按 Commander 真实的 progress_percent 模式回放
            （搬到起点 → 停顿在起点 → 运镜段内百分比按**时间**归一化、与路径进度无关）并把"当前位姿"推进到终点。"""
 
-    #: 运镜段内各帧的 (路径进度 s, progress_percent)：百分比故意与 s 不成比例（Commander 是 elapsed/6s）
+    #: 运镜段内各帧的 (路径进度 s, progress_percent)：百分比故意与 s 不成比例（Commander 是 elapsed/6s，按时间归一化）。
+    #: 末帧 s 停在 0.96 而不是 1.0——真实 Commander 的反馈频率（10Hz）与 goal 结束之间有间隙，
+    #: 最后一帧反馈时臂还没走完（2026-09-17 mock 臂实测 0.9566）。
     MOTION_FRAMES = {
-        'shot_linear': ((0.25, 58.0), (0.5, 66.0), (0.75, 75.0), (1.0, 83.0)),
-        'shot_orbit': ((0.25, 70.0), (0.5, 80.0), (0.75, 90.0), (1.0, 99.9)),
+        'shot_linear': ((0.25, 58.0), (0.5, 66.0), (0.75, 75.0), (0.96, 83.0)),
+        'shot_orbit': ((0.25, 70.0), (0.5, 80.0), (0.75, 90.0), (0.96, 99.9)),
     }
     #: 运镜前的帧：(pct, 位姿=起点)。LINEAR：PTP 25 → 停顿 50；ORBIT：PTP 10 → 停顿 20 → 规划期 60
     PRE_FRAMES = {'shot_linear': (25.0, 50.0), 'shot_orbit': (10.0, 20.0, 60.0)}
@@ -73,6 +75,14 @@ class FakeArm:
         if feedback_cb is not None:
             feedback_cb(_Feedback(pct, _Pose(pose)))
 
+    def _approach(self, name, start, feedback_cb):
+        """@brief 回放"搬到起点"：从臂当前所在位姿插值到本原语起点（真实 Commander 就是先 PTP 过去）。"""
+        frm = self.pose if self.pose is not None else start
+        pres = self.PRE_FRAMES[name]
+        for k, pct in enumerate(pres):
+            u = (k + 1) / len(pres)
+            self._emit(feedback_cb, pct, {key: frm[key] + u * (start[key] - frm[key]) for key in start})
+
     def _play(self, name, start, end, feedback_cb, on_camera_ready):
         self.calls.append(name)
         self.last_feedback_cb = feedback_cb
@@ -82,8 +92,7 @@ class FakeArm:
             self._emit(feedback_cb, 50.0, end)
             self._emit(feedback_cb, 100.0, end)
             return CallResult(True, 'reached')
-        for pct in self.PRE_FRAMES[name]:
-            self._emit(feedback_cb, pct, start)
+        self._approach(name, start, feedback_cb)
         if on_camera_ready is not None:
             on_camera_ready()
         for s, pct in self.MOTION_FRAMES[name]:
@@ -93,6 +102,7 @@ class FakeArm:
                 self.on_progress(name, s)
             if self.cancelled:
                 return CallResult(False, 'cancelled')
+        self.pose = dict(end)          # goal 返回 reached 时臂已到终点（最后一段没有反馈覆盖）
         return CallResult(True, 'reached')
 
     def move_to_pose(self, pose, speed='normal', return_to_start=False, timeout_sec=None, feedback_cb=None):
@@ -113,8 +123,7 @@ class FakeArm:
         if self.fail_on and self.fail_on[0] == 'shot_orbit':
             return self.fail_on[1]
         start = _pose(az_start_deg, el_start_deg, r_start_m)
-        for pct in self.PRE_FRAMES['shot_orbit']:
-            self._emit(feedback_cb, pct, start)
+        self._approach('shot_orbit', start, feedback_cb)
         if on_camera_ready is not None:
             on_camera_ready()
         for s, pct in self.MOTION_FRAMES['shot_orbit']:
@@ -125,6 +134,7 @@ class FakeArm:
                 self.on_progress('shot_orbit', s)
             if self.cancelled:
                 return CallResult(False, 'cancelled')
+        self.pose = _pose(az_end_deg, el_end_deg, r_end_m)
         return CallResult(True, 'reached')
 
     def cancel(self):
@@ -277,12 +287,41 @@ def test_progress_comes_from_pose_not_commander_percent(rig):
 
 
 def test_error_and_in_tolerance_computed_from_current_pose(rig):
-    """@brief error 三项来自反馈里的 current_pose 与参考位姿之差；假臂沿法兰直线回放，位置误差应很小、都在容差内。"""
+    """@brief 运镜段内 error 三项来自反馈里的 current_pose 与参考位姿之差；假臂沿法兰直线回放，位置误差应很小、都在容差内。"""
     executor, api, clock, fbs = rig
     executor.run(_dolly(hold_end=0.0))
-    for f in fbs:
+    moving = [f for f in fbs if f['error']['position'] is not None]
+    assert moving
+    for f in moving:
         assert set(f['error']) == {'position', 'aim', 'roll'}
         assert f['error']['position'] < 0.03 and f['in_tolerance'] == [True, True, True]
+
+
+def test_approach_to_start_reports_no_error(rig):
+    """@brief 规范 2.3：把臂搬到分镜起点属于走位、不归本格式，容差只约束运镜段。
+           所以 Commander 还在搬到起点（progress_percent 未越过运镜段起点）时，反馈的 error / in_tolerance
+           必须留空，不能拿"离起点还差多远"去判超差——否则一镜完美的运镜会被上层判成「完成但有降级」。"""
+    executor, api, clock, fbs = rig
+    api.arm.pose = {'x': 0.0, 'y': 0.0, 'z': 0.10, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0}   # 臂在别处
+    executor.run(_dolly(hold_end=0.0))
+    approach = [f for f in fbs if f['phase'] == 'segment' and f['progress'] == 0.0]
+    assert approach, '应该有搬到起点阶段的反馈'
+    for f in approach:
+        assert f['error'] == {'position': None, 'aim': None, 'roll': None}
+        assert f['in_tolerance'] is None
+    assert any(f['error']['position'] is not None for f in fbs), '运镜段仍要报误差'
+
+
+def test_segment_end_emits_progress_one_before_hold(rig):
+    """@brief 段走完那一刻要发一帧 phase=segment / progress=1.0，再进 hold；否则上层看到的最后一帧 segment
+           停在 0.9x（反馈频率与 goal 结束之间的间隙），无法判断这一段是否真的走完。"""
+    executor, api, clock, fbs = rig
+    executor.run(_dolly(hold_end=1.0))
+    idx_end = [i for i, f in enumerate(fbs) if f['phase'] == 'segment' and f['progress'] == 1.0]
+    idx_hold = [i for i, f in enumerate(fbs) if f['phase'] == 'hold']
+    assert idx_end and idx_hold and idx_end[0] < idx_hold[0]
+    assert fbs[idx_end[0]]['segment_index'] == 0
+    assert fbs[idx_end[0]]['in_tolerance'] == [True, True, True]
 
 
 def test_hold_at_first_waypoint_uses_ptp_and_reports_segment_zero(rig):
@@ -297,8 +336,12 @@ def test_hold_at_first_waypoint_uses_ptp_and_reports_segment_zero(rig):
     assert hold and hold[0]['segment_index'] == 0 and hold[0]['progress'] == 1.0
     assert clock.now() - t0 == pytest.approx(1.0, abs=0.15)
     assert hold[-1]['hold_elapsed'] >= 0.85
-    # 首点停留期臂就在首点：误差相对首点算，应全在容差内（9.1 的快门判据靠这个）
-    assert all(f['in_tolerance'] == [True, True, True] and f['error']['position'] < 0.005 for f in hold)
+    # 首点停留期臂就在首点：误差相对首点算，应全在容差内（9.1 的快门判据靠这个）；
+    # 之后 Commander 搬去下一段起点那几帧仍报 hold，但已离开首点，误差留空不判超差
+    settled = [f for f in hold if f['error']['position'] is not None]
+    assert settled
+    assert all(f['in_tolerance'] == [True, True, True] and f['error']['position'] < 0.005 for f in settled)
+    assert all(f['in_tolerance'] is None for f in hold if f['error']['position'] is None)
     # 下一条 goal 的搬到起点 / 停顿帧也算 hold（segment_index 仍是 0），之后才进 segment
     phases = [f['phase'] for f in fbs]
     assert phases.index('segment') < phases.index('hold') < len(phases) - 1
@@ -316,7 +359,8 @@ def test_intermediate_hold_reports_previous_segment_and_stays_in_tolerance(rig):
     executor.run(shot)
     hold = [f for f in fbs if f['phase'] == 'hold']
     assert hold and all(f['segment_index'] == 0 and f['progress'] == 1.0 for f in hold)
-    assert all(f['in_tolerance'] == [True, True, True] for f in hold)
+    settled = [f for f in hold if f['error']['position'] is not None]
+    assert settled and all(f['in_tolerance'] == [True, True, True] for f in settled)
     seg1 = [f for f in fbs if f['phase'] == 'segment' and f['segment_index'] == 1]
     assert seg1 and seg1[-1]['progress'] == pytest.approx(1.0, abs=1e-6)
 

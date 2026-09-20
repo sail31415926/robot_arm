@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<!-- 轿车模型：长 96 × 宽 38 × 高 28 mm（小米 SU7 车身比例，约 1:52）。
+     尺寸由分镜反推：大模型那组分镜导演层声明主体高 0.94 m，按缩放系数 k=0.040 折算得 28 mm，
+     这样画面占比才和原分镜一致（4.5 m 全景 → 26%，0.8 m 特写 → 145%）。
+     模型原点在**车底中心**，车头朝 +X。static=true。 -->
+<sdf version="1.6">
+  <model name="sedan_car">
+    <static>true</static>
+    <link name="body">
+      <visual name="lower">
+        <pose>0 0 0.00784 0 0 0</pose>
+        <geometry><box><size>0.09616 0.03778 0.01232</size></box></geometry>
+        <material><ambient>0.05 0.12 0.28 1</ambient><diffuse>0.10 0.26 0.62 1</diffuse>
+          <specular>0.95 0.95 1.0 96</specular></material>
+      </visual>
+      <visual name="cabin">
+        <pose>-0.00385 0 0.01904 0 0 0</pose>
+        <geometry><box><size>0.04423 0.03249 0.01008</size></box></geometry>
+        <material><ambient>0.06 0.08 0.12 1</ambient><diffuse>0.12 0.16 0.24 1</diffuse>
+          <specular>0.9 0.95 1.0 110</specular></material>
+      </visual>
+      <visual name="hood">
+        <pose>0.03462 0 0.014 0 0 0</pose>
+        <geometry><box><size>0.02308 0.03475 0.00168</size></box></geometry>
+        <material><ambient>0.05 0.12 0.28 1</ambient><diffuse>0.10 0.26 0.62 1</diffuse>
+          <specular>0.95 0.95 1.0 96</specular></material>
+      </visual>
+      <visual name="headlight_l">
+        <pose>0.04683 0.01133 0.00952 0 1.5708 0</pose>
+        <geometry><cylinder><radius>0.00196</radius><length>0.00192</length></cylinder></geometry>
+        <material><ambient>0.9 0.9 0.8 1</ambient><diffuse>1.0 1.0 0.9 1</diffuse><emissive>0.35 0.35 0.3 1</emissive></material>
+      </visual>
+      <visual name="headlight_r">
+        <pose>0.04683 -0.01133 0.00952 0 1.5708 0</pose>
+        <geometry><cylinder><radius>0.00196</radius><length>0.00192</length></cylinder></geometry>
+        <material><ambient>0.9 0.9 0.8 1</ambient><diffuse>1.0 1.0 0.9 1</diffuse><emissive>0.35 0.35 0.3 1</emissive></material>
+      </visual>
+      <visual name="taillight">
+        <pose>-0.04731 0 0.0112 0 0 0</pose>
+        <geometry><box><size>0.00115 0.03022 0.0014</size></box></geometry>
+        <material><ambient>0.5 0.03 0.03 1</ambient><diffuse>0.9 0.06 0.06 1</diffuse><emissive>0.4 0.02 0.02 1</emissive></material>
+      </visual>
+      <collision name="col">
+        <pose>0 0 0.0112 0 0 0</pose>
+        <geometry><box><size>0.09616 0.03778 0.0224</size></box></geometry>
+      </collision>
+    </link>
+    <link name="wheels">
+      <visual name="fl"><pose>0.03077 0.01813 0.0056 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0056</radius><length>0.0034</length></cylinder></geometry>
+        <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.07 0.07 0.07 1</diffuse></material></visual>
+      <visual name="fr"><pose>0.03077 -0.01813 0.0056 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0056</radius><length>0.0034</length></cylinder></geometry>
+        <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.07 0.07 0.07 1</diffuse></material></visual>
+      <visual name="rl"><pose>-0.02885 0.01813 0.0056 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0056</radius><length>0.0034</length></cylinder></geometry>
+        <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.07 0.07 0.07 1</diffuse></material></visual>
+      <visual name="rr"><pose>-0.02885 -0.01813 0.0056 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0056</radius><length>0.0034</length></cylinder></geometry>
+        <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.07 0.07 0.07 1</diffuse></material></visual>
+    </link>
+  </model>
+</sdf>

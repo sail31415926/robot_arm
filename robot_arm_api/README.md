@@ -481,6 +481,50 @@ $R llm-step "推近花瓶" --llm openai --image-topic /camera/image_raw --subjec
   后到命令 → 前一条正确报 `preempted`。
   代价：FPV 变常驻，而 FPV 下倾角保护失效（该板本就 `fpv_on_startup: true`，实际暴露面变化不大）。
 
+### 2026-09-17 规范分镜在 mock 臂上执行（`real.launch.py controller:=commander arm_sim_mode:=true`）
+
+第一次把《拍摄接口规范 v9》的分镜 JSON 跑到真实 `arm_commander_node` 上（不是假臂单测）。
+**开发机上跑要注意 domain 隔离**：整机全身运镜仿真（`robot_wholebody_bringup wholebody_sim.launch.py`）会占用
+Gazebo 的 11345 端口，并在 domain 0 上发布同名的 `/arm_controller`、`/joint_states`。臂这套单独起时换一个
+`ROS_DOMAIN_ID` 即可与之完全隔离（mock 臂不需要 Gazebo，两者互不可见）：
+
+```bash
+source /opt/ros/humble/setup.bash && source ~/E7009_sail_ws/.venv/bin/activate && source ~/E7009_sail_ws/install/setup.bash
+export ROS_DOMAIN_ID=42          # 与正在跑的整机仿真隔离；云台板在别的 domain，J4-6 退化为指令回显（预期）
+ros2 launch robot_arm_bringup real.launch.py controller:=commander gui:=false arm_sim_mode:=true
+# 另一个终端（同样 source + 同 domain）
+ros2 run robot_arm_api arm_commander_demo.py --no-gimbal shot examples/spec_v9/a_arm_frame_orbit100.json \
+    --chassis 0 0 0 --arm-base-height 0
+ros2 topic echo /robot_arm/shot_feedback std_msgs/msg/String --field data   # 第 9 章反馈
+```
+
+**跑通的场景**（分镜文件见 `examples/spec_v9/`）：
+
+| 场景 | 结果 |
+| --- | --- |
+| A 型 100° 圆弧（1 段 → 1 条 ORBIT） | `done`，17.8 s；运镜段内位置误差 0.01~0.04 mm、指向 0.003~0.035°，说明**编译出的 ORBIT 几何与规范参考轨迹吻合到 0.04 mm** |
+| A 型 3 点 2 段 + 中间 hold 2 s（细分为 8 条弦） | `done`，25.3 s；两段 progress 各自 0→1.0 单调无跳变（弦的进度区间拼接正确），hold 帧 `segment_index` = 刚走完的段号 |
+| A 型规范原例 5.5.2（世界坐标 1.2 m） | 开跑前按规则 25 拒绝：「超出臂长：肩到末端距离超过最大 0.60 m」，不下发任何 goal |
+| B 型定点跟随（1 点 0 段）/ 环绕 60° | `done`；反馈给出 `d/az/el/u/v/roll` 六项误差，视距误差 3e-5 m、方位 6.8e-4 rad，全在容差内 |
+| B 型 3 点 2 段，段间目标 `id` 变化 | 走完第一段即停，`target_status: "id_changed"`、`exit_reason: target_id_changed`，不再下发第二段 |
+
+**这次仿真抓出来、单测覆盖不到的两个缺陷**（已修，并补了回归测试）：
+
+1. **搬到起点期间不该判超差**。Commander 每条 goal 自带「先 PTP 到起点」，那一段属于走位（规范 2.3），
+   容差只约束运镜段。原先照常算误差，实测臂从零位搬到圆弧起点时报 `in_tolerance: [false, false, true]`、
+   位置误差 388 mm——上层照这个会把一镜完美的运镜判成「完成但有降级」。现在这期间 `error` / `in_tolerance` 留空。
+2. **段末缺一帧 `progress=1.0`**。反馈频率（10 Hz）与 goal 结束之间有间隙，最后一帧 Commander 反馈时臂还差几个
+   百分点（实测 0.9566），上层判不出这一段真的走完了。现在段走完补发一帧 `phase=segment / progress=1.0`。
+
+**两个已知的正常现象**（不是缺陷）：
+
+- 段末到 hold 开头有 3~4 帧超差（指向 3.65° → 1.93° → 收敛）：臂在稳定，规范 9.1 的快门判据
+  「`phase: hold` + `in_tolerance` 全 true」正是要上层等这个。
+- 中间点 `hold: 2.0` = 本地睡 1 s + Commander 起点停顿 1 s，时间总量对，但**停顿那 1 s Commander 不发反馈**，
+  上层在这 1 s 内收不到帧。
+
+**仍未验证**：完整物理的 Gazebo（要先停掉整机仿真腾出 11345 端口）、实机、`av` 那一路（相机 / 录音模块还没接）。
+
 ### 上实机建议顺序
 
 1. `--dry-run` 看等效指令；2. `status`（error_code 应为 0）；3. `enable`；4. `observe --speed slow`；
