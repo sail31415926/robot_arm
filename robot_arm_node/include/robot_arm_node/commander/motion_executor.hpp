@@ -59,6 +59,11 @@ struct ExecResult {
     // 在云台之后，云台回读不收敛会让笛卡尔 判据永不满足（见
     // commander/motion_policy.hpp 的 is_at_joints_prefix 注释）。
     std::vector<double> target_joints;
+    // 本次下发轨迹的**计划时长**（秒）。上层据此算等待超时 —— 固定超时配上
+    // SLOW 档的大位移，会在臂还在路上时就判 timeout：SLOW 的 v_pos=0.02m/s，
+    // 时长 = 位移/v_pos×1.5，0.40m 就吃满原来写死的 30s。失败路径留 0，
+    // 那些分支会提前返回、用不到它。
+    double duration{0.0};
 };
 
 class MotionExecutor {

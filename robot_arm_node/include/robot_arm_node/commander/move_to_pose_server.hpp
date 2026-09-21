@@ -48,9 +48,13 @@ private:
   Action::Result execute_stowed(const std::shared_ptr<GoalHandle> & gh);
   // target_joints：本段轨迹的终点关节解（6 轴）。到位判据只看前 ARM_JOINT_COUNT 个
   // （臂 J1-3）；末端 gimbal_tool0 在云台之后，用笛卡尔判据会被云台回读拖累到超时。
+  // planned_duration：本段轨迹的计划时长（秒，取自 ExecResult::duration）。等待超时
+  // = max(计划时长 + margin, move_to_pose_timeout_sec)，后者退化为**下限**。
+  // 不能只用固定值：SLOW 档 v_pos=0.02m/s，位移 0.40m 就吃满 30s，臂还在路上就被判 timeout。
   Action::Result wait_arrival(const std::shared_ptr<GoalHandle> & gh, const ArmPose & target,
                               const std::vector<double> & target_joints,
-                              const Speed & speed, double p_lo, double p_hi);
+                              const Speed & speed, double p_lo, double p_hi,
+                              double planned_duration);
   std::optional<ArmPose> resolve_target(const Action::Goal & goal);
 
   rclcpp::Node &            node_;

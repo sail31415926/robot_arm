@@ -90,7 +90,10 @@ struct Params
 
   // ── action 超时与反馈频率 ───────────────────────────────────────────────────
   double feedback_hz{10.0};                      // 三个 action 共用的 feedback 发布频率
+  // MoveToPose 超时 = max(计划时长 + margin, 本值)。本值是**下限**不是固定值：
+  // 固定 30s 配 SLOW 档的大位移会在臂还在路上时判 timeout（见 margin 的注释）。
   double move_to_pose_timeout_sec{30.0};
+  double move_to_pose_timeout_margin_sec{5.0};   // 超时 = 计划时长 + 余量
   double trajectory_shot_timeout_sec{60.0};
   double move_to_joint_timeout_margin_sec{5.0};  // 超时 = 计划时长 + 余量
   double move_to_joint_timeout_floor_sec{10.0};  // 但不低于这个下限

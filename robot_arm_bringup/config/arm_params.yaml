@@ -93,7 +93,13 @@ arm_commander:
     # ── action 超时与反馈频率 ─────────────────────────────────────────────────
     action:
       feedback_hz: 10.0                      # 三个 action 共用
+      # MoveToPose 超时 = max(本次轨迹计划时长 + margin, 下面这个值)。
+      # ⚠️ 这个值是**下限**不是固定上限。写死 30s 时，SLOW 档（v_pos=0.02 m/s，
+      #    时长 = 位移/v_pos×1.5）位移一过 0.40m 就吃满 30s，臂还在路上就被判
+      #    timeout（2026-09-21 Gazebo 实测：0.3375m → 计划 25.34s，30s 到点时
+      #    残差仍有 1.29 rad）。取 max 保证短距离动作行为不变。
       move_to_pose_timeout_sec: 30.0
+      move_to_pose_timeout_margin_sec: 5.0
       trajectory_shot_timeout_sec: 60.0
       move_to_joint_timeout_margin_sec: 5.0  # 超时 = 计划时长 + 余量
       move_to_joint_timeout_floor_sec: 10.0  # 但不低于此下限

@@ -146,7 +146,7 @@ ExecResult MotionExecutor::plan_and_execute(const ArmPose& target,
     }
     traj_pub_->publish(msg);
     RCLCPP_INFO(logger_, "JointTrajectory 已下发 (duration=%.2fs)", duration);
-    return {true, "reached", 0, *joints};
+    return {true, "reached", 0, *joints, duration};
 }
 
 // ── 急停
@@ -185,7 +185,7 @@ ExecResult MotionExecutor::go_to_joints(
     auto msg = single_point_traj(target_joints, duration_sec,
                                  node_.get_clock()->now());
     traj_pub_->publish(msg);
-    return {true, "sent", 0, target_joints};
+    return {true, "sent", 0, target_joints, duration_sec};
 }
 
 // ── 状态查询
