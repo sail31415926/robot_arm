@@ -88,7 +88,8 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute(const std::shared_ptr
 
   // 等待到位（去程：0→50% if return_to_start 否则 0→100%）
   auto result = wait_arrival(gh, target, exec_result.target_joints, speed,
-                             0.0, goal->return_to_start ? 50.0 : 100.0);
+                             0.0, goal->return_to_start ? 50.0 : 100.0,
+                             exec_result.duration);
   if (!result.success || !goal->return_to_start) return result;
 
   // return_to_start：原路返回出发位姿
@@ -98,7 +99,8 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute(const std::shared_ptr
     result.success = false; result.exit_reason = "error"; result.error_code = ArmStatus::ERR_DRIVER;
     return result;
   }
-  return wait_arrival(gh, start_pose, exec_back.target_joints, speed, 50.0, 100.0);
+  return wait_arrival(gh, start_pose, exec_back.target_joints, speed, 50.0, 100.0,
+                      exec_back.duration);
 }
 
 /**
@@ -144,7 +146,10 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute_stowed(const std::sha
     fb->current_pose     = status_.pose();
     gh->publish_feedback(fb);
   };
-  p.timeout_sec = tuning::params().move_to_pose_timeout_sec;
+  // 同 wait_arrival：按计划时长给，配置值作下限。收纳走关节空间，时长就是
+  // stowed_duration_sec（默认远小于 30s，所以这里实际仍走下限，改动只为口径一致）。
+  p.timeout_sec = std::max(tp.stowed_duration_sec + tuning::params().move_to_pose_timeout_margin_sec,
+                           tuning::params().move_to_pose_timeout_sec);
   p.feedback_hz = tuning::params().feedback_hz;
   p.label = "STOWED ";
   const auto outcome = monitor_.wait_until(p);
@@ -178,7 +183,7 @@ MoveToPoseServer::Action::Result MoveToPoseServer::execute_stowed(const std::sha
 MoveToPoseServer::Action::Result MoveToPoseServer::wait_arrival(
     const std::shared_ptr<GoalHandle> & gh, const ArmPose & target,
     const std::vector<double> & target_joints,
-    const Speed & speed, double p_lo, double p_hi)
+    const Speed & speed, double p_lo, double p_hi, double planned_duration)
 {
   // 按直线距离与档位线速度估算总时长，仅用作进度分母（不参与实际规划）
   const ArmPose cur = status_.pose();
@@ -211,7 +216,19 @@ MoveToPoseServer::Action::Result MoveToPoseServer::wait_arrival(
     fb->current_pose     = status_.pose();
     gh->publish_feedback(fb);
   };
-  p.timeout_sec = tuning::params().move_to_pose_timeout_sec;
+  // 超时按**本次轨迹的计划时长**给，配置值退化为下限：SLOW 档 v_pos=0.02m/s，
+  // 时长 = 位移/v_pos×1.5，0.40m 就吃满原来写死的 30s —— 臂还在路上就被判 timeout
+  // （2026-09-21 Gazebo 实测：位移 0.3375m → 计划 25.34s，30s 到点时残差仍有 1.29rad）。
+  // 取 max 而不是直接用计划时长：短距离动作仍保持原来的 30s 行为，零回归。
+  p.timeout_sec = std::max(planned_duration + tuning::params().move_to_pose_timeout_margin_sec,
+                           tuning::params().move_to_pose_timeout_sec);
+  if (p.timeout_sec > tuning::params().move_to_pose_timeout_sec) {
+    RCLCPP_INFO(logger_,
+                "MoveToPose 等待超时按计划时长放宽：%.1fs（计划 %.2fs + 余量 %.1fs，下限 %.1fs）",
+                p.timeout_sec, planned_duration,
+                tuning::params().move_to_pose_timeout_margin_sec,
+                tuning::params().move_to_pose_timeout_sec);
+  }
   p.feedback_hz = tuning::params().feedback_hz;
   p.label = "MoveToPose ";
   const auto outcome = monitor_.wait_until(p);

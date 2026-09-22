@@ -172,7 +172,7 @@ ros2 launch robot_arm_driver motor_debug.launch.py node_id:=2 can_interface:=vca
 
   ```bash
   ros2 service call /joint_1/sdo_read canopen_interfaces/srv/CORead "{index: 0x603F, subindex: 0}"  # 故障码
-  # 参数存 EEPROM：1010:02h 写 ASCII "save"（0x65766173）
+  # 参数存 EEPROM：1010:01h 写 ASCII "save"（0x65766173）
   ```
 
 - **模式切换 = 控制器切换**：JTC 抓 position 接口 → 自动切 IP；换成速度/力矩类

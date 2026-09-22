@@ -1,0 +1,13 @@
+{
+  "type": "static",
+  "waypoints": [
+    { "position": [0.30, 0.20, 0.60], "look_at": [8.00, 1.20, 1.00] },
+    { "position": [0.30, 0.20, 1.40], "look_at": [8.00, 1.20, 1.00] },
+    { "position": [1.00, 0.20, 1.50], "look_at": [8.00, 1.20, 1.00], "hold": 1.0 }
+  ],
+  "segments": [
+    { "path": "spline", "law": "ease_in",  "duration": 4.0 },
+    { "path": "spline", "law": "ease_out", "duration": 4.0 }
+  ],
+  "tolerance": { "position": 0.05, "aim": 0.05, "roll": 0.02 }
+}

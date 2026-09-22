@@ -1,0 +1,12 @@
+{
+  "type": "static",
+  "waypoints": [
+    { "position": [0.351, -0.849, 1.21], "look_at": [1.20, 0.00, 0.90] },
+    { "position": [0.351,  0.849, 1.21], "look_at": [1.20, 0.00, 0.90], "hold": 1.5 }
+  ],
+  "segments": [
+    { "path": "arc", "center": [1.20, 0.00, 1.21], "axis": [0, 0, -1],
+      "law": "ease_in_out", "duration": 8.0 }
+  ],
+  "tolerance": { "position": 0.03, "aim": 0.02, "roll": 0.02 }
+}

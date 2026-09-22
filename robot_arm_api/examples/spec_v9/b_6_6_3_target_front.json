@@ -1,0 +1,14 @@
+{
+  "type": "tracking",
+  "target": "/subject_pose",
+  "position_ref": "target_front",
+  "waypoints": [
+    { "d": 1.8, "az": 1.222, "el": 0.10, "uv": [0.15, -0.08] },
+    { "d": 1.5, "az": 0.000, "el": 0.10, "uv": [0.00, -0.08], "hold": 5.0 }
+  ],
+  "segments": [
+    { "path": "line", "law": "ease_in_out", "duration": 6.0 }
+  ],
+  "tolerance": { "d": 0.10, "az": 0.08, "el": 0.05,
+                 "u": 0.03, "v": 0.03, "roll": 0.02 }
+}

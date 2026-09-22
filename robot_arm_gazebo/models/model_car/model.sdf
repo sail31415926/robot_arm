@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<!-- 模型车：长 250 mm、总高 89 mm（约 1:18 跑车）。
+     尺寸不是随便定的：大模型那组分镜的导演层声明主体高 0.7~0.8 m、look_at 的 z 跨度 0.92 m，
+     按缩放系数 k=0.102 折算，被摄物必须做成约 90 mm 高，画面占比才和原分镜一致
+     （视距 15 cm 时是全景、5 cm 时是车身特写）。static=true，不会被臂碰飞。
+     模型原点在**车底中心**，spawn 时 -z 直接填桌面高度即可。 -->
+<sdf version="1.6">
+  <model name="model_car">
+    <static>true</static>
+    <link name="body">
+      <visual name="chassis">
+        <pose>0 0 0.04 0 0 0</pose>
+        <geometry><box><size>0.25 0.105 0.05</size></box></geometry>
+        <material><ambient>0.45 0.02 0.02 1</ambient><diffuse>0.85 0.05 0.05 1</diffuse>
+          <specular>0.9 0.9 0.9 64</specular></material>
+      </visual>
+      <visual name="cabin">
+        <pose>-0.02 0 0.08 0 0 0</pose>
+        <geometry><box><size>0.115 0.09 0.035</size></box></geometry>
+        <material><ambient>0.05 0.06 0.08 1</ambient><diffuse>0.10 0.12 0.16 1</diffuse>
+          <specular>0.9 0.9 0.95 80</specular></material>
+      </visual>
+      <visual name="nose">
+        <pose>0.12 0 0.03 0 0 0</pose>
+        <geometry><box><size>0.04 0.085 0.025</size></box></geometry>
+        <material><ambient>0.45 0.02 0.02 1</ambient><diffuse>0.85 0.05 0.05 1</diffuse>
+          <specular>0.9 0.9 0.9 64</specular></material>
+      </visual>
+      <visual name="wing">
+        <pose>-0.11 0 0.085 0 0 0</pose>
+        <geometry><box><size>0.025 0.11 0.0075</size></box></geometry>
+        <material><ambient>0.06 0.06 0.06 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material>
+      </visual>
+      <collision name="col">
+        <pose>0 0 0.045 0 0 0</pose>
+        <geometry><box><size>0.25 0.11 0.09</size></box></geometry>
+      </collision>
+    </link>
+    <link name="wheels">
+      <visual name="fl"><pose>0.08 0.06 0.0225 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0225</radius><length>0.02</length></cylinder></geometry>
+        <material><ambient>0.03 0.03 0.03 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material></visual>
+      <visual name="fr"><pose>0.08 -0.06 0.0225 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0225</radius><length>0.02</length></cylinder></geometry>
+        <material><ambient>0.03 0.03 0.03 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material></visual>
+      <visual name="rl"><pose>-0.075 0.06 0.025 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.025</radius><length>0.025</length></cylinder></geometry>
+        <material><ambient>0.03 0.03 0.03 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material></visual>
+      <visual name="rr"><pose>-0.075 -0.06 0.025 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.025</radius><length>0.025</length></cylinder></geometry>
+        <material><ambient>0.03 0.03 0.03 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material></visual>
+    </link>
+  </model>
+</sdf>

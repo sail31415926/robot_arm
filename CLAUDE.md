@@ -73,4 +73,7 @@
 ## 文档位置
 
 - 设计文档在**工作空间根目录** `docs/`（不在本包内）：分层重构与 Sim2Real 方案、ros2_canopen 迁移、Commander 框架、9dof 全身控制设计等。
-- 拍摄朝向/可达域的数学定义以 `robot_arm_matlab/机械臂拍摄朝向与可达域分析.md` 为准（roll=0，朝向 = 2DOF：α pan / β tilt）。
+- 拍摄朝向的数学定义以 `robot_arm_matlab/机械臂拍摄朝向规范.md` 为准（roll=0，朝向 = 2DOF：α pan / β tilt）。
+- **可达域 / 余量 / 可行性判定用 `robot_arm_api`**（`reach_check.py` 闭式判定 + `headroom` 余量区间 +
+  `reach_fit.py` 保守多项式公式），运动学常量从 URDF 现算。原 `robot_arm_matlab` 的 MATLAB 可达域判定器
+  （栅格 `.mat` + 内接椭球）基于 V1 云台旧 URDF，已于 2026-09-11 删除，别再引用。

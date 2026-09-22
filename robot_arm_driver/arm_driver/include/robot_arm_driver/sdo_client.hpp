@@ -139,8 +139,15 @@ public:
     int32_t  sdoReadI32(uint16_t i, uint8_t s) { return static_cast<int32_t>(sdoRead(i, s)); }
     uint16_t statusWord() { return static_cast<uint16_t>(sdoRead(0x6041u, 0)); }
 
-    /** 参数固化到 EEPROM：1010:02h 写 ASCII "save"。 */
-    void saveToEeprom() { sdoWrite(0x1010u, 0x02, 0x65766173u, 4); }
+    /**
+     * 参数固化到 EEPROM：1010:01h 写 ASCII "save"（0x65766173）。
+     *
+     * ⚠️ EDS 与《RB200-CA 使用说明书（简版）V1.0》都写的是 1010:02h，但实机固件
+     *    只实现 sub1——读 1010:00 返回 1（最大子索引=1），写 1010:02 直接
+     *    SDO Abort 0x06090011（子索引不存在），即固化静默失效、断电即丢。
+     *    2026-09-20 在过渡板 can1 节点 1 上实测确认。
+     */
+    void saveToEeprom() { sdoWrite(0x1010u, 0x01, 0x65766173u, 4); }
 
     /** 轮询状态字直至 (sw & mask) == value；期间持续发主站心跳。 */
     uint16_t waitStatus(uint16_t mask, uint16_t value, int timeout_ms, const char * desc)

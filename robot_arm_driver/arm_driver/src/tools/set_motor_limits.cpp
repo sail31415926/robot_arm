@@ -29,7 +29,7 @@
  *   --min    <rad>   → 607D:01 软限位下限
  *   --max    <rad>   → 607D:02 软限位上限
  *   --torque <%>     → 6072 最大转矩（额定的百分比，如 300 = 300.0%）
- *   --save           → 写完固化 EEPROM（1010:02h "save"）
+ *   --save           → 写完固化 EEPROM（1010:01h "save"）
  *   --master <id> --timeout <ms>
  *
  * 例：
@@ -179,7 +179,7 @@ int main(int argc, char * argv[])
         }
         if (o.save) {
             bus.saveToEeprom();
-            std::printf("  [ OK ] 已固化 EEPROM（1010:02h \"save\"）\n");
+            std::printf("  [ OK ] 已固化 EEPROM（1010:01h \"save\"）\n");
         }
         if (wrote) {
             std::printf("\n  ⚠️ 6081/6083/6084/6085 每次起栈会被 bus.yml SDO 段重写；\n"

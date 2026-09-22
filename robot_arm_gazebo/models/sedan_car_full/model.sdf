@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<!-- 轿车（真车尺寸 4.997×1.963×1.455 m，小米 SU7）。给《拍摄接口规范 v9》的全身控制演示当被摄物：
+     底盘参与运镜，机位 0.8~4.5 m 不需要缩放，直接用大模型输出的原始坐标。
+     模型原点在车底中心，车头朝 +X。static=true。 -->
+<sdf version="1.6">
+  <model name="sedan_car_full">
+    <static>true</static>
+    <link name="body">
+      <visual name="lower"><pose>0 0 0.4074 0 0 0</pose>
+        <geometry><box><size>4.997 1.963 0.6402</size></box></geometry>
+        <material><ambient>0.05 0.12 0.28 1</ambient><diffuse>0.10 0.26 0.62 1</diffuse>
+          <specular>0.95 0.95 1.0 96</specular></material></visual>
+      <visual name="cabin"><pose>-0.1999 0 0.9894 0 0 0</pose>
+        <geometry><box><size>2.2986 1.6882 0.5238</size></box></geometry>
+        <material><ambient>0.06 0.08 0.12 1</ambient><diffuse>0.12 0.16 0.24 1</diffuse>
+          <specular>0.9 0.95 1.0 110</specular></material></visual>
+      <visual name="hood"><pose>1.7989 0 0.7275 0 0 0</pose>
+        <geometry><box><size>1.1993 1.806 0.0873</size></box></geometry>
+        <material><ambient>0.05 0.12 0.28 1</ambient><diffuse>0.10 0.26 0.62 1</diffuse>
+          <specular>0.95 0.95 1.0 96</specular></material></visual>
+      <visual name="hl_l"><pose>2.4335 0.5889 0.4947 0 1.5708 0</pose>
+        <geometry><cylinder><radius>0.1019</radius><length>0.0999</length></cylinder></geometry>
+        <material><ambient>0.9 0.9 0.8 1</ambient><diffuse>1.0 1.0 0.9 1</diffuse><emissive>0.35 0.35 0.3 1</emissive></material></visual>
+      <visual name="hl_r"><pose>2.4335 -0.5889 0.4947 0 1.5708 0</pose>
+        <geometry><cylinder><radius>0.1019</radius><length>0.0999</length></cylinder></geometry>
+        <material><ambient>0.9 0.9 0.8 1</ambient><diffuse>1.0 1.0 0.9 1</diffuse><emissive>0.35 0.35 0.3 1</emissive></material></visual>
+      <visual name="tail"><pose>-2.4585 0 0.582 0 0 0</pose>
+        <geometry><box><size>0.06 1.5704 0.0728</size></box></geometry>
+        <material><ambient>0.5 0.03 0.03 1</ambient><diffuse>0.9 0.06 0.06 1</diffuse><emissive>0.4 0.02 0.02 1</emissive></material></visual>
+      <collision name="col"><pose>0 0 0.582 0 0 0</pose>
+        <geometry><box><size>4.997 1.963 1.164</size></box></geometry></collision>
+    </link>
+    <link name="wheels">
+      <visual name="fl"><pose>1.599 0.9422 0.291 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.291</radius><length>0.1767</length></cylinder></geometry>
+        <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.07 0.07 0.07 1</diffuse></material></visual>
+      <visual name="fr"><pose>1.599 -0.9422 0.291 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.291</radius><length>0.1767</length></cylinder></geometry>
+        <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.07 0.07 0.07 1</diffuse></material></visual>
+      <visual name="rl"><pose>-1.4991 0.9422 0.291 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.291</radius><length>0.1767</length></cylinder></geometry>
+        <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.07 0.07 0.07 1</diffuse></material></visual>
+      <visual name="rr"><pose>-1.4991 -0.9422 0.291 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.291</radius><length>0.1767</length></cylinder></geometry>
+        <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.07 0.07 0.07 1</diffuse></material></visual>
+    </link>
+  </model>
+</sdf>

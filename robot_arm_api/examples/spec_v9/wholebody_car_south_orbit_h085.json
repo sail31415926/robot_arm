@@ -1,0 +1,101 @@
+{
+  "type": "static",
+  "waypoints": [
+    {
+      "position": [
+        -4.83,
+        -1.294,
+        0.85
+      ],
+      "look_at": [
+        0.0,
+        0.0,
+        0.85
+      ],
+      "roll": 0.0,
+      "hold": 3.0
+    },
+    {
+      "position": [
+        -4.33,
+        -2.5,
+        0.85
+      ],
+      "look_at": [
+        0.0,
+        0.0,
+        0.85
+      ],
+      "roll": 0.0,
+      "hold": 0.0
+    },
+    {
+      "position": [
+        -3.536,
+        -3.536,
+        0.85
+      ],
+      "look_at": [
+        0.0,
+        0.0,
+        0.85
+      ],
+      "roll": 0.0,
+      "hold": 3.0
+    }
+  ],
+  "segments": [
+    {
+      "path": "arc",
+      "center": [
+        0.0,
+        0.0,
+        0.85
+      ],
+      "axis": [
+        0,
+        0,
+        -1
+      ],
+      "law": "ease_in_out",
+      "duration": 15.0
+    },
+    {
+      "path": "arc",
+      "center": [
+        0.0,
+        0.0,
+        0.85
+      ],
+      "axis": [
+        0,
+        0,
+        -1
+      ],
+      "law": "ease_in_out",
+      "duration": 15.0
+    }
+  ],
+  "tolerance": {
+    "position": 0.1,
+    "aim": 0.05,
+    "roll": 0.05
+  },
+  "av": {
+    "lens": {
+      "camera": "WIDE"
+    },
+    "recording": {
+      "mode": "VIDEO",
+      "fps": 30,
+      "duration_ms": 0
+    },
+    "focus": {
+      "target": "CENTER"
+    },
+    "audio": {
+      "enabled": true,
+      "beamform": "OMNI"
+    }
+  }
+}

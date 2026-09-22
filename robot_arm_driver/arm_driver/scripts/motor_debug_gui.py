@@ -561,7 +561,7 @@ class MainWindow(QWidget):
         clr.setToolTip('607D 写回默认满量程（±2³¹，手册口径 = 软限位不生效）')
         clr.clicked.connect(self._clear_soft_limit)
         sv2 = QPushButton('固化 EEPROM')
-        sv2.setToolTip('1010:02h "save"——软限位断电保持的正式配置方式')
+        sv2.setToolTip('1010:01h "save"——软限位断电保持的正式配置方式')
         sv2.clicked.connect(lambda: self.node.call_trigger('save_eeprom'))
         sg2.addWidget(lo, 0, 0)
         sg2.addWidget(hi, 0, 1)

@@ -233,6 +233,9 @@ void declare_and_load(rclcpp::Node& node) {
     p.feedback_hz = load_positive(node, "action.feedback_hz", p.feedback_hz);
     p.move_to_pose_timeout_sec = load_positive(
         node, "action.move_to_pose_timeout_sec", p.move_to_pose_timeout_sec);
+    p.move_to_pose_timeout_margin_sec =
+        load_positive(node, "action.move_to_pose_timeout_margin_sec",
+                      p.move_to_pose_timeout_margin_sec);
     p.trajectory_shot_timeout_sec =
         load_positive(node, "action.trajectory_shot_timeout_sec",
                       p.trajectory_shot_timeout_sec);

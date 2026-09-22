@@ -1,0 +1,11 @@
+{
+  "type": "static",
+  "waypoints": [
+    { "position": [0.00, 0.00, 1.50], "look_at": [0.00, 0.00, 0.00] },
+    { "position": [1.00, 0.00, 1.50], "look_at": [1.00, 0.00, 0.00] }
+  ],
+  "segments": [
+    { "path": "line", "law": "s_curve", "duration": 6.0 }
+  ],
+  "tolerance": { "position": 0.03, "aim": 0.03, "roll": 0.02 }
+}
